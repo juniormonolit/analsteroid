@@ -71,6 +71,7 @@ export async function register() {
     if (allow.has('repeatQueueIssue')) scheduleRepeatQueueIssue();
     if (allow.has('repeatMorning')) scheduleRepeatMorning();
     if (allow.has('repeatTaskStatus')) scheduleRepeatTaskStatus();
+    if (allow.has('repeatAutoBrak')) scheduleRepeatAutoBrak();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
@@ -100,6 +101,7 @@ export async function register() {
   scheduleSupplyPanelSync();
   scheduleRepeatQueueIssue();
   scheduleRepeatMorning();
+  scheduleRepeatAutoBrak();
   scheduleReportSchedules();
   scheduleScenarios();
   scheduleDiagnostics();
@@ -824,6 +826,33 @@ function scheduleRepeatTaskStatus() {
   };
   setTimeout(() => { void tick(); }, 2 * 60 * 1000);
   setInterval(() => { void tick(); }, 30 * 60 * 1000);
+}
+
+// Автобрак по фильтру колонки (миграция 265, владелец 13.11): будни 8:00 МСК — правила с «Применять автоматически»,
+// каждое от имени автора по его зоне, партии по очереди с паузами (autoBrak.ts). На проде — в BACKGROUND_JOBS_ALLOW.
+function scheduleRepeatAutoBrak() {
+  let lastDate = '';
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    const msk = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
+    const [date, time] = msk.split(' ');
+    const hour = parseInt(time.slice(0, 2), 10);
+    const dow = new Date(`${date}T12:00:00Z`).getUTCDay();
+    if (dow === 0 || dow === 6 || lastDate === date || hour < 8 || hour > 10) return;
+    running = true;
+    try {
+      const outcome = await runOnceADayMsk('repeat-auto-brak', date, async () => {
+        const { runAutoBrakDaily } = await import('./features/repeat-kanban/engine/autoBrak');
+        const r = await runAutoBrakDaily();
+        console.log(`[repeatAutoBrak] ${date}: правил с авто ${r.rules}, партий ${r.batches}, заказчиков ${r.customers}`);
+      });
+      if (outcome !== 'busy' && outcome !== 'lock-error') lastDate = date;
+    } catch (err) {
+      console.error('[repeatAutoBrak] тик не удался:', err instanceof Error ? err.message : err);
+    } finally { running = false; }
+  };
+  setInterval(() => { void tick(); }, 60 * 1000);
 }
 
 function scheduleRepeatMorning() {

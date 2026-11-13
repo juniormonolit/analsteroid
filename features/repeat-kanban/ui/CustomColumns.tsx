@@ -53,6 +53,49 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
   <label className="flex min-w-0 flex-col gap-1 text-[13px] text-[var(--color-text-secondary)]">{label}{children}</label>
 );
 
+/** Поля условий — общие для своих колонок и автобрака колонки (265): LTV, отгрузки, где сейчас, задачи, тип, сделка, теги. */
+export function FilterFields({ f, set, tagDefs, shared = false }: {
+  f: CustomFilters; set: (patch: Partial<CustomFilters>) => void; tagDefs: TagDef[]; shared?: boolean;
+}) {
+  return (
+    <>
+      <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+        <Field label="LTV от"><Money value={f.ltvMin} onChange={v => set({ ltvMin: v })} placeholder="2 000 000" label="LTV от" /></Field>
+        <Field label="LTV до"><Money value={f.ltvMax} onChange={v => set({ ltvMax: v })} placeholder="без границы" label="LTV до" /></Field>
+      </div>
+      <Field label="Количество отгрузок">
+        <SearchMultiSelect ariaLabel="Количество отгрузок" allLabel="Сколько угодно" unitLabel="вариантов" searchPlaceholder="Поиск"
+          options={SHIP_BUCKETS.map(b => ({ value: b.value, label: b.label }))} value={f.ships ?? []} onChange={v => set({ ships: v })} className={`${BTN_IDLE} w-full`} />
+      </Field>
+      <Field label="Где заказчик сейчас">
+        <SearchMultiSelect ariaLabel="Где заказчик сейчас" allLabel="Где угодно" unitLabel="колонок" searchPlaceholder="Колонка доски"
+          options={STAGES} value={f.stage ?? []} onChange={v => set({ stage: v })} className={`${BTN_IDLE} w-full`} />
+      </Field>
+      <Field label="Задачи">
+        <SearchMultiSelect ariaLabel="Задачи" allLabel="Любые" unitLabel="состояний" searchPlaceholder="Поиск"
+          options={TASKS} value={f.tasks ?? []} onChange={v => set({ tasks: v as CustomFilters['tasks'] })} className={`${BTN_IDLE} w-full`} />
+      </Field>
+      <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+        <Field label="Тип клиента">
+          <SearchMultiSelect ariaLabel="Тип клиента" allLabel="Любой" unitLabel="типов" searchPlaceholder="Поиск"
+            options={TYPES} value={f.type ?? []} onChange={v => set({ type: v })} className={`${BTN_IDLE} w-full`} />
+        </Field>
+        <Field label="Последняя сделка">
+          <SearchSelect ariaLabel="Последняя сделка" value={f.outcome ?? ''} onChange={v => set({ outcome: v === 'won' || v === 'lost' ? v : undefined })}
+            options={[{ value: '', label: 'Любая' }, { value: 'won', label: 'Успешная' }, { value: 'lost', label: 'Проигранная' }]} className={`${BTN_IDLE} w-full`} />
+        </Field>
+      </div>
+      {tagDefs.length > 0 && (
+        <Field label={shared ? 'Теги (в общей колонке — только базовые)' : 'Теги'}>
+          <SearchMultiSelect ariaLabel="Теги" allLabel="Любые" unitLabel="тегов" searchPlaceholder="Поиск тега"
+            options={tagDefs.filter(t => !shared || t.system).map(t => ({ value: String(t.id), label: t.name }))}
+            value={(f.tags ?? []).map(String)} onChange={v => set({ tags: v.map(Number) })} className={`${BTN_IDLE} w-full`} />
+        </Field>
+      )}
+    </>
+  );
+}
+
 export interface ColumnDraft { id?: number; name: string; shared: boolean; filters: CustomFilters; alert: CustomAlert | null }
 
 export function CustomColumnModal({ initial, tagDefs, scopeQs, onClose, onSaved }: {
@@ -106,39 +149,7 @@ export function CustomColumnModal({ initial, tagDefs, scopeQs, onClose, onSaved 
             ))}
           </div>
         )}
-        <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
-          <Field label="LTV от"><Money value={f.ltvMin} onChange={v => set({ ltvMin: v })} placeholder="2 000 000" label="LTV от" /></Field>
-          <Field label="LTV до"><Money value={f.ltvMax} onChange={v => set({ ltvMax: v })} placeholder="без границы" label="LTV до" /></Field>
-        </div>
-        <Field label="Количество отгрузок">
-          <SearchMultiSelect ariaLabel="Количество отгрузок" allLabel="Сколько угодно" unitLabel="вариантов" searchPlaceholder="Поиск"
-            options={SHIP_BUCKETS.map(b => ({ value: b.value, label: b.label }))} value={f.ships ?? []} onChange={v => set({ ships: v })} className={`${BTN_IDLE} w-full`} />
-        </Field>
-        <Field label="Где заказчик сейчас">
-          <SearchMultiSelect ariaLabel="Где заказчик сейчас" allLabel="Где угодно" unitLabel="колонок" searchPlaceholder="Колонка доски"
-            options={STAGES} value={f.stage ?? []} onChange={v => set({ stage: v })} className={`${BTN_IDLE} w-full`} />
-        </Field>
-        <Field label="Задачи">
-          <SearchMultiSelect ariaLabel="Задачи" allLabel="Любые" unitLabel="состояний" searchPlaceholder="Поиск"
-            options={TASKS} value={f.tasks ?? []} onChange={v => set({ tasks: v as CustomFilters['tasks'] })} className={`${BTN_IDLE} w-full`} />
-        </Field>
-        <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
-          <Field label="Тип клиента">
-            <SearchMultiSelect ariaLabel="Тип клиента" allLabel="Любой" unitLabel="типов" searchPlaceholder="Поиск"
-              options={TYPES} value={f.type ?? []} onChange={v => set({ type: v })} className={`${BTN_IDLE} w-full`} />
-          </Field>
-          <Field label="Последняя сделка">
-            <SearchSelect ariaLabel="Последняя сделка" value={f.outcome ?? ''} onChange={v => set({ outcome: v === 'won' || v === 'lost' ? v : undefined })}
-              options={[{ value: '', label: 'Любая' }, { value: 'won', label: 'Успешная' }, { value: 'lost', label: 'Проигранная' }]} className={`${BTN_IDLE} w-full`} />
-          </Field>
-        </div>
-        {tagDefs.length > 0 && (
-          <Field label={shared ? 'Теги (в общей колонке — только базовые)' : 'Теги'}>
-            <SearchMultiSelect ariaLabel="Теги" allLabel="Любые" unitLabel="тегов" searchPlaceholder="Поиск тега"
-              options={tagDefs.filter(t => !shared || t.system).map(t => ({ value: String(t.id), label: t.name }))}
-              value={(f.tags ?? []).map(String)} onChange={v => set({ tags: v.map(Number) })} className={`${BTN_IDLE} w-full`} />
-          </Field>
-        )}
+        <FilterFields f={f} set={set} tagDefs={tagDefs} shared={shared} />
         <div className="rounded-lg bg-[var(--color-bg-surface)] px-3 py-2 text-[13px]">
           {empty ? <span className="text-[var(--color-text-muted)]">Задайте хотя бы одно условие.</span>
             : preview ? <>Подходит сейчас: <b>{rub.format(preview.total)}</b> {preview.total === 1 ? 'заказчик' : 'заказчиков'}{preview.ltv ? <> · LTV {money(preview.ltv)}</> : null}</>

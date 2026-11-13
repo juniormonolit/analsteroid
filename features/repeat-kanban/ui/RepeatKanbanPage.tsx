@@ -38,6 +38,7 @@ import { ParticipantsPicker, initialParticipants, participantsPayload, usePeople
 import { AttachmentsRow, useAttachments } from './Attachments';
 import { PostponePicker } from './PostponePicker';
 import { AddColumnTile, CustomColumnModal, CustomHeader, type ColumnDraft } from './CustomColumns';
+import { AutoBrakButton, AutoBrakModal } from './AutoBrak';
 import { NO_TAG, type TagDef } from '../engine/tagColors';
 
 const PAGE = 40;
@@ -154,6 +155,9 @@ export function RepeatKanbanPage() {
   const [shipsF, setShipsF] = useUrlState('ships', listParam([]));
   // «Мои задачи» (10.11, Будковский: «можно, чтобы были видны только мои задачи?»): постановщик, соисполнитель, наблюдатель.
   const [mine, setMine] = useUrlState('mine', stringParam(''));
+  // Автобрак колонки (12.11 п. 4+7): окно фильтра колонки; «Показывать автобрак» — кандидаты правил с авто на доске.
+  const [showAb, setShowAb] = useUrlState('showab', stringParam(''));
+  const [abCol, setAbCol] = useState<{ key: string; title: string } | null>(null);
   // Сумма отгрузок за период (владелец 29.10): период (пусто — 12 месяцев) и границы в ₽.
   const [ssf, setSsf] = useUrlState('ssf', stringParam(''));
   const [sst, setSst] = useUrlState('sst', stringParam(''));
@@ -196,7 +200,7 @@ export function RepeatKanbanPage() {
   const [bulkBrakOpen, setBulkBrakOpen] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, shipsF, mine, shf, sht, ssf, sst, smin, smax, q, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, shipsF, mine, shf, sht, ssf, sst, smin, smax, q, limits, showAb],
     enabled: prefsReady,
     queryFn: async () => {
       const qs = new URLSearchParams();
@@ -217,6 +221,7 @@ export function RepeatKanbanPage() {
       if (shf && sht) { qs.set('shf', shf); qs.set('sht', sht); }
       if (shipsF.length) qs.set('ships', shipsF.join(','));
       if (mine === '1') qs.set('mine', '1');
+      if (showAb === '1') qs.set('showab', '1');
       if (smin) qs.set('smin', smin);
       if (smax) qs.set('smax', smax);
       if ((smin || smax || sort === 'psum') && ssf && sst) { qs.set('ssf', ssf); qs.set('sst', sst); }
@@ -307,6 +312,8 @@ export function RepeatKanbanPage() {
   const toggleSel = (c: KanbanCard) => setSelected(m => { const n = new Map(m); if (n.has(c.clientKey)) n.delete(c.clientKey); else n.set(c.clientKey, c); return n; });
   const handlers: CardHandlers = {
     canManage, viewerId,
+    onAutoBrak: canManage ? (key, title) => setAbCol({ key, title }) : null,
+    brakHidden: Object.fromEntries(Object.entries(data?.brak ?? {}).map(([k, v]) => [k, v.hidden])),
     select: selectMode ? { has: k => selected.has(k), toggle: toggleSel, addAll: cs => setSelected(m => { const n = new Map(m); for (const c of cs) if (canSelectCol(c.column)) n.set(c.clientKey, c); return n; }) } : null,
     onOpen: c => setOpenCard(c), onTask: setTaskFor, onReview: setReviewFor,
     onAct: async (a, c) => {
@@ -656,6 +663,9 @@ export function RepeatKanbanPage() {
       {colEdit && <CustomColumnModal initial={colEdit === 'new' ? null : colEdit} tagDefs={data?.tagDefs ?? []}
         scopeQs={new URLSearchParams({ ...(mgrs.length ? { managers: mgrs.join(',') } : {}), ...(depts.length ? { dept: depts.join(',') } : {}) }).toString()}
         onClose={() => setColEdit(null)} onSaved={refresh} />}
+      {abCol && <AutoBrakModal column={abCol.key} title={abCol.title} tagDefs={data?.tagDefs ?? []}
+        scopeQs={new URLSearchParams({ ...(mgrs.length ? { managers: mgrs.join(',') } : {}), ...(depts.length ? { dept: depts.join(',') } : {}) }).toString()}
+        showAutoBrak={showAb === '1'} onShowAutoBrak={v => setShowAb(v ? '1' : '')} onClose={() => setAbCol(null)} onChanged={refresh} />}
       {bulkReviewOpen && <BulkReviewModal cards={selReview} onClose={() => setBulkReviewOpen(false)}
         onDone={() => { setSelected(new Map()); setSelectMode(false); refresh(); }} />}
       {bulkBrakOpen && <BulkBrakModal cards={selWork} onClose={() => setBulkBrakOpen(false)}
@@ -802,6 +812,8 @@ const canSelectCol = (col: ColumnKey) => canTaskCol(col) || col === 'review';
 
 interface CardHandlers {
   canManage: boolean; viewerId: string | null;
+  /** Автобрак колонки: открыть окно фильтра; сколько скрыто правилом с авто. */
+  onAutoBrak: ((key: string, title: string) => void) | null; brakHidden: Record<string, number>;
   /** Режим выбора карточек для массовой постановки задач. */
   select: { has: (clientKey: string) => boolean; toggle: (c: KanbanCard) => void; addAll: (cs: KanbanCard[]) => void } | null;
   onAct: (a: CardAction, c: KanbanCard) => void;
@@ -905,7 +917,10 @@ function Column({ def, col, h, onMore }: { def: ColumnDef; col: KanbanColumn | u
       <div className="rounded-lg px-2 py-1.5" style={{ borderLeft: `3px solid ${tone}` }} title={def.hint}>
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-sm font-semibold text-[var(--color-text)]">{def.title}</span>
-          <span className="text-sm tabular-nums text-[var(--color-text-muted)]">{col ? rub.format(col.total) : '…'}</span>
+          <span className="flex shrink-0 items-baseline gap-1">
+            {h.onAutoBrak && def.key !== 'brak' && def.key !== 'hidden' && <AutoBrakButton hidden={h.brakHidden[def.key] ?? 0} onClick={() => h.onAutoBrak!(def.key, def.title)} />}
+            <span className="text-sm tabular-nums text-[var(--color-text-muted)]">{col ? rub.format(col.total) : '…'}</span>
+          </span>
         </div>
         {moneyLine && <div className="text-xs text-[var(--color-text-muted)]" title={def.group === 'stage' ? 'Сумма открытых сделок колонки' : 'Сумма потенциалов (12 мес.) всех заказчиков колонки — как считается, видно по наведению на потенциал карточки'}>{moneyLine}</div>}
         {h.select && canTaskCol(def.key) && col && col.cards.length > 0 && (

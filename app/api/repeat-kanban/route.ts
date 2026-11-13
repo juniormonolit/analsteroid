@@ -35,6 +35,8 @@ import { NO_TAG } from '@/features/repeat-kanban/engine/tagColors';
 // как у «Канбана РОПа»: РОП — свои отделы с поддеревом, менеджер — только себя.
 // Действия РОПа (задача, сделка, разбор) — только над менеджерами своей зоны и только
 // по заказчикам этого менеджера. Задачи — в Битриксе (проект 118), закрывает их постановщик.
+import { cleanRule as cleanBrakRule, fetchRules as fetchBrakRules } from '@/features/repeat-kanban/engine/autoBrak';
+import type { BrakRuleCore } from '@/features/repeat-kanban/engine/autoBrakTypes';
 import { cleanFilters, CustomColumnError, fetchVisibleColumns, type CustomFilters } from '@/features/repeat-kanban/engine/customColumns';
 import { systemDb } from '@/lib/db/clients';
 
@@ -124,6 +126,12 @@ export async function GET(req: NextRequest) {
       try { preview = { filters: cleanFilters(JSON.parse(sp.get('colPreview')!)) }; }
       catch (e) { return NextResponse.json({ preview: { total: 0, ltv: 0 }, error: e instanceof CustomColumnError ? e.message : 'Некорректные условия' }); }
     }
+    // Предпросмотр окна автобрака (265): {column, mode, filters} — только РОПу.
+    let abPreview: BrakRuleCore | null = null;
+    if (sp.get('abPreview') && canManage) {
+      try { const v = cleanBrakRule({ ...JSON.parse(sp.get('abPreview')!), reason: 'nothing_needed' }); abPreview = { column: v.column, mode: v.mode, filters: v.filters }; }
+      catch (e) { return NextResponse.json({ brak: null, error: e instanceof Error ? e.message : 'Некорректные условия' }); }
+    }
     const inList = new Set(managers.map(m => m.id));
     const selected = rawMgrs.filter(id => inList.has(id));
     if (inDepts && managers.length === 0) {
@@ -170,8 +178,14 @@ export async function GET(req: NextRequest) {
       // Свои колонки «Сегодня» (10.11) — только РОПу; ?colPreview={фильтры} — предпросмотр формы (ответ — только preview).
       customColumns: canManage && !preview ? await fetchVisibleColumns(session.id, await hiddenColumnsOf(session.id)) : [],
       previewColumn: preview,
+      // Автобрак (265): правила смотрящего (с авто — кандидаты скрыты, ?showab=1 — показать); ?abPreview= — окно правила.
+      // .catch: до миграции 265 таблицы нет — доска не должна падать из-за автобрака.
+      brakRules: canManage && !preview && !abPreview ? (await fetchBrakRules(session.id).catch(() => [])).map(r => ({ column: r.column, mode: r.mode, filters: r.filters, auto: r.auto })) : [],
+      showAutoBrak: sp.get('showab') === '1',
+      brakPreview: abPreview,
     });
     if (preview) return NextResponse.json({ preview: board.preview ?? { total: 0, ltv: 0 } }, { headers: { 'Cache-Control': 'no-store' } });
+    if (abPreview) return NextResponse.json({ brak: board.brak?.[`preview:${abPreview.column}`] ?? null }, { headers: { 'Cache-Control': 'no-store' } });
     return NextResponse.json({ ...board, mergeEnabled: await isFeatureEnabled('customer_merge'), viewerBitrixId: session.bitrixUserId, canSeeAnalytics: canSeeRepeatKanbanAnalytics(session) || session.roleName === 'РОП' || canManage, canManageSettings: canManageRepeatKanbanSettings(session) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     console.error('[repeat-kanban]', e instanceof Error ? e.message : e);

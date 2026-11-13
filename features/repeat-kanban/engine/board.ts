@@ -32,6 +32,7 @@ import { fetchDismissedByRef, potentialGroups, type PotentialGroup } from './pot
 import { fetchCrossSellMatrix, fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
 import { fetchRequestedGroups } from '@/features/ai-analysis/engine/links';
 import { NO_TAG, type TagDef } from './tagColors';
+import type { BrakCandidate, BrakPreview, BrakRuleCore } from './autoBrakTypes';
 import { alertOf, hypothesisMetric, matchCustom, recordMembers, type CustomAlert, type CustomColumn, type CustomFilters, type HypothesisMetric } from './customColumns';
 
 const DAY_MS = 86_400_000;
@@ -214,6 +215,9 @@ export interface TodaySection {
 
 export interface RepeatBoard {
   generatedAt: string;
+  /** Автобрак: по колонке — сколько скрыто (и предпросмотр, если просили); brakAll — все кандидаты (brakCollect). */
+  brak?: Record<string, BrakPreview>;
+  brakAll?: BrakCandidate[];
   /** Предпросмотр своей колонки (opts.previewColumn): сколько заказчиков подходит и их LTV. */
   preview?: { total: number; ltv: number };
   /** Склейка заказчиков включена (флаг customer_merge) — показывать «Объединить с…» РОПу. */
@@ -487,6 +491,13 @@ export async function buildRepeatBoard(opts: {
   customColumns?: CustomColumn[];
   /** Предпросмотр формы своей колонки: сколько подходит сейчас (доска не собирается целиком в ответ). */
   previewColumn?: { filters: CustomFilters } | null;
+  /** Автобрак (миграция 265): правила смотрящего; с auto — кандидаты скрыты с доски, если не showAutoBrak. */
+  brakRules?: (BrakRuleCore & { auto: boolean })[];
+  showAutoBrak?: boolean;
+  /** Предпросмотр окна правила (остаётся / уходит, деньги, первые 200 кандидатов с именами). */
+  brakPreview?: BrakRuleCore | null;
+  /** Полный список кандидатов правила — для «Применить» и ночного прогона (имена не нужны). */
+  brakCollect?: BrakRuleCore | null;
   /** Поиск заказчика (владелец 21.10): имя/название (все слова), или число — id контакта/
    *  компании, номер сделки (текущей, отказной, последней отгрузки) или задачи. По всем колонкам. */
   search?: string | null;
@@ -884,6 +895,37 @@ export async function buildRepeatBoard(opts: {
   const columns: KanbanColumn[] = [];
   // Показатели доски — до фильтра по задачам: фильтр «ждёт приёмки» не должен обнулять
   // «Потенциал пула» (у заказчиков пула задач нет). Снимок списков колонок.
+  // Автобрак (265): кандидаты правил — до «Сегодня» и показателей; с авто и без «Показывать автобрак» — скрыты.
+  const brakOut: Record<string, BrakPreview> = {};
+  const brakIs = (rule: BrakRuleCore, c: KanbanCard) => { const m = matchCustom(c, rule.filters, taskBucketOf(c, now)); return rule.mode === 'brak' ? m : !m; };
+  const toCand = (c: KanbanCard): BrakCandidate => ({
+    clientKey: c.clientKey, managerId: c.managerId, managerName: c.managerName, name: c.name, ltv: c.sumDelivered, potential: c.potential,
+    dealId: c.deal?.dealId ?? null, dealOpen: !!c.deal && !LOST_STAGES.has(c.deal.stageId) && !WON_STAGES.has(c.deal.stageId),
+  });
+  let brakPreviewCards: KanbanCard[] = [];
+  let brakAllOut: BrakCandidate[] | undefined;
+  for (const rule of [...(opts.brakRules ?? []), ...(opts.brakPreview ? [{ ...opts.brakPreview, auto: false, preview: true }] : []), ...(opts.brakCollect ? [{ ...opts.brakCollect, auto: false, collect: true }] : [])] as (BrakRuleCore & { auto: boolean; preview?: boolean; collect?: boolean })[]) {
+    const list = buckets.get(rule.column as ColumnKey);
+    if (!list) continue;
+    const cand = list.filter(c => brakIs(rule, c));
+    if (rule.collect) { brakAllOut = cand.map(toCand); continue; }
+    if (rule.preview) {
+      const keep = list.filter(c => !brakIs(rule, c));
+      cand.sort((a, b) => b.sumDelivered - a.sumDelivered);
+      brakPreviewCards = cand.slice(0, 200);
+      brakOut[`preview:${rule.column}`] = {
+        column: rule.column, keepN: keep.length, keepLtv: keep.reduce((s, c) => s + c.sumDelivered, 0),
+        brakN: cand.length, brakLtv: cand.reduce((s, c) => s + c.sumDelivered, 0), brakPotential: cand.reduce((s, c) => s + (c.potential ?? 0), 0),
+        candidates: [], hidden: 0,
+      };
+      continue;
+    }
+    if (rule.auto && !opts.showAutoBrak && cand.length) {
+      const drop = new Set(cand.map(c => c.clientKey));
+      buckets.set(rule.column as ColumnKey, list.filter(c => !drop.has(c.clientKey)));
+      brakOut[rule.column] = { column: rule.column, keepN: list.length - cand.length, keepLtv: 0, brakN: cand.length, brakLtv: 0, brakPotential: 0, candidates: [], hidden: cand.length };
+    }
+  }
   if (opts.mineOf) {
     const me = opts.mineOf;
     for (const [k, list] of buckets) buckets.set(k, list.filter(c => !!c.task && (c.task.createdById === me || c.task.participants.includes(me))));
@@ -1002,7 +1044,7 @@ export async function buildRepeatBoard(opts: {
 
   // Имена: кэш для всех видимых, ленивый добор из Битрикса — только для видимых.
   if (!opts.skipNames) {
-    const visible = [...columns.flatMap(c => c.cards), ...today.flatMap(t => t.cards)];
+    const visible = [...columns.flatMap(c => c.cards), ...today.flatMap(t => t.cards), ...brakPreviewCards];
     const visibleKeys = [...new Set(visible.flatMap(x => [x.clientKey, ...x.members.map(m => m.key)]))];
     const names = await resolveClientNames(visibleKeys).catch(() => getCachedClientNames(visibleKeys));
     for (const card of visible) {
@@ -1038,5 +1080,7 @@ export async function buildRepeatBoard(opts: {
     ? `По запросу «${opts.search}» никого не нашли. Ищется по имени или названию, тегам и товарным группам отгрузок (все слова) и по номерам: ID заказчика (контакт/компания), сделка, задача; имена из Битрикса ещё докачиваются — попробуйте через пару минут.`
     : null;
   return { ...base, columns, typeCounts, poolGroupCounts, everGroupCounts: shipped ? everGroupCounts : undefined, tagDefs: tagData?.defs, tagCounts: tagData ? tagCounts : undefined, aiCounts: opts.withAi ? aiCounts : undefined, offerCounts: opts.skipNames ? undefined : offerCounts, taskCounts, kpi, notice, dataAt,
-    taskLimit: settings.managerTaskLimit, reassignEnabled: settings.reassignEnabled, managerLoad, outcomeCounts, shipCountCounts, today, preview: previewOut };
+    taskLimit: settings.managerTaskLimit, reassignEnabled: settings.reassignEnabled, managerLoad, outcomeCounts, shipCountCounts, today, preview: previewOut,
+    brak: (() => { for (const k of Object.keys(brakOut)) if (k.startsWith('preview:')) brakOut[k].candidates = brakPreviewCards.map(toCand); return Object.keys(brakOut).length ? brakOut : undefined; })(),
+    brakAll: brakAllOut };
 }
