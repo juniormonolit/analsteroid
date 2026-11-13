@@ -192,6 +192,7 @@ export function RepeatKanbanPage() {
   const setKpiHidden = (v: boolean) => { setKpiHiddenState(v); try { localStorage.setItem('repeatKanban.kpiHidden', v ? '1' : '0'); } catch { /* приватный режим */ } };
   const [selected, setSelected] = useState<Map<string, KanbanCard>>(new Map());
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkReviewOpen, setBulkReviewOpen] = useState(false);
   const [bulkBrakOpen, setBulkBrakOpen] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
@@ -300,10 +301,13 @@ export function RepeatKanbanPage() {
   const openCard = cardKey ? [...(data?.columns ?? []).flatMap(x => x.cards), ...(data?.today ?? []).flatMap(t => t.cards)]
     .find(x => x.clientKey === cardKey || x.members.some(m => m.key === cardKey)) ?? null : null;
   const viewerId = data?.viewerBitrixId ?? null;
+  // Отмеченные «На разборе» — под массовый разбор; остальные — под задачи/брак.
+  const selReview = [...selected.values()].filter(c => c.column === 'review');
+  const selWork = [...selected.values()].filter(c => c.column !== 'review');
   const toggleSel = (c: KanbanCard) => setSelected(m => { const n = new Map(m); if (n.has(c.clientKey)) n.delete(c.clientKey); else n.set(c.clientKey, c); return n; });
   const handlers: CardHandlers = {
     canManage, viewerId,
-    select: selectMode ? { has: k => selected.has(k), toggle: toggleSel, addAll: cs => setSelected(m => { const n = new Map(m); for (const c of cs) if (canTaskCol(c.column)) n.set(c.clientKey, c); return n; }) } : null,
+    select: selectMode ? { has: k => selected.has(k), toggle: toggleSel, addAll: cs => setSelected(m => { const n = new Map(m); for (const c of cs) if (canSelectCol(c.column)) n.set(c.clientKey, c); return n; }) } : null,
     onOpen: c => setOpenCard(c), onTask: setTaskFor, onReview: setReviewFor,
     onAct: async (a, c) => {
       if (a === 'hide') setHideFor(c);
@@ -639,17 +643,24 @@ export function RepeatKanbanPage() {
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => setSelected(new Map())} className={BTN_IDLE}>Снять выбор</button>
             {/* Массовый брак (владелец 28.10): тот же путь, что «Сразу в брак», по каждой отмеченной. */}
-            <button type="button" onClick={() => setBulkBrakOpen(true)} className={`${BTN} border-[var(--color-negative)] text-[var(--color-negative)] hover:bg-[var(--color-bg-hover)]`}>В брак · {rub.format(selected.size)}</button>
-            <button type="button" onClick={() => setBulkOpen(true)} className={BTN_ACTIVE}><Plus size={14} /> Поставить задачи · {rub.format(selected.size)}</button>
+            {selReview.length > 0 && (
+              <button type="button" onClick={() => setBulkReviewOpen(true)} className={BTN_ACTIVE}>Разобрать · {rub.format(selReview.length)}</button>
+            )}
+            {selWork.length > 0 && <>
+              <button type="button" onClick={() => setBulkBrakOpen(true)} className={`${BTN} border-[var(--color-negative)] text-[var(--color-negative)] hover:bg-[var(--color-bg-hover)]`}>В брак · {rub.format(selWork.length)}</button>
+              <button type="button" onClick={() => setBulkOpen(true)} className={BTN_ACTIVE}><Plus size={14} /> Поставить задачи · {rub.format(selWork.length)}</button>
+            </>}
           </div>
         </div>
       )}
       {colEdit && <CustomColumnModal initial={colEdit === 'new' ? null : colEdit} tagDefs={data?.tagDefs ?? []}
         scopeQs={new URLSearchParams({ ...(mgrs.length ? { managers: mgrs.join(',') } : {}), ...(depts.length ? { dept: depts.join(',') } : {}) }).toString()}
         onClose={() => setColEdit(null)} onSaved={refresh} />}
-      {bulkBrakOpen && <BulkBrakModal cards={[...selected.values()]} onClose={() => setBulkBrakOpen(false)}
+      {bulkReviewOpen && <BulkReviewModal cards={selReview} onClose={() => setBulkReviewOpen(false)}
         onDone={() => { setSelected(new Map()); setSelectMode(false); refresh(); }} />}
-      {bulkOpen && <BulkTaskModal cards={[...selected.values()]} loadOf={loadOf} limit={taskLimit} reassign={reassignOpts}
+      {bulkBrakOpen && <BulkBrakModal cards={selWork} onClose={() => setBulkBrakOpen(false)}
+        onDone={() => { setSelected(new Map()); setSelectMode(false); refresh(); }} />}
+      {bulkOpen && <BulkTaskModal cards={selWork} loadOf={loadOf} limit={taskLimit} reassign={reassignOpts}
         onClose={() => setBulkOpen(false)} onDone={() => { setSelected(new Map()); setSelectMode(false); refresh(); }} />}
       {/^[ckx]\d{1,12}$/.test(cardKey) && (
         <CustomerCardLoader initialTab={(CARD_TABS as readonly string[]).includes(ctab) ? ctab as ClientCardTab : undefined}
@@ -786,6 +797,8 @@ function FilterField({ label, children }: { label: string; children: React.React
 /** Колонки, где у карточки есть кнопка задачи (и куда можно поставить массово). */
 // «Продано» — можно (10.11, «Свежие продажи»: задача на повторную продажу в проданную сделку, «на горячую»).
 const canTaskCol = (col: ColumnKey) => col !== 'review' && col !== 'brak' && col !== 'hidden';
+/** Выбор галочкой: под задачи — как canTaskCol; «На разборе» — под массовый разбор (собрание 12.11 «разбор скопом»). */
+const canSelectCol = (col: ColumnKey) => canTaskCol(col) || col === 'review';
 
 interface CardHandlers {
   canManage: boolean; viewerId: string | null;
@@ -799,7 +812,7 @@ interface CardHandlers {
 }
 
 function CardFor({ c, h }: { c: KanbanCard; h: CardHandlers }) {
-  const sel = h.select && canTaskCol(c.column) ? h.select : null;
+  const sel = h.select && canSelectCol(c.column) ? h.select : null;
   return (
     <Card c={c} col={c.column} canManage={h.canManage} canMerge={h.canMerge} onUnmerge={m => h.onUnmerge(c, m)}
       selected={sel ? sel.has(c.clientKey) : null} onSelect={sel ? () => sel.toggle(c) : undefined}
@@ -2126,6 +2139,108 @@ function BulkBrakModal({ cards: initial, onClose, onDone }: { cards: KanbanCard[
               <button type="button" onClick={onClose} disabled={busy} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50">Отмена</button>
               <button type="button" disabled={busy} onClick={submit}
                 className="min-h-11 rounded-lg bg-[var(--color-negative)] px-4 text-white disabled:opacity-50">{busy ? 'Отправляю…' : `В брак · ${cards.length}`}</button>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/** Разбор скопом (собрание 12.11; владелец 13.11 «Да»): одно решение на все отмеченные карточки «На разборе» —
+ *  тот же запрос, что у ReviewModal, по каждой. Брак без дозвона и до трёх попыток — только с комментарием (как поштучно). */
+function BulkReviewModal({ cards: initial, onClose, onDone }: { cards: KanbanCard[]; onClose: () => void; onDone: () => void }) {
+  const [cards] = useState(initial);
+  const [decision, setDecision] = useState<'brak' | 'no_answer' | 'return' | 'postpone'>('brak');
+  const [reason, setReason] = useState<string>('nothing_needed');
+  const [comment, setComment] = useState('');
+  const [until, setUntil] = useState(postponePresets()[0].value);
+  const [parts, setParts] = useState(initialParticipants);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(0);
+  const [errors, setErrors] = useState<{ name: string; error: string }[]>([]);
+  const [finished, setFinished] = useState(false);
+  const touches = (c: KanbanCard) => c.attempts?.reached ? TOUCHES : Math.min(c.attempts?.count ?? 0, TOUCHES);
+  const early = cards.filter(c => touches(c) < TOUCHES).length;
+  const needComment = (decision === 'brak' && early > 0) || decision === 'return' || decision === 'postpone';
+  const ready = (!needComment || comment.trim().length >= 3) && (decision !== 'postpone' || !!until);
+  const OPTIONS = [
+    { v: 'brak' as const, label: 'Брак', hint: 'Отказ подтверждён — заказчики уходят из пула (открытые сделки дозвона закроются по причине)' },
+    { v: 'no_answer' as const, label: 'Недозвон / ещё попытки', hint: 'Не брак: отказ — вернуть в пул; дозвон — оставить в дозвоне' },
+    { v: 'postpone' as const, label: 'Отложить до…', hint: 'Сделка — «Больше ничего не нужно», заказчики в «Скрытых» до даты' },
+    { v: 'return' as const, label: 'Вернуть менеджерам', hint: 'Каждому менеджеру — задача с вашим сообщением, сделка вернётся в работу' },
+  ];
+  const submit = async () => {
+    const label = OPTIONS.find(o => o.v === decision)!.label;
+    if (!confirm(`«${label}» для ${cards.length} ${plural(cards.length, 'заказчика', 'заказчиков', 'заказчиков')}?`)) return;
+    setBusy(true); setDone(0); setErrors([]);
+    const errs: { name: string; error: string }[] = [];
+    for (const c of cards) {
+      try {
+        await post({ action: 'review', clientKey: c.clientKey, managerId: c.managerId, column: c.column, dealId: c.deal?.dealId,
+          decision, reason: decision === 'brak' ? reason : null, comment, touchesDone: touches(c), until: decision === 'postpone' ? until : undefined,
+          participants: decision === 'return' ? participantsPayload(parts) : undefined });
+      } catch (e) { errs.push({ name: cardName(c), error: e instanceof Error ? e.message : String(e) }); }
+      setDone(n => n + 1);
+    }
+    setErrors(errs); setBusy(false); setFinished(true);
+    onDone();
+  };
+  return (
+    <Modal open onOpenChange={o => { if (!o && !busy) onClose(); }} title={`Разбор · ${cards.length} ${plural(cards.length, 'заказчик', 'заказчика', 'заказчиков')}`} desktopWidth="sm:max-w-lg">
+      <div className="flex flex-col gap-3 text-sm">
+        {finished ? (
+          <>
+            <p className="text-[var(--color-text)]">Готово: {cards.length - errors.length} из {cards.length}.</p>
+            {errors.length > 0 && (
+              <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto text-[12.5px]">
+                {errors.map((e, i) => <li key={i}><b>{e.name}</b>: <span className="text-[var(--color-negative)]">{e.error}</span></li>)}
+              </ul>
+            )}
+            <div className="flex justify-end"><button type="button" onClick={onClose} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white">Закрыть</button></div>
+          </>
+        ) : (
+          <>
+            <ul className="flex max-h-32 flex-col gap-0.5 overflow-y-auto rounded-lg bg-[var(--color-bg-surface)] p-2 text-[12.5px]">
+              {cards.map(c => (
+                <li key={c.clientKey} className="flex min-w-0 justify-between gap-2">
+                  <span className="min-w-0 truncate text-[var(--color-text)]">{cardName(c)}</span>
+                  <span className="shrink-0 text-[var(--color-text-muted)]">{c.dozvonFail ? 'дозвон' : 'отказ'} · {touches(c)}/{TOUCHES}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="flex flex-col gap-2" role="radiogroup">
+              {OPTIONS.map(o => (
+                <label key={o.v} className={`flex min-h-11 cursor-pointer items-start gap-2 rounded-lg border p-2 ${decision === o.v ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'}`}>
+                  <input type="radio" name="bulk-decision" checked={decision === o.v} onChange={() => setDecision(o.v)} className="mt-0.5 h-4 w-4" />
+                  <span><span className="font-medium text-[var(--color-text)]">{o.label}</span><br /><span className="text-xs text-[var(--color-text-muted)]">{o.hint}</span></span>
+                </label>
+              ))}
+            </div>
+            {decision === 'postpone' && <PostponePicker value={until} onChange={setUntil} />}
+            {decision === 'return' && <ParticipantsPicker value={parts} onChange={setParts} managerIds={[...new Set(cards.map(c => c.managerId))]} />}
+            {decision === 'brak' && (
+              <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+                Причина
+                <SearchSelect ariaLabel="Причина брака" value={reason} onChange={setReason}
+                  options={BRAK_REASONS.map(r => ({ value: r.value, label: r.label }))} className="w-full justify-start bg-[var(--color-bg)]" />
+              </label>
+            )}
+            <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+              {decision === 'return' ? 'Сообщение менеджерам — уйдёт в каждую задачу (обязательно)' : decision === 'postpone' ? 'Почему откладываем (обязательно)'
+                : decision === 'brak' && early ? `Комментарий (обязательно: у ${early} меньше ${TOUCHES} попыток без дозвона)` : 'Комментарий (всем)'}
+              <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} className={fieldCls} />
+            </label>
+            {busy && (
+              <div className="flex flex-col gap-1">
+                <div className="h-2 overflow-hidden rounded bg-[var(--color-bg-hover)]"><div className="h-full bg-[var(--color-accent)]" style={{ width: `${(done / cards.length) * 100}%` }} /></div>
+                <span className="text-[12px] text-[var(--color-text-muted)]">{done} из {cards.length}…</span>
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={onClose} disabled={busy} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50">Отмена</button>
+              <button type="button" disabled={busy || !ready} onClick={submit}
+                className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white disabled:opacity-50">{busy ? 'Сохраняю…' : `Сохранить · ${cards.length}`}</button>
             </div>
           </>
         )}
