@@ -3,7 +3,7 @@
 // условий — колонка показывает подходящих заказчиков, тревожных — сверху и красным, в заголовке — деньги и метрика
 // «дошли до отгрузки за 30 дней: колонка против остальных». Условия — из тех же фильтров, что на доске, плюс LTV и
 // «где заказчик сейчас». Личная по умолчанию, «Показать всем РОПам» — общая. Не больше 5 своих.
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { MoreHorizontal, Plus, SlidersHorizontal, Users } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Popover } from '@/components/ui/Popover';
@@ -182,7 +182,7 @@ export function CustomColumnModal({ initial, tagDefs, scopeQs, onClose, onSaved 
 }
 
 /** Заголовок своей колонки: название, «общая», счётчик, «⋯»; деньги; тревога и метрика гипотезы. */
-export function CustomHeader({ sec, onEdit, onChanged, hidden }: { sec: TodaySection; onEdit: () => void; onChanged: () => void; hidden: number[] }) {
+export function CustomHeader({ sec, onEdit, onChanged, hidden, extra }: { sec: TodaySection; onEdit: () => void; onChanged: () => void; hidden: number[]; extra?: ReactNode }) {
   const c = sec.custom!;
   const [open, setOpen] = useState(false);
   const m = c.metric;
@@ -220,6 +220,7 @@ export function CustomHeader({ sec, onEdit, onChanged, hidden }: { sec: TodaySec
           {c.shared && !c.example && <span title={c.own ? 'Общая: видят все РОПы' : `Общая колонка · ${c.ownerName ?? 'РОП'}`}><Users size={13} className="shrink-0 text-[var(--color-text-muted)]" /></span>}
         </h2>
         <span className="flex shrink-0 items-center gap-1">
+          {extra}
           <span className="text-sm tabular-nums text-[var(--color-text-muted)]">{rub.format(sec.total)}</span>
           <Popover open={open} onOpenChange={setOpen} align="end" className="w-52 p-1" trigger={
             <button type="button" aria-label="Действия с колонкой" className="tap-target inline-flex h-6 w-6 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"><MoreHorizontal size={16} /></button>

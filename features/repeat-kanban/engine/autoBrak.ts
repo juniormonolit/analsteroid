@@ -11,7 +11,7 @@ import type { SessionUser } from '@/lib/auth/session';
 import { ropScope } from '@/features/tv/engine/access';
 import { scopeManagers } from '@/features/rop-kanban/engine/kanban';
 import { BRAK_REASONS, COLUMNS } from './config';
-import { cleanFilters, CustomColumnError, type CustomFilters } from './customColumns';
+import { cleanFilters, CustomColumnError, fetchVisibleColumns, type CustomFilters } from './customColumns';
 import type { BrakCandidate, BrakRuleCore } from './autoBrakTypes';
 
 export class AutoBrakError extends Error {}
@@ -19,7 +19,13 @@ const PAUSE_MS = 400;
 /** Предохранитель ежедневного автобрака: больше кандидатов за прогон правила — пропуск (13.11). */
 const AUTO_CAP = 200;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-const COLUMN_KEYS = new Set<string>(COLUMNS.filter(c => c.key !== 'brak' && c.key !== 'hidden').map(c => c.key));
+// «Продано» — нет: брак закрыл бы проданную сделку в отказ (13.11).
+const COLUMN_KEYS = new Set<string>(COLUMNS.filter(c => c.key !== 'brak' && c.key !== 'hidden' && c.key !== 'st_sold').map(c => c.key));
+/** «Сегодня» (владелец 13.11: «ебани на "Сегодня" ещё»). Только где брак — осмысленное решение РОПа:
+ *  «На разборе», «Просрочены», «Окно закрывается» и свои колонки. Нет: «Ждут приёмки» (менеджер сдал — сначала принять),
+ *  «Свежие продажи» (проданные сделки), «Предлагают скрыть» / «Просят разбор» (свои решения), «Не в той воронке» (сделка в первичной). */
+export const TODAY_BRAK_KEYS = new Set(['review', 'overdue', 'closing']);
+export const isBrakColumn = (k: string) => COLUMN_KEYS.has(k) || (k.startsWith('today:') && TODAY_BRAK_KEYS.has(k.slice(6))) || /^custom:\d+$/.test(k);
 
 export interface BrakRule extends BrakRuleCore { id: number; ownerUserId: string; ownerName: string | null; reason: string; comment: string | null; auto: boolean; updatedAt: string }
 export interface BrakBatch {
@@ -31,7 +37,7 @@ export interface BrakBatch {
 /** Проверка правила из формы: колонка, режим, условия (как у своих колонок), причина — стадия отказа. */
 export function cleanRule(body: Record<string, unknown>): BrakRuleCore & { reason: string; comment: string | null; auto: boolean } {
   const column = String(body.column ?? '');
-  if (!COLUMN_KEYS.has(column)) throw new AutoBrakError('Колонка не поддерживает автобрак');
+  if (!isBrakColumn(column)) throw new AutoBrakError('Колонка не поддерживает автобрак');
   const mode = body.mode === 'keep' ? 'keep' : 'brak';
   let filters: CustomFilters;
   try { filters = cleanFilters(body.filters); } catch (e) { throw new AutoBrakError(e instanceof CustomColumnError ? e.message : 'Некорректные условия'); }
@@ -90,7 +96,13 @@ export async function collectCandidates(session: SessionUser, rule: BrakRuleCore
   const { buildRepeatBoard } = await import('./board');
   const scope = await ropScope(session);
   const managers = await scopeManagers(scope);
-  const board = await buildRepeatBoard({ managers, selectedManagers: [], typeFilter: null, canManage: true, skipNames: true, viewerUserId: session.id, brakCollect: rule });
+  // Своя колонка «Сегодня» — её условия должны быть видны автору правила (своя, общая или пример).
+  let customColumns: Awaited<ReturnType<typeof fetchVisibleColumns>> | undefined;
+  if (rule.column.startsWith('custom:')) {
+    customColumns = (await fetchVisibleColumns(session.id)).filter(c => `custom:${c.id}` === rule.column);
+    if (!customColumns.length) throw new AutoBrakError('Своя колонка не найдена или недоступна');
+  }
+  const board = await buildRepeatBoard({ managers, selectedManagers: [], typeFilter: null, canManage: true, skipNames: true, viewerUserId: session.id, brakCollect: rule, customColumns });
   return board.brakAll ?? [];
 }
 

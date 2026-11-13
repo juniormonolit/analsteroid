@@ -897,18 +897,21 @@ export async function buildRepeatBoard(opts: {
   // «Потенциал пула» (у заказчиков пула задач нет). Снимок списков колонок.
   // Автобрак (265): кандидаты правил — до «Сегодня» и показателей; с авто и без «Показывать автобрак» — скрыты.
   const brakOut: Record<string, BrakPreview> = {};
-  const brakIs = (rule: BrakRuleCore, c: KanbanCard) => { const m = matchCustom(c, rule.filters, taskBucketOf(c, now)); return rule.mode === 'brak' ? m : !m; };
+  // Никогда не брак (13.11, «Сегодня»): уже в браке/скрытых и «Продано» — брак закрыл бы проданную сделку в отказ.
+  const brakable = (c: KanbanCard) => c.column !== 'brak' && c.column !== 'hidden' && c.column !== 'st_sold';
+  const brakIs = (rule: BrakRuleCore, c: KanbanCard) => { if (!brakable(c)) return false; const m = matchCustom(c, rule.filters, taskBucketOf(c, now)); return rule.mode === 'brak' ? m : !m; };
   const toCand = (c: KanbanCard): BrakCandidate => ({
     clientKey: c.clientKey, managerId: c.managerId, managerName: c.managerName, name: c.name, ltv: c.sumDelivered, potential: c.potential,
     dealId: c.deal?.dealId ?? null, dealOpen: !!c.deal && !LOST_STAGES.has(c.deal.stageId) && !WON_STAGES.has(c.deal.stageId),
   });
   let brakPreviewCards: KanbanCard[] = [];
   let brakAllOut: BrakCandidate[] | undefined;
-  for (const rule of [...(opts.brakRules ?? []), ...(opts.brakPreview ? [{ ...opts.brakPreview, auto: false, preview: true }] : []), ...(opts.brakCollect ? [{ ...opts.brakCollect, auto: false, collect: true }] : [])] as (BrakRuleCore & { auto: boolean; preview?: boolean; collect?: boolean })[]) {
-    const list = buckets.get(rule.column as ColumnKey);
-    if (!list) continue;
+  type RunRule = BrakRuleCore & { auto: boolean; preview?: boolean; collect?: boolean };
+  const brakRulesAll = [...(opts.brakRules ?? []), ...(opts.brakPreview ? [{ ...opts.brakPreview, auto: false, preview: true }] : []), ...(opts.brakCollect ? [{ ...opts.brakCollect, auto: false, collect: true }] : [])] as RunRule[];
+  /** Правило над списком колонки: сбор / предпросмотр / скрытие кандидатов (null — список не меняется). Колонки доски и «Сегодня». */
+  const runBrakRule = (rule: RunRule, list: KanbanCard[]): KanbanCard[] | null => {
     const cand = list.filter(c => brakIs(rule, c));
-    if (rule.collect) { brakAllOut = cand.map(toCand); continue; }
+    if (rule.collect) { brakAllOut = cand.map(toCand); return null; }
     if (rule.preview) {
       const keep = list.filter(c => !brakIs(rule, c));
       cand.sort((a, b) => b.sumDelivered - a.sumDelivered);
@@ -920,14 +923,28 @@ export async function buildRepeatBoard(opts: {
         brakDealsOpen: cand.filter(c => toCand(c).dealOpen).length,
         brakTasksOpen: cand.filter(c => c.task && c.task.state !== 'done' && c.task.state !== 'deferred').length,
       };
-      continue;
+      return null;
     }
     if (rule.auto && !opts.showAutoBrak && cand.length) {
       const drop = new Set(cand.map(c => c.clientKey));
-      buckets.set(rule.column as ColumnKey, list.filter(c => !drop.has(c.clientKey)));
       brakOut[rule.column] = { column: rule.column, keepN: list.length - cand.length, keepLtv: 0, brakN: cand.length, brakLtv: 0, brakPotential: 0, candidates: [], hidden: cand.length };
+      return list.filter(c => !drop.has(c.clientKey));
     }
+    return null;
+  };
+  // Колонки доски; правила «Сегодня» (`today:…`, `custom:…`) — ниже, при сборке секций.
+  for (const rule of brakRulesAll) {
+    const list = buckets.get(rule.column as ColumnKey);
+    if (!list) continue;
+    const next = runBrakRule(rule, list);
+    if (next) buckets.set(rule.column as ColumnKey, next);
   }
+  /** То же для секции «Сегодня» по полному (до среза) списку. */
+  const brakToday = (key: string, list: KanbanCard[]): KanbanCard[] => {
+    let out = list;
+    for (const rule of brakRulesAll) if (rule.column === key) out = runBrakRule(rule, out) ?? out;
+    return out;
+  };
   if (opts.mineOf) {
     const me = opts.mineOf;
     for (const [k, list] of buckets) buckets.set(k, list.filter(c => !!c.task && (c.task.createdById === me || c.task.participants.includes(me))));
@@ -1021,7 +1038,7 @@ export async function buildRepeatBoard(opts: {
     { key: 'closing', title: 'Окно закрывается', hint: `Отгрузили ${WINDOW_DAYS - 3}+ дней назад, сделки нет — осталось 3 дня или меньше`, pick: c => c.column === 'pool_hot' && (c.freshDays ?? 0) >= WINDOW_DAYS - 3, order: (a, b) => lostRank(a) - lostRank(b) || (b.freshDays ?? 0) - (a.freshDays ?? 0) || ev(b) - ev(a) },
   ];
   const today: TodaySection[] = todayDefs.map(d => {
-    const list = everyCard.filter(d.pick).sort(d.order);
+    const list = brakToday(`today:${d.key}`, everyCard.filter(d.pick).sort(d.order));
     return { key: d.key, title: d.title, hint: d.hint, total: list.length, cards: list.slice(0, TODAY_LIMIT) };
   });
   // Свои колонки (10.11): условия ∩ фильтры доски; тревожные сверху, дальше по LTV. Членство — для метрики гипотезы.
@@ -1030,7 +1047,7 @@ export async function buildRepeatBoard(opts: {
     previewOut = { total: list.length, ltv: list.reduce((s, c) => s + c.sumDelivered, 0) };
   }
   for (const col of opts.customColumns ?? []) {
-    const list = everyCard.filter(c => matchCustom(c, col.filters, taskBucketOf(c, now)));
+    const list = brakToday(`custom:${col.id}`, everyCard.filter(c => matchCustom(c, col.filters, taskBucketOf(c, now))));
     const alerts: Record<string, string> = {};
     for (const c of list) { const a = alertOf(c, col.alert, taskBucketOf(c, now), now); if (a) alerts[c.clientKey] = a; }
     list.sort((a, b) => Number(!!alerts[b.clientKey]) - Number(!!alerts[a.clientKey]) || b.sumDelivered - a.sumDelivered);

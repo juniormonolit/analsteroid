@@ -39,6 +39,8 @@ import { AttachmentsRow, useAttachments } from './Attachments';
 import { PostponePicker } from './PostponePicker';
 import { AddColumnTile, CustomColumnModal, CustomHeader, type ColumnDraft } from './CustomColumns';
 import { AutoBrakButton, AutoBrakModal } from './AutoBrak';
+/** Встроенные секции «Сегодня» с автобраком — как TODAY_BRAK_KEYS в engine/autoBrak.ts (там — проверка на сервере). */
+const TODAY_BRAK = new Set(['review', 'overdue', 'closing']);
 import { NO_TAG, type TagDef } from '../engine/tagColors';
 
 const PAGE = 40;
@@ -845,13 +847,16 @@ function TodayView({ sections, h, custom }: { sections: TodaySection[]; h: CardH
   const std = filled.filter(s => !s.custom);
   const mine = custom ? filled.filter(s => s.custom) : [];
   const cust = !!custom;
+  // Автобрак секции (13.11): встроенные — `today:<key>` (только TODAY_BRAK_KEYS), свои — `custom:<id>`.
+  const abKey = (sec: TodaySection) => (sec.custom ? sec.key : TODAY_BRAK.has(sec.key) ? `today:${sec.key}` : null);
+  const abBtn = (sec: TodaySection) => { const k = abKey(sec); return k && h.onAutoBrak ? <AutoBrakButton hidden={h.brakHidden[k] ?? 0} onClick={() => h.onAutoBrak!(k, sec.title)} /> : null; };
   const renderSec = (sec: TodaySection) => (
               <section key={sec.key} className="flex h-full w-80 max-w-[85vw] shrink-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
-                {sec.custom && custom ? <CustomHeader sec={sec} hidden={custom.hidden} onEdit={() => custom.onEdit(sec)} onChanged={custom.onChanged} /> : (
+                {sec.custom && custom ? <CustomHeader sec={sec} hidden={custom.hidden} onEdit={() => custom.onEdit(sec)} onChanged={custom.onChanged} extra={abBtn(sec)} /> : (
                 <div className="rounded-lg px-2 py-1.5" style={{ borderLeft: `3px solid ${TONE[sec.key] ?? 'var(--color-accent)'}` }} title={sec.hint}>
                   <div className="flex items-baseline justify-between gap-2">
                     <h2 className="text-sm font-semibold text-[var(--color-text)]">{sec.title}</h2>
-                    <span className="text-sm tabular-nums text-[var(--color-text-muted)]">{rub.format(sec.total)}</span>
+                    <span className="flex shrink-0 items-baseline gap-1">{abBtn(sec)}<span className="text-sm tabular-nums text-[var(--color-text-muted)]">{rub.format(sec.total)}</span></span>
                   </div>
                   <div className="text-xs text-[var(--color-text-muted)]">{sec.hint}</div>
                 </div>

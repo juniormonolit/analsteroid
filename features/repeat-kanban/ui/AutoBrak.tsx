@@ -148,11 +148,11 @@ export function AutoBrakModal({ column, title, scopeQs, tagDefs, showAutoBrak, o
 
         <label className="flex min-h-11 items-start gap-2">
           <input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)} className="mt-1 h-4 w-4" />
-          <span>Применять автоматически — по будням в 8:00 МСК. <span className="text-[12px] text-[var(--color-text-muted)]">Пока правило с авто, кандидаты на брак скрыты с доски.</span></span>
+          <span>Применять автоматически — по будням в 8:00 МСК. <span className="text-[12px] text-[var(--color-text-muted)]">Пока правило с авто, кандидаты на брак скрыты из этой колонки.</span></span>
         </label>
         <label className="flex min-h-11 items-center gap-2">
           <input type="checkbox" checked={showAutoBrak} onChange={e => onShowAutoBrak(e.target.checked)} className="h-4 w-4" />
-          Показывать автобрак на доске (кандидатов, скрытых правилами с авто)
+          Показывать автобрак (кандидатов, скрытых правилами с авто, — на доске и в «Сегодня»)
         </label>
 
         {err && <p className="text-[var(--color-negative)]">{err}</p>}
