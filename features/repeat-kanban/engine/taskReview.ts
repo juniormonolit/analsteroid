@@ -211,6 +211,8 @@ export async function refreshOpenTaskStatuses(): Promise<{ asked: number; got: n
     }
   }
   if (deleted) console.log(`[repeat-kanban] задачи удалены в Битриксе — считаем закрытыми: ${deleted}`);
+  // Тем же прогоном (раз в 30 мин): брак снимается, если сделку открыли у другого менеджера (brakReassign.ts, 13.11).
+  await import('./brakReassign').then(m => m.liftBrakOnReassign()).catch(e => console.warn('[repeat-kanban] автоснятие брака:', e instanceof Error ? e.message : e));
   return { asked: ids.length, got, closed, deleted };
 }
 
