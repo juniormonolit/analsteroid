@@ -178,7 +178,7 @@ export async function closeReplacedTask(input: { taskId: number; authorId: strin
 const REFRESH_BATCH = 25;
 const REFRESH_PAUSE_MS = 3000;
 
-export async function refreshOpenTaskStatuses(): Promise<{ asked: number; got: number; closed: number }> {
+export async function refreshOpenTaskStatuses(): Promise<{ asked: number; got: number; closed: number; deleted: number }> {
   const { analyticsDb, systemDb } = await import('@/lib/db/clients');
   const copy = await analyticsDb().query<{ id: string }>(
     `SELECT task_id::text AS id FROM sa.bitrix_task_current WHERE group_id = $1 AND NOT is_deleted AND coalesce(status, 0) <> 5`,
@@ -191,7 +191,7 @@ export async function refreshOpenTaskStatuses(): Promise<{ asked: number; got: n
   const all = [...new Set([...copy.rows, ...ours.rows].map(x => Number(x.id)).filter(n => n > 0))];
   const known = await knownTaskStatuses(all);
   const ids = all.filter(id => known.get(id)?.status !== 5); // закрытые уже не спрашиваем
-  let got = 0, closed = 0;
+  let got = 0, closed = 0, deleted = 0;
   for (let i = 0; i < ids.length; i += REFRESH_BATCH) {
     if (i) await new Promise(r => setTimeout(r, REFRESH_PAUSE_MS));
     const chunk = ids.slice(i, i + REFRESH_BATCH);
@@ -202,8 +202,16 @@ export async function refreshOpenTaskStatuses(): Promise<{ asked: number; got: n
       if (Number(t.status) === 5) closed++;
       await rememberTaskStatus(Number(t.id), Number(t.status), t.closedDate ?? null, t.deadline ?? null);
     }
+    // Спросили по ID, а Битрикс не вернул — задачу удалили (13.11, задача 172189: копия из Roan удаления не видит,
+    // is_deleted всегда false, — карточка вечно висела в «Ждут приёмки»). Вебхук — админский, «нет доступа» исключено.
+    // Только при нормальном ответе (массив tasks), иначе сбой Битрикса закрыл бы всю пачку.
+    if (Array.isArray(r?.tasks)) {
+      const back = new Set(r!.tasks!.map(t => Number(t.id)));
+      for (const id of chunk) if (!back.has(id)) { deleted++; await rememberTaskStatus(id, 5, new Date().toISOString()); }
+    }
   }
-  return { asked: ids.length, got, closed };
+  if (deleted) console.log(`[repeat-kanban] задачи удалены в Битриксе — считаем закрытыми: ${deleted}`);
+  return { asked: ids.length, got, closed, deleted };
 }
 
 // ── Брак закрывает и задачи (09.11, Леонид: РОП отправил Бурова «Сразу в брак», сделка 244055 уже была в
