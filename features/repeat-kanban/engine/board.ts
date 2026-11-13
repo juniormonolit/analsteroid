@@ -917,6 +917,8 @@ export async function buildRepeatBoard(opts: {
         column: rule.column, keepN: keep.length, keepLtv: keep.reduce((s, c) => s + c.sumDelivered, 0),
         brakN: cand.length, brakLtv: cand.reduce((s, c) => s + c.sumDelivered, 0), brakPotential: cand.reduce((s, c) => s + (c.potential ?? 0), 0),
         candidates: [], hidden: 0,
+        brakDealsOpen: cand.filter(c => toCand(c).dealOpen).length,
+        brakTasksOpen: cand.filter(c => c.task && c.task.state !== 'done' && c.task.state !== 'deferred').length,
       };
       continue;
     }

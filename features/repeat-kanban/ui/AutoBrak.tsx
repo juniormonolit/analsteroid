@@ -15,6 +15,11 @@ import type { BrakBatch, BrakRule } from '../engine/autoBrak';
 import type { TagDef } from '../engine/tagColors';
 import { FilterFields } from './CustomColumns';
 
+const plural = (n: number, one: string, few: string, many: string) => {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+};
+
 const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 const money = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(1).replace('.', ',')} млрд ₽` : n >= 1e6 ? `${(n / 1e6).toFixed(1).replace('.', ',')} млн ₽` : n >= 1000 ? `${Math.round(n / 1000)} тыс. ₽` : `${rub.format(n)} ₽`);
 const fmtDT = (iso: string) => new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
@@ -170,22 +175,37 @@ export function AutoBrakModal({ column, title, scopeQs, tagDefs, showAutoBrak, o
               <li>идёт в фоне, по одному (Битрикс — вежливо); прогресс — в журнале ниже;</li>
               <li>откат партии вернёт заказчиков в канбан (снимет брак), но сделки и задачи в Битриксе останутся закрытыми.</li>
             </ul>
-            {step === 1 ? (
-              <div className="flex flex-wrap justify-end gap-2">
-                <button type="button" onClick={() => setStep(0)} className={IDLE}>Отмена</button>
-                <button type="button" onClick={() => setStep(2)} className={`${BTN} border-[#990000] text-[#990000]`}>Да, дальше</button>
-              </div>
-            ) : (
-              <>
-                <label className="flex min-h-11 items-center gap-2"><input type="checkbox" checked={sure} onChange={e => setSure(e.target.checked)} className="h-4 w-4" />Понимаю: {rub.format(preview.brakN)} заказчиков уйдут в брак, сделки и задачи закроются</label>
-                <div className="flex flex-wrap justify-end gap-2">
-                  <button type="button" onClick={() => setStep(0)} className={IDLE}>Отмена</button>
-                  <button type="button" disabled={!sure || busy} onClick={() => act(async () => { await post({ action: 'save', ...body }); await post({ action: 'apply', ...body }); setStep(0); })}
-                    className={`${BTN} border-[#990000] bg-[#990000] text-white disabled:opacity-50`}><Ban size={14} /> Забраковать {rub.format(preview.brakN)}</button>
-                </div>
-              </>
-            )}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => setStep(0)} className={IDLE}>Отмена</button>
+              <button type="button" onClick={() => { setSure(false); setStep(2); }} className={`${BTN} border-[#990000] text-[#990000]`}>Да, дальше</button>
+            </div>
           </div>
+        )}
+
+        {/* Отдельное окно «Я подтверждаю» (владелец 13.11: «отдельное окошко подтверждения, чтобы человеку было написано
+            „Я подтверждаю, что отправится в брак столько-то…“»). Сервер сверяет число с подтверждённым (expectN). */}
+        {step === 2 && preview && (
+          <Modal open onOpenChange={o => { if (!o && !busy) setStep(0); }} title="Подтвердите автобрак" desktopWidth="sm:max-w-md">
+            <div className="flex flex-col gap-3 text-sm">
+              <div className="rounded-lg border-2 border-[#990000] bg-[color-mix(in_srgb,#f4cccc_35%,transparent)] p-3 text-[13.5px] leading-relaxed">
+                Колонка «{title}», причина «{reasonLabel}».<br />
+                В брак уйдут <b className="text-[#990000]">{rub.format(preview.brakN)}</b> {plural(preview.brakN, 'заказчик', 'заказчика', 'заказчиков')} с LTV <b>{money(preview.brakLtv)}</b>.<br />
+                В Битриксе закроются в отказ <b className="text-[#990000]">{rub.format(preview.brakDealsOpen ?? 0)}</b> {plural(preview.brakDealsOpen ?? 0, 'открытая сделка', 'открытые сделки', 'открытых сделок')}
+                {preview.brakTasksOpen ? <> и <b className="text-[#990000]">{rub.format(preview.brakTasksOpen)}</b> {plural(preview.brakTasksOpen, 'открытая задача', 'открытые задачи', 'открытых задач')}</> : null}.<br />
+                Откат вернёт заказчиков в канбан, но сделки и задачи в Битриксе <b>останутся закрытыми</b>.
+              </div>
+              <label className="flex min-h-11 cursor-pointer items-start gap-2 text-[13.5px]">
+                <input type="checkbox" checked={sure} onChange={e => setSure(e.target.checked)} className="mt-1 h-4 w-4" />
+                <span>Я подтверждаю, что в брак отправятся {rub.format(preview.brakN)} {plural(preview.brakN, 'заказчик', 'заказчика', 'заказчиков')}, в Битриксе закроются {rub.format(preview.brakDealsOpen ?? 0)} {plural(preview.brakDealsOpen ?? 0, 'сделка', 'сделки', 'сделок')}{preview.brakTasksOpen ? ` и ${rub.format(preview.brakTasksOpen)} ${plural(preview.brakTasksOpen, 'задача', 'задачи', 'задач')}` : ''}, и это нельзя отменить в Битриксе.</span>
+              </label>
+              {err && <p className="text-[var(--color-negative)]">{err}</p>}
+              <div className="flex flex-wrap justify-end gap-2">
+                <button type="button" disabled={busy} onClick={() => setStep(0)} className={IDLE}>Отмена</button>
+                <button type="button" disabled={!sure || busy} onClick={() => act(async () => { await post({ action: 'save', ...body }); await post({ action: 'apply', ...body, expectN: preview.brakN }); setStep(0); })}
+                  className={`${BTN} border-[#990000] bg-[#990000] text-white disabled:opacity-50`}><Ban size={14} /> {busy ? 'Запускаю…' : `Забраковать ${rub.format(preview.brakN)}`}</button>
+              </div>
+            </div>
+          </Modal>
         )}
 
         {/* Журнал автобрака. */}

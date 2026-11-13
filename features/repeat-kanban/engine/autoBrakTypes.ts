@@ -16,4 +16,7 @@ export interface BrakPreview {
   candidates: BrakCandidate[];
   /** Скрыто с доски (правило с автоприменением, режим «Показывать автобрак» выключен). */
   hidden: number;
+  /** У скольких уходящих открыта повторная сделка (закроется в Битриксе) и открыта задача — для окна «Я подтверждаю» (13.11). */
+  brakDealsOpen?: number;
+  brakTasksOpen?: number;
 }

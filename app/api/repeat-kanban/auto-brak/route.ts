@@ -59,6 +59,13 @@ export async function POST(req: NextRequest) {
       const saved = (await fetchRules(g.session.id)).find(r => r.column === rule.column);
       const cands = await collectCandidates(g.session, rule);
       if (!cands.length) return NextResponse.json({ ok: true, batchId: null, total: 0 });
+      // Защита от дурака (13.11): человек подтвердил конкретное число («Я подтверждаю, что в брак уйдут N»). Список успел
+      // заметно разойтись (кто-то купил/поставили задачи/сменили фильтр в другой вкладке) — не браковать, пусть пересмотрит.
+      const expectN = Number(body.expectN);
+      if (!Number.isInteger(expectN) || expectN <= 0) return NextResponse.json({ error: 'Нет подтверждённого числа — откройте предпросмотр и подтвердите заново' }, { status: 400 });
+      if (cands.length > expectN + Math.max(3, Math.ceil(expectN * 0.05))) {
+        return NextResponse.json({ error: `Подтверждали ${expectN}, а сейчас под фильтр попадает ${cands.length} — проверьте предпросмотр и подтвердите заново` }, { status: 409 });
+      }
       const batchId = await startBatch(g.session, rule, saved?.id ?? null, false, cands);
       return NextResponse.json({ ok: true, batchId, total: cands.length });
     }
