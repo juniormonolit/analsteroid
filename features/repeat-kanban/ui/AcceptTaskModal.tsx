@@ -5,13 +5,14 @@
 // Сделка задачи уже закрыта (отказ или отгружена) — «На доработку» заменяет «Откатить и создать задачу»
 // (владелец 23.10: вернули задачу — сделка осталась в отказе; вернули — работа пошла в отгруженной сделке).
 import { useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, ExternalLink, History, Moon, RotateCcw, XCircle } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { BRAK_REASONS, LOST_STAGES, WON_STAGES, guessPostpone, postponePresets, taskUrl } from '../engine/config';
 import { PostponePicker } from './PostponePicker';
 import type { KanbanCard } from '../engine/board';
-import type { TaskNote } from '../engine/taskNotes';
+import type { TaskChatMessage, TaskNote } from '../engine/taskNotes';
 import { TaskCheckPanel, type TaskCheckState } from './TaskCheck';
 import { AttachmentsRow, useAttachments } from './Attachments';
 import { ParticipantsPicker, initialParticipants, participantsPayload } from './ParticipantsPicker';
@@ -38,6 +39,44 @@ function modesFor(state: DealState, dealId: number): { key: Mode; title: string;
     hint: 'Не брак (не дозвонились, «не сейчас»): задача завершится, заказчик вернётся в пул — как «Недозвон» на разборе' };
   return [{ ...close, title: 'Принять задачу и в брак' }, pool, postpone,
     { ...rollback, title: 'Вернуть менеджеру', hint: `Отработано плохо: сделка #${dealId} вернётся на первую стадию, менеджеру — новая задача, эта закроется` }];
+}
+
+const fmtWhen = (iso: string) => new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
+const short = (n: string | null) => { const p = (n ?? '').trim().split(/\s+/); return p.length > 1 ? `${p[0]} ${p[1][0]}.` : p[0] || '—'; };
+
+/** Переписка задачи целиком (собрание 12.11; владелец 13.11: «запрашивать при открытии, а не при загрузке канбана»).
+ *  Пока грузится или Битрикс не ответил — последний комментарий исполнителя с доски. */
+function TaskChat({ taskId, note }: { taskId: number; note: TaskNote | null }) {
+  const { data, isLoading, isError } = useQuery<{ messages: TaskChatMessage[] }>({
+    queryKey: ['repeat-task-chat', taskId],
+    queryFn: async () => { const r = await fetch(`/api/repeat-kanban/task-notes?chat=${taskId}`); if (!r.ok) throw new Error(String(r.status)); return r.json(); },
+    staleTime: 60_000, retry: 1,
+  });
+  const msgs = data?.messages ?? [];
+  if (!msgs.length) {
+    if (isLoading) return <div className="rounded-md bg-[var(--color-bg-surface)] px-2 py-1.5 text-xs text-[var(--color-text-muted)]">Загружаю переписку задачи…</div>;
+    if (!note) return isError ? <div className="text-xs text-[var(--color-text-muted)]">Переписку задачи загрузить не удалось — откройте задачу в Битриксе.</div>
+      : <div className="text-xs text-[var(--color-text-muted)]">В чате задачи сообщений нет.</div>;
+    return (
+      <div className="rounded-md border-l-2 border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-2 py-1.5 text-[13px]">
+        <div className="text-xs text-[var(--color-text-muted)]">{note.isResult ? 'Результат' : 'Комментарий'} · {note.author}</div>
+        <div className="max-h-40 overflow-y-auto whitespace-pre-line text-[var(--color-text)]">{note.text}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <div className="text-xs text-[var(--color-text-muted)]">Переписка в задаче · {msgs.length}</div>
+      <div className="flex max-h-64 min-w-0 flex-col gap-1.5 overflow-y-auto rounded-md bg-[var(--color-bg-surface)] p-2">
+        {msgs.map(m => (
+          <div key={m.id} className={`min-w-0 rounded-md px-2 py-1.5 text-[13px] ${m.mine ? 'border-l-2 border-[var(--color-accent)] bg-[var(--color-bg)]' : 'bg-[var(--color-bg)] opacity-90'}`}>
+            <div className="text-[11px] text-[var(--color-text-muted)]">{m.mine ? 'Исполнитель · ' : ''}{short(m.author)} · {fmtWhen(m.at)}</div>
+            <div className="whitespace-pre-line break-words text-[var(--color-text)]">{m.text}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 const field = 'w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base text-[var(--color-text)] sm:text-sm';
@@ -111,12 +150,7 @@ export function AcceptTaskModal({ card, name, note, checkState, renderReassign, 
         <a href={taskUrl(task.id)} target="_blank" rel="noreferrer" className="inline-flex min-w-0 items-center gap-1 text-[var(--color-accent)] hover:underline">
           <ExternalLink size={13} className="shrink-0" /><span className="truncate">Задача #{task.id} · {task.responsibleName ?? 'менеджер'} · сделка #{task.dealId}</span>
         </a>
-        {note && (
-          <div className="rounded-md border-l-2 border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-2 py-1.5 text-[13px]">
-            <div className="text-xs text-[var(--color-text-muted)]">{note.isResult ? 'Результат' : 'Комментарий'} · {note.author}</div>
-            <div className="max-h-40 overflow-y-auto whitespace-pre-line text-[var(--color-text)]">{note.text}</div>
-          </div>
-        )}
+        <TaskChat taskId={task.id} note={note} />
         {checkState && <TaskCheckPanel taskId={task.id} state={checkState} />}
         <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="Решение по задаче">
           {MODES.map(m => (

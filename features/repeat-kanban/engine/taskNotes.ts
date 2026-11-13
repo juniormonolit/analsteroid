@@ -27,9 +27,19 @@ export interface TaskNote {
   author: string | null;
   authorId: string | null;
   at: string;
-  /** Формальный «Результат» задачи (а не просто сообщение в чате). */
+  /** «Результат»: формальный результат задачи или (с 13.11) последнее сообщение ИСПОЛНИТЕЛЯ в чате задачи. */
   isResult: boolean;
+  /** Версия правила выбора; старее NOTE_V — перечитать. */
+  v?: number;
 }
+
+/** 2 (13.11, собрание 12.11 «почему-то пропал „результат“»): с 09.11 канбан сам пишет в чат задачи от имени РОПа
+ *  (первое сообщение, приёмка, возврат) — «последнее сообщение человека» всё чаще было РОПовским, ответ менеджера
+ *  терялся. Теперь на карточке — последнее сообщение исполнителя; переписка целиком — в окне приёмки (fetchTaskChat). */
+const NOTE_V = 2;
+
+/** Одно сообщение чата задачи (окно приёмки). */
+export interface TaskChatMessage { id: number; author: string | null; authorId: string; at: string; text: string; mine: boolean }
 
 const OPEN_RECHECK_MS = 30 * 60_000;
 const PER_CALL = 50;
@@ -93,7 +103,7 @@ async function resolveChats(taskIds: number[]): Promise<Map<number, number | nul
 
 interface ImMessage { id: number; author_id: number; date: string; text: string }
 interface ImUser { id: number; name: string }
-interface SaTask { task_id: string; changed_at: Date | null; status: number | null; results: { text?: string; createdAt?: string; createdBy?: number }[] | null }
+interface SaTask { task_id: string; changed_at: Date | null; status: number | null; responsible_id: string | null; results: { text?: string; createdAt?: string; createdBy?: number }[] | null }
 interface Stored { task_id: string; chat_id: string | null; chat_checked: boolean; note: TaskNote | null; task_changed_at: Date | null; fetched_at: Date | null }
 
 /** Прочитать из Битрикса последние сообщения чата для задач и записать в repeat_task_notes. */
@@ -110,13 +120,14 @@ async function refresh(tasks: SaTask[], stored: Map<number, Stored>): Promise<vo
     const res = await batch(Object.fromEntries(part.map(id => [`m${id}`, `im.dialog.messages.get?DIALOG_ID=chat${chats.get(id)}&LIMIT=20`])));
     for (const id of part) {
       const v = res[`m${id}`] as { messages?: ImMessage[]; users?: ImUser[] } | undefined;
-      const human = (v?.messages ?? []).filter(m => m.author_id > 0 && stripBb(m.text ?? '').length > 0)
+      const resp = tasks.find(t => Number(t.task_id) === id)?.responsible_id;
+      const human = (v?.messages ?? []).filter(m => m.author_id > 0 && stripBb(m.text ?? '').length > 0 && (!resp || String(m.author_id) === String(resp)))
         .sort((a, b) => b.date.localeCompare(a.date))[0];
       const user = human ? (v?.users ?? []).find(u => Number(u.id) === human.author_id) : undefined;
       fromChat.set(id, human ? {
         taskId: id, text: stripBb(human.text).slice(0, 2000), author: user?.name ?? null, authorId: String(human.author_id),
-        at: new Date(human.date).toISOString(), isResult: false,
-      } : null);
+        at: new Date(human.date).toISOString(), isResult: true, v: NOTE_V,
+      } : { v: NOTE_V } as unknown as TaskNote);
     }
   }
   for (const t of tasks) {
@@ -139,7 +150,7 @@ export async function fetchTaskNotes(taskIds: number[]): Promise<Map<number, Tas
   const db = systemDb();
   // Принадлежность проекту, изменение и формальный «Результат» — из копии Битрикса (без запросов в Битрикс).
   const sa = (await analyticsDb().query<SaTask>(
-    `SELECT task_id::text, changed_at, status, results FROM sa.bitrix_task_current
+    `SELECT task_id::text, changed_at, status, responsible_id::text, results FROM sa.bitrix_task_current
       WHERE task_id = ANY($1::bigint[]) AND group_id = $2 AND NOT is_deleted`,
     [ids, REPEAT_PROJECT_GROUP_ID],
   )).rows;
@@ -154,6 +165,7 @@ export async function fetchTaskNotes(taskIds: number[]): Promise<Map<number, Tas
     const id = Number(t.task_id);
     const s = stored.get(id);
     if (!s?.fetched_at) return true;
+    if ((s.note?.v ?? 1) < NOTE_V) return true;
     if (t.changed_at && (!s.task_changed_at || new Date(t.changed_at).getTime() > new Date(s.task_changed_at).getTime())) return true;
     const closed = t.status !== null && CLOSED_STATUSES.has(Number(t.status));
     return !closed && workHours && now - new Date(s.fetched_at).getTime() > OPEN_RECHECK_MS;
@@ -197,9 +209,35 @@ export async function fetchTaskNotes(taskIds: number[]): Promise<Map<number, Tas
   ).catch(() => ({ rows: [] as { id: string; name: string }[] }))).rows.map(x => [x.id, x.name])) : new Map<string, string>();
   for (const t of sa) {
     const id = Number(t.task_id);
-    const a = results.get(id), b = stored.get(id)?.note ?? undefined;
+    const a = results.get(id), raw = stored.get(id)?.note ?? undefined;
+    const b = raw && raw.text ? raw : undefined; // { v } без текста — исполнитель ничего не писал
     const note = a && (!b || a.at >= b.at) ? { ...a, author: names.get(a.authorId ?? '') ?? null } : b ?? a ?? null;
     if (note) out.set(id, { ...note, text: note.text.length > 600 ? `${note.text.slice(0, 600)}…` : note.text });
   }
   return out;
+}
+
+/** Вся переписка чата задачи — для окна приёмки (собрание 12.11: «выводить сообщения из задачи прямо на экран
+ *  приёмки»; владелец 13.11: «там обычно не больше 5–10 сообщений, давай всю; запрашивать при открытии»).
+ *  Один запрос в Битрикс на открытие окна; только задачи проекта «Повторные продажи». Хронологически. */
+export async function fetchTaskChat(taskId: number): Promise<{ messages: TaskChatMessage[]; responsibleId: string | null } | null> {
+  const sa = (await analyticsDb().query<{ responsible_id: string | null }>(
+    `SELECT responsible_id::text FROM sa.bitrix_task_current WHERE task_id = $1 AND group_id = $2`, [taskId, REPEAT_PROJECT_GROUP_ID],
+  )).rows[0];
+  if (!sa) return null;
+  const db = systemDb();
+  const st = (await db.query<{ chat_id: string | null }>('SELECT chat_id::text FROM repeat_task_notes WHERE task_id = $1', [taskId])).rows[0];
+  const chatId = st?.chat_id ? Number(st.chat_id) : (await resolveChats([taskId])).get(taskId) ?? null;
+  if (!chatId) return { messages: [], responsibleId: sa.responsible_id };
+  const res = await batch({ m: `im.dialog.messages.get?DIALOG_ID=chat${chatId}&LIMIT=50` });
+  const v = res.m as { messages?: ImMessage[]; users?: ImUser[] } | undefined;
+  const users = new Map((v?.users ?? []).map(u => [Number(u.id), u.name]));
+  const messages = (v?.messages ?? [])
+    .filter(m => m.author_id > 0 && stripBb(m.text ?? '').length > 0)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(m => ({
+      id: m.id, author: users.get(m.author_id) ?? null, authorId: String(m.author_id), at: new Date(m.date).toISOString(),
+      text: stripBb(m.text).slice(0, 3000), mine: String(m.author_id) === String(sa.responsible_id),
+    }));
+  return { messages, responsibleId: sa.responsible_id };
 }
