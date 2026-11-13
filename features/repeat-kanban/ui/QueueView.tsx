@@ -11,6 +11,8 @@ import { taskUrl } from '../engine/config';
 interface QItem {
   id: number; clientKey: string; clientName: string | null; managerId: string; managerName: string;
   queuedByName: string | null; deadlineRule: string; deadlineTime: string; boost: number; status: string;
+  /** Выдать не раньше (YYYY-MM-DD), миграция 263. */
+  notBefore?: string | null;
   score: number | null; position: number | null; lastError: string | null; comment: string | null;
   issuedTaskId: number | null; issuedDealId: number | null; issuedAt: string | null; removedLabel: string | null; removedAt: string | null; createdAt: string;
 }
@@ -135,7 +137,7 @@ function Row({ i, actions, note }: { i: QItem; actions?: React.ReactNode; note?:
       <div className="min-w-0 flex-1">
         <div className="truncate font-medium text-[var(--color-text)]">{name(i)}{i.boost ? <span className="ml-1 text-xs text-[var(--color-accent)]">{i.boost > 0 ? `▲${i.boost}` : `▼${-i.boost}`}</span> : null}</div>
         <div className="truncate text-xs text-[var(--color-text-muted)]">
-          {i.managerName} · поставил {i.queuedByName ?? '—'} {fmtDT(i.createdAt)} · срок {RULE[i.deadlineRule] ?? i.deadlineRule}, {i.deadlineTime}
+          {i.managerName} · поставил {i.queuedByName ?? '—'} {fmtDT(i.createdAt)} · срок {RULE[i.deadlineRule] ?? i.deadlineRule}, {i.deadlineTime}{i.notBefore ? <span className="font-semibold text-[var(--color-warning)]"> · не раньше {i.notBefore.split('-').reverse().join('.')}</span> : null}
           {i.score !== null ? ` · срочность ${i.score.toFixed(1)}` : ''}
         </div>
         {i.status === 'issued' && i.issuedTaskId && (

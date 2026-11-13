@@ -296,12 +296,17 @@ export async function POST(req: NextRequest) {
         }
         const rule = (['window', 'today', '3', '7'] as const).includes(body.deadlineRule as DeadlineRule) ? body.deadlineRule as DeadlineRule : 'window';
         const time = typeof body.deadlineTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.deadlineTime) ? body.deadlineTime : '19:00';
+        // «Выдать не раньше» (миграция 263): только будущая дата, не дальше года.
+        const todayMsk = new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
+        const yearMsk = new Date(Date.now() + 3 * 3600_000 + 366 * 86_400_000).toISOString().slice(0, 10);
+        const notBefore = typeof body.notBefore === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.notBefore) && body.notBefore > todayMsk && body.notBefore <= yearMsk ? body.notBefore : null;
         const r = await enqueue({
           items, queuedBy: session.bitrixUserId, queuedByName: session.displayName,
           templateId: typeof body.templateId === 'number' ? body.templateId : null,
           comment: typeof body.comment === 'string' && body.comment.trim() ? body.comment.trim().slice(0, 3000) : null,
           deadlineRule: rule, deadlineTime: time, newResponsibleId,
           participants: normalizeParticipants(body.participants),
+          notBefore,
         });
         return NextResponse.json({ ...r, skipped });
       }

@@ -1613,6 +1613,27 @@ function ModeToggle({ mode, onChange }: { mode: TaskMode; onChange: (m: TaskMode
     </div>
   );
 }
+const mskYmdPlus = (days: number) => new Date(Date.now() + 3 * 3600_000 + days * 86_400_000).toISOString().slice(0, 10);
+
+/** «Выдать не раньше» (собрание 12.11, п.9): до даты сделка и задача не создаются — у менеджера ничего не висит;
+ *  в этот день позиция выдаётся первой, а если у менеджера завал — ждёт в очереди (владелец 13.11). */
+function NotBeforeField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const presets: [string, string][] = [['', 'Как освободится место'], [mskYmdPlus(3), 'Через 3 дня'], [mskYmdPlus(7), 'Через неделю']];
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[var(--color-text-secondary)]">Выдать не раньше</span>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        {presets.map(([v, l]) => <button key={l} type="button" onClick={() => onChange(v)} className={value === v ? BTN_ACTIVE : BTN_IDLE}>{l}</button>)}
+      </div>
+      <label className="flex items-center gap-2 text-[var(--color-text-secondary)]">
+        Дата
+        <input type="date" value={value} min={mskYmdPlus(1)} max={mskYmdPlus(365)} onChange={e => onChange(e.target.value)} aria-label="Выдать не раньше даты" className={`${fieldCls} min-h-11 w-44`} />
+      </label>
+      {value && <p className="text-xs text-[var(--color-text-muted)]">До {fmtYmd(value)} сделка и задача не создаются — у менеджера ничего не появится. В этот день задача выдастся первой; если у менеджера завал — подождёт в очереди.</p>}
+    </div>
+  );
+}
+
 function QueueRuleFields({ rule, onRule, time, onTime }: { rule: 'today' | 'window' | '3' | '7'; onRule: (r: 'today' | 'window' | '3' | '7') => void; time: string; onTime: (t: string) => void }) {
   return (
     <div className="flex flex-col gap-1.5">
@@ -1644,6 +1665,7 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
   const qTid = qTemplate || String(templates.find(t => t.isDefault)?.id ?? templates[0]?.id ?? '');
   const [qComment, setQComment] = useState('');
   const [qRule, setQRule] = useState<'today' | 'window' | '3' | '7'>('window');
+  const [notBefore, setNotBefore] = useState('');
   const [queued, setQueued] = useState<{ added: number; updated: number } | null>(null);
   // Участники (владелец 23.10): по умолчанию соисполнитель — РОП менеджера.
   const [parts, setParts] = useState(initialParticipants);
@@ -1652,7 +1674,7 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
     setBusy(true); setErr(null);
     try {
       const j = await post({ action: 'queue_add', items: [{ clientKey: card.clientKey, managerId: card.managerId }], templateId: qTid ? Number(qTid) : undefined,
-        comment: qComment, deadlineRule: qRule, deadlineTime, newManagerId: newManager || undefined, participants: participantsPayload(parts) });
+        comment: qComment, deadlineRule: qRule, deadlineTime, newManagerId: newManager || undefined, participants: participantsPayload(parts), notBefore: notBefore || undefined });
       if (!j.added && !j.updated) throw new Error('Не удалось поставить в очередь');
       setQueued(j); onSaved();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
@@ -1683,7 +1705,7 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
       {queued ? (
         <div className="flex flex-col gap-3 text-sm">
           <p className="text-[var(--color-text)]">
-            {queued.updated ? 'Позиция в очереди обновлена.' : 'Поставлено в очередь.'} Задача выдастся {newManager ? shortName(reassign?.managers.find(m => m.id === newManager)?.name ?? '') : shortName(card.managerName)},
+            {queued.updated ? 'Позиция в очереди обновлена.' : 'Поставлено в очередь.'}{notBefore ? ` Не раньше ${fmtYmd(notBefore)}:` : ''} Задача выдастся {newManager ? shortName(reassign?.managers.find(m => m.id === newManager)?.name ?? '') : shortName(card.managerName)},
             когда у него активных задач станет меньше {limit}, — не больше {dailyLimit} в день, по будням с 9 до 18. Порядок — по срочности. Следить — вкладка «Очередь».
           </p>
           <button type="button" onClick={onClose} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white">Готово</button>
@@ -1727,6 +1749,15 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
               {/* Файлы и картинки — к первому сообщению в чате задачи (владелец 23.10). */}
               <AttachmentsRow a={att} />
               <DeadlinePicker card={card} value={deadline} onChange={setDeadline} time={deadlineTime} onTime={setDeadlineTime} />
+              {deadline && deadline >= mskYmdPlus(3) && (
+                <div className="rounded-lg bg-[var(--color-bg-surface)] p-2 text-[12.5px] text-[var(--color-text-secondary)]">
+                  Звонить только {fmtYmd(deadline)}? «Сразу» создаст сделку сегодня — она весь срок провисит у менеджера в воронке.{' '}
+                  <button type="button" className="font-semibold text-[var(--color-accent)] hover:underline"
+                    onClick={() => { setMode('queue'); setNotBefore(deadline); setQRule('today'); }}>
+                    Выдать {fmtYmd(deadline)} через очередь
+                  </button>
+                </div>
+              )}
             </>
           ) : (
             <>
@@ -1741,6 +1772,7 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
                 Добавка от РОПа (необязательно)
                 <textarea value={qComment} onChange={e => setQComment(e.target.value)} rows={4} placeholder="Добавится в конце сообщения" className={fieldCls} />
               </label>
+              <NotBeforeField value={notBefore} onChange={v => { setNotBefore(v); if (v) setQRule('today'); }} />
               <QueueRuleFields rule={qRule} onRule={setQRule} time={deadlineTime} onTime={setDeadlineTime} />
             </>
           )}

@@ -32,6 +32,8 @@ export interface QueueItem {
   removedReason: string | null; removedAt: string | null; createdAt: string;
   /** Соисполнители/наблюдатели (миграция 254) — применяются при выдаче. */
   participants: TaskParticipants | null;
+  /** Выдать не раньше этой даты, YYYY-MM-DD МСК (миграция 263); null — как освободится место. */
+  notBefore: string | null;
 }
 
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
@@ -50,6 +52,7 @@ function rowToItem(x: Record<string, unknown>): QueueItem {
     issuedAt: iso(x.issued_at), removedReason: (x.removed_reason as string | null) ?? null, removedAt: iso(x.removed_at),
     createdAt: iso(x.created_at)!,
     participants: normalizeParticipants(x.participants),
+    notBefore: x.not_before ? (x.not_before instanceof Date ? new Date(x.not_before.getTime() - x.not_before.getTimezoneOffset() * 60_000).toISOString().slice(0, 10) : String(x.not_before).slice(0, 10)) : null,
   };
 }
 
@@ -72,6 +75,8 @@ export interface EnqueueInput {
   templateId: number | null; comment: string | null;
   deadlineRule: DeadlineRule; deadlineTime: string; newResponsibleId: string | null; boost?: number;
   participants?: TaskParticipants | null;
+  /** Выдать не раньше (YYYY-MM-DD МСК). */
+  notBefore?: string | null;
 }
 
 /** Поставить в очередь. Живая позиция заказчика уже есть — обновляется (менеджер, шаблон, срок,
@@ -83,23 +88,23 @@ export async function enqueue(input: EnqueueInput): Promise<{ added: number; upd
     const target = input.newResponsibleId ?? it.managerId;
     const r = await db.query(
       `UPDATE repeat_task_queue SET manager_id = $2, new_responsible_id = $3, template_id = $4, comment = $5,
-              deadline_rule = $6, deadline_time = $7, boost = coalesce($8, boost), participants = $9, updated_at = now()
+              deadline_rule = $6, deadline_time = $7, boost = coalesce($8, boost), participants = $9, not_before = $10::date, updated_at = now()
         WHERE client_key = $1 AND status = 'queued' RETURNING id`,
       [it.clientKey, target, input.newResponsibleId, input.templateId, input.comment, input.deadlineRule, input.deadlineTime, input.boost ?? null,
-       input.participants ? JSON.stringify(input.participants) : null],
+       input.participants ? JSON.stringify(input.participants) : null, input.notBefore ?? null],
     );
     if (r.rowCount) { updated++; continue; }
     const ins = await db.query(
       `INSERT INTO repeat_task_queue (client_key, manager_id, new_responsible_id, queued_by, queued_by_name, template_id, comment,
-                                      deadline_rule, deadline_time, boost, participants)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT DO NOTHING RETURNING id`,
+                                      deadline_rule, deadline_time, boost, participants, not_before)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::date) ON CONFLICT DO NOTHING RETURNING id`,
       [it.clientKey, target, input.newResponsibleId, input.queuedBy, input.queuedByName, input.templateId, input.comment,
-       input.deadlineRule, input.deadlineTime, input.boost ?? 0, input.participants ? JSON.stringify(input.participants) : null],
+       input.deadlineRule, input.deadlineTime, input.boost ?? 0, input.participants ? JSON.stringify(input.participants) : null, input.notBefore ?? null],
     );
     if (ins.rowCount) {
       added++;
       await logQueue('queue_added', { clientKey: it.clientKey, managerId: target, queuedBy: input.queuedBy, queuedByName: input.queuedByName },
-        { payload: { deadlineRule: input.deadlineRule, templateId: input.templateId, comment: input.comment, newResponsibleId: input.newResponsibleId } });
+        { payload: { deadlineRule: input.deadlineRule, templateId: input.templateId, comment: input.comment, newResponsibleId: input.newResponsibleId, notBefore: input.notBefore ?? null } });
     }
   }
   return { added, updated };
@@ -285,9 +290,12 @@ export async function runQueueIssue(opts: { force?: boolean } = {}): Promise<Iss
       alive.push({ item: it, card: c!, score });
       await db.query(`UPDATE repeat_task_queue SET score = $2, score_at = now() WHERE id = $1`, [it.id, score]).catch(() => {});
     }
-    if (slots <= 0 || issued >= RUN_CAP || !alive.length) continue;
-    alive.sort((a, b) => b.score - a.score || a.item.createdAt.localeCompare(b.item.createdAt));
-    const top = alive[0];
+    // Отложенные до даты (миграция 263): раньше даты не выдаём; в день даты — первыми (РОП назначил день сам).
+    const todayMsk = new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
+    const ready = alive.filter(a => !a.item.notBefore || a.item.notBefore <= todayMsk);
+    if (slots <= 0 || issued >= RUN_CAP || !ready.length) continue;
+    ready.sort((a, b) => Number(!!b.item.notBefore) - Number(!!a.item.notBefore) || b.score - a.score || a.item.createdAt.localeCompare(b.item.createdAt));
+    const top = ready[0];
     const r = await issueItem(top.item, top.card);
     if (r.ok) issued++; else if (r.removed) removed++; else failed++;
   }
