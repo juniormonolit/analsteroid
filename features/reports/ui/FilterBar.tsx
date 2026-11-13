@@ -72,6 +72,23 @@ export function countAllDepartmentIds(tree: DeptNode[]): number {
 
 type CheckState = 'none' | 'some' | 'all';
 
+/** Родитель в выборе ⇔ выбраны ВСЕ его потомки (13.11, живой баг канбана повторных: выбрали «Департамент ОС»
+ *  целиком, сняли «Команду Осипова» — id департамента остался в выборе, а сервер (teamRoster, ближайший выбранный
+ *  предок) по нему подтягивал и людей Осипова: снятая галочка ни на что не влияла, во всех отчётах с этим пикером).
+ *  Обход снизу вверх: снята хоть одна ветка — снимаем всех её предков; отмечены все дети — отмечаем и родителя. */
+function normalizeDeptSelection(tree: DeptNode[], selected: Set<string>): Set<string> {
+  const next = new Set(selected);
+  const walk = (node: DeptNode): boolean => {
+    const kids = node.children ?? [];
+    if (!kids.length) return next.has(node.bitrixId);
+    const full = kids.map(walk).every(Boolean);
+    if (full) next.add(node.bitrixId); else next.delete(node.bitrixId);
+    return full;
+  };
+  tree.forEach(walk);
+  return next;
+}
+
 function getCheckState(node: DeptNode, selected: Set<string>): CheckState {
   const ids = allIds(node);
   const count = ids.filter(id => selected.has(id)).length;
@@ -293,7 +310,7 @@ export function DepartmentPicker({ departmentIds, onDepartmentIdsChange, trigger
   });
   const tree: DeptNode[] = orgData?.tree ?? [];
 
-  function applyDepts()  { onDepartmentIdsChange(Array.from(draft)); setShowDepts(false); }
+  function applyDepts()  { onDepartmentIdsChange(Array.from(tree.length ? normalizeDeptSelection(tree, draft) : draft)); setShowDepts(false); }
   function cancelDepts() { setDraft(new Set(departmentIds)); setShowDepts(false); }
 
   function toggleIds(ids: string[], forceOn?: boolean) {
@@ -306,7 +323,7 @@ export function DepartmentPicker({ departmentIds, onDepartmentIdsChange, trigger
         if (allSelected) ids.forEach(id => next.delete(id));
         else ids.forEach(id => next.add(id));
       }
-      return next;
+      return tree.length ? normalizeDeptSelection(tree, next) : next;
     });
   }
 
