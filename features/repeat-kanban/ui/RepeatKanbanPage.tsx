@@ -1327,7 +1327,18 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
         {c.periodShipSum !== undefined && (
           <div className="text-[11.5px] text-[var(--color-text-secondary)]">За период: <b className="font-semibold text-[var(--color-text)]">{c.periodShipSum ? moneyShort(c.periodShipSum) : '—'}</b></div>
         )}
-        {c.lastDeliveredAt ? (
+        {/* «Продано», ждёт отгрузки (колонка и «Свежие продажи» в «Сегодня»): главное — сама продажа, не прошлая отгрузка
+            (собрание 12.11: «показывают отгрузки, а должны показывать продажи»). */}
+        {col === 'st_sold' && c.deal && (
+          <div className="mt-0.5 flex min-w-0 flex-wrap gap-x-1 text-[11.5px] text-[var(--color-text)]">
+            <a href={dealUrl(c.deal.dealId)} target="_blank" rel="noreferrer" className={`${FOCUS} font-semibold hover:text-[var(--color-accent)] hover:underline`} title={`Проданная сделка #${c.deal.dealId} в Битриксе`}>
+              Продажа {fmtDayYear(c.deal.soldAt ?? c.deal.createdAt)}
+            </a>
+            {c.deal.amount ? <span>· {moneyShort(c.deal.amount)}</span> : null}
+            {c.deal.group && <span className="min-w-0 truncate text-[var(--color-text-secondary)]">· {c.deal.group}</span>}
+          </div>
+        )}
+        {col === 'st_sold' && c.deal ? null : c.lastDeliveredAt ? (
           <div className="mt-0.5 flex min-w-0 flex-wrap gap-x-1 text-[11.5px] text-[var(--color-text-secondary)]">
             {c.lastDeliveredDealId ? (
               <a href={dealUrl(c.lastDeliveredDealId)} target="_blank" rel="noreferrer" className={`${FOCUS} hover:text-[var(--color-accent)] hover:underline`} title={`Сделка последней отгрузки #${c.lastDeliveredDealId} в Битриксе`}>
@@ -1341,7 +1352,7 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
             )}
           </div>
         ) : <div className="text-[11.5px] text-[var(--color-text-muted)]">Отгрузок не было</div>}
-        {c.lastDeliveredGroup && <div className="truncate text-[11.5px] text-[var(--color-text-muted)]" title={c.lastDeliveredGroup}>{c.lastDeliveredGroup}</div>}
+        {c.lastDeliveredGroup && !(col === 'st_sold' && c.deal) && <div className="truncate text-[11.5px] text-[var(--color-text-muted)]" title={c.lastDeliveredGroup}>{c.lastDeliveredGroup}</div>}
         {(isPool || col.startsWith('touch')) && c.offer?.length > 0 && <div className="mt-0.5"><OfferLine offer={c.offer} /></div>}
       </div>
 
@@ -1351,7 +1362,7 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
           className={`${FOCUS} inline-flex max-w-full items-center gap-1 text-[11.5px] font-semibold text-[var(--color-negative)] hover:underline`}>
           <span className="truncate">#{c.wrongFunnel.dealId} · {c.wrongFunnel.stageName ?? ''} · {c.wrongFunnel.funnelName ?? 'первичная воронка'}</span><ExternalLink size={10} className="shrink-0" />
         </a>
-      ) : c.deal ? (
+      ) : c.deal && col === 'st_sold' ? null /* продажа уже показана в блоке C */ : c.deal ? (
         <a href={dealUrl(c.deal.dealId)} target="_blank" rel="noreferrer" title="Сделка в Битриксе"
           className={`${FOCUS} inline-flex max-w-full items-center gap-1 text-[11.5px] text-[var(--color-accent)] hover:underline`}>
           <span className="truncate">

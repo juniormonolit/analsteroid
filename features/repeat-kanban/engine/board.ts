@@ -53,6 +53,8 @@ export interface RepeatDealInfo {
   soldAt: string | null;
   deliveredAt: string | null;
   managerId: string | null;
+  /** Головная товарная группа сделки — для «Свежих продаж» (13.11: карточка показывала отгрузку, а не продажу). */
+  group?: string | null;
 }
 
 export interface CallInfo { at: string; sec: number; missed: boolean; inbound: boolean }
@@ -262,7 +264,7 @@ export interface RepeatBoard {
 
 interface RepeatDealRow {
   client_key: string; deal_id: number; funnel_id: number; stage_id: string; stage_name: string | null;
-  amount: string | null; created_at: Date; lost_at: Date | null; sold_at: Date | null; delivered_at: Date | null;
+  amount: string | null; created_at: Date; lost_at: Date | null; sold_at: Date | null; delivered_at: Date | null; head_group_name?: string | null;
   current_manager_id: number | null;
   is_open: boolean;
 }
@@ -323,7 +325,7 @@ async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, Repea
        SELECT DISTINCT ON (client_key) * FROM (
          SELECT r.ref AS client_key,
                 d.deal_id, d.funnel_id, d.stage_id, s.name AS stage_name,
-                d.amount, d.created_at, d.lost_at, d.sold_at, d.delivered_at, d.current_manager_id,
+                d.amount, d.created_at, d.lost_at, d.sold_at, d.delivered_at, d.current_manager_id, d.head_group_name,
                 -- Открытая (не отказ и не отгружена, в т.ч. «Продано») — важнее самой свежей (21.10,
                 -- контакт 238334: открытая 215670 «Бронь» была старше отгруженной 267699).
                 coalesce(s.event_type NOT IN ('lost', 'shipped'), false) AS is_open
@@ -346,6 +348,7 @@ async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, Repea
     amount: r.amount !== null ? Math.round(Number(r.amount)) : null,
     createdAt: iso(r.created_at)!, lostAt: iso(r.lost_at), soldAt: iso(r.sold_at), deliveredAt: iso(r.delivered_at),
     managerId: r.current_manager_id !== null ? String(r.current_manager_id) : null,
+    group: r.head_group_name ?? null,
   } as RepeatDealInfo]));
   const out = new Map<string, RepeatDealInfo>();
   for (const k of keys) {
