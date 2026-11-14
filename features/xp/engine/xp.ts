@@ -5,11 +5,11 @@
 //    хранится отдельно от кошельков (xp_ledger в системной БД).
 //  * Начисление ТОЛЬКО за продажи/отгрузки (за звонки/брони XP нет).
 //  * СЛОТ-МОДЕЛЬ: XP живёт с человеком, не с логином. Граница текущего
-//    человека = sa.employee_registry.manual_start_date, а при её отсутствии —
-//    valid_from текущего имени в sa.employee_name_history, но ТОЛЬКО если у
-//    логина были переименования (одна сеющая строка от 13.07 переименованием
-//    не считается — иначе всем срезало бы ретро). Без переименований граница —
-//    дата первой сделки логина, что для XP эквивалентно отсутствию границы.
+//    человека = более поздняя из (sa.employee_registry.manual_start_date, начало
+//    отрезка текущего ФИО в sa.employee_name_history; заглушки managerN/User N…
+//    = вакансия) — задача 11110. Сеющая строка от 13.07 границей не считается
+//    (иначе всем срезало бы ретро). Без границы — дата первой сделки логина,
+//    что для XP эквивалентно отсутствию границы.
 //    Сделки раньше границы в XP не попадают (XP прежнего человека «заморожен»).
 //  * Формула («фикс — бОльшая часть», правка Серёги): продажа = sale_fix +
 //    min(сумма/sale_per_rub, sale_sum_cap); отгрузка = ship_fix +
@@ -30,6 +30,8 @@
 
 import type { Pool, PoolClient } from 'pg';
 import { analyticsDb } from '@/lib/db/clients';
+import { loadPersonSegments } from '@/features/employees/engine/segments';
+import { xpPersonBoundary } from '@/features/employees/engine/personSegment';
 import { fetchCrossSellMatrix, recommendFor } from '@/features/customers/engine/crossSell';
 import {
   loadActiveBoosts, loadConsumptions, applyBoosts,
@@ -166,32 +168,24 @@ export interface XpTickResult {
 // ── границы людей (слот-модель) ──────────────────────────────────────────────
 
 async function fetchPersonStarts(): Promise<Map<number, string>> {
-  // Задача 2820: раньше водило `sa.employees` (мёртвая заготовка 13.06, не
-  // обновляется, 52% активных сотрудников отсутствовало — значит для них
-  // граница «человека на слоте» вообще не считалась). Теперь водит
-  // sa.org_resolved_hierarchy (актуальная оргструктура, ночной синк).
-  const res = await analyticsDb().query<{
-    bitrix_id: number; manual_start: string | null; hist_cnt: string; open_from: string | null;
-  }>(
-    `SELECT org.manager_bitrix_user_id::int AS bitrix_id,
-            to_char(r.manual_start_date, 'YYYY-MM-DD') AS manual_start,
-            coalesce(nh.cnt, 0)::text AS hist_cnt,
-            to_char(nh.open_from, 'YYYY-MM-DD') AS open_from
-       FROM sa.org_resolved_hierarchy org
-       LEFT JOIN sa.employee_registry r ON r.bitrix_id = org.manager_bitrix_user_id::int
-       LEFT JOIN LATERAL (
-         SELECT count(*) AS cnt,
-                max(valid_from) FILTER (WHERE valid_to IS NULL) AS open_from
-           FROM sa.employee_name_history nh2
-          WHERE nh2.bitrix_user_id = org.manager_bitrix_user_id
-       ) nh ON true`,
-  );
+  // Задача 2820: водит sa.org_resolved_hierarchy (актуальная оргструктура).
+  // Задача 11110 (план п.3): граница = более поздняя из (ручная дата, начало
+  // отрезка текущего ФИО в sa.employee_name_history). Раньше ручная дата была
+  // приоритетнее — и человек, севший на чужую учётку, наследовал XP
+  // предшественника по старой дате. Отрезок, засеянный 13.07, границей не
+  // считается (иначе всем срезало бы ретро) — см. xpPersonBoundary.
+  const [res, segs] = await Promise.all([
+    analyticsDb().query<{ bitrix_id: number; manual_start: string | null }>(
+      `SELECT org.manager_bitrix_user_id::int AS bitrix_id,
+              to_char(r.manual_start_date, 'YYYY-MM-DD') AS manual_start
+         FROM sa.org_resolved_hierarchy org
+         LEFT JOIN sa.employee_registry r ON r.bitrix_id = org.manager_bitrix_user_id::int`,
+    ),
+    loadPersonSegments(),
+  ]);
   const out = new Map<number, string>();
   for (const r of res.rows) {
-    // manual_start_date — главный источник (Серёга правит руками на «Сотрудниках»);
-    // фолбэк — valid_from текущего имени, только если были реальные переименования
-    // (>1 строки истории). Иначе границы нет (дата первой сделки ничего не режет).
-    const start = r.manual_start ?? (Number(r.hist_cnt) > 1 ? r.open_from : null);
+    const start = xpPersonBoundary(r.manual_start, segs.byId.get(String(r.bitrix_id)) ?? null);
     if (start) out.set(r.bitrix_id, start);
   }
   return out;

@@ -9,6 +9,7 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { getMonthWorkingDays } from '@/lib/plans/dailyPlan';
 import { getManagerOrgMap } from '@/lib/org/deptCategories';
+import { loadPersonSegments } from '@/features/employees/engine/segments';
 import { loadDiagSettings, type DiagSettings } from './settings';
 import { loadLags } from './refs';
 import { loadManagerWindows, computeTickNodes, lastWindowTimings, type NodeValue, type ManagerWindow } from './windows';
@@ -29,17 +30,35 @@ export async function loadActiveManagers(monthFirst: string): Promise<ActiveMana
   // category в org_resolved_hierarchy нет — направление резолвится по предкам отдела
   // (lib/org/deptCategories.getManagerOrgMap), там же нормализованная метка филиала.
   const [h, org] = await Promise.all([
-    analyticsDb().query<{ manager_bitrix_user_id: string; manager_name: string; short_login: string | null; branch: string | null; first_deal_at: Date | null }>(
-      `SELECT h.manager_bitrix_user_id, h.manager_name, h.short_login, h.branch,
-              (SELECT min(created_at) FROM sa.deals d WHERE d.current_manager_id = h.manager_bitrix_user_id::bigint) AS first_deal_at
+    analyticsDb().query<{ manager_bitrix_user_id: string; manager_name: string; short_login: string | null; branch: string | null }>(
+      `SELECT h.manager_bitrix_user_id, h.manager_name, h.short_login, h.branch
          FROM sa.org_resolved_hierarchy h WHERE h.is_active = true AND h.short_login = ANY($1::text[])`, [[...planBy.keys()]]),
     getManagerOrgMap(),
   ]);
+  // Задача 11110 (план п.4): «новичок» = первая сделка ВНУТРИ отрезка текущего
+  // человека на учётке, а не первая сделка учётки вообще (иначе человек на
+  // чужом слоте получал стаж предшественника). Начало отрезка неизвестно (засевка
+  // 13.07) или вакансия — как раньше, без нижней границы.
+  const ids = h.rows.map(r => r.manager_bitrix_user_id);
+  const segs = ids.length ? await loadPersonSegments(ids) : null;
+  const starts = ids.map(id => {
+    const seg = segs?.byId.get(id);
+    return seg && !seg.vacant && seg.knownStart ? seg.startAt : null;
+  });
+  const firstDeals = ids.length ? await analyticsDb().query<{ m: string; first_deal_at: Date | null }>(
+    `SELECT s.m::text AS m, (SELECT min(d.created_at) FROM sa.deals d
+                              WHERE d.current_manager_id = s.m AND (s.st IS NULL OR d.created_at >= s.st)) AS first_deal_at
+       FROM unnest($1::bigint[], $2::timestamptz[]) AS s(m, st)`, [ids, starts]) : { rows: [] };
+  // Сделок в отрезке ещё нет — человек новенький: считаем от начала отрезка,
+  // иначе null превратился бы в «стаж 9999 дней» (diagnose.ts) и новичок выпал бы.
+  const startBy = new Map(ids.map((id, i) => [id, starts[i]]));
+  const firstBy = new Map(firstDeals.rows.map(r => [r.m, r.first_deal_at ?? startBy.get(r.m) ?? null]));
   return h.rows.map(r => {
     const o = org.get(r.manager_bitrix_user_id);
+    const first = firstBy.get(r.manager_bitrix_user_id) ?? null;
     return {
       bitrixId: Number(r.manager_bitrix_user_id), name: r.manager_name, shortLogin: r.short_login ?? '', branch: o?.branch ?? r.branch ?? '∅', category: o?.category ?? '∅',
-      plan: planBy.get(r.short_login ?? '') ?? 0, firstDealAt: r.first_deal_at ? new Date(r.first_deal_at) : null,
+      plan: planBy.get(r.short_login ?? '') ?? 0, firstDealAt: first ? new Date(first) : null,
     };
   });
 }

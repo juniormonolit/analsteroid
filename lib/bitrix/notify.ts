@@ -116,6 +116,8 @@ export const BOT_FUNCTION_KEYS = [
   // Сторож систем (ТЗ владельца 28.09): утренняя сводка «всё работает» + срочное
   // сообщение о новой поломке. Включён по умолчанию — выключенный сторож бесполезен.
   'system_health',
+  // Задача 11110: синк увидел нового человека на учётке → РОПу «проставь дату начала».
+  'tenure_owner_change',
 ] as const;
 export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
 

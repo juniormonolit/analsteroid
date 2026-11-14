@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { tenureLabel } from '@/features/employees/engine/tenure';
+import { loadPersonSegments } from '@/features/employees/engine/segments';
+import { resolveTenure } from '@/features/employees/engine/personSegment';
 import { getExpiringSoon } from '@/features/badges/engine/wallet';
 import { fetchXpProfile } from '@/features/xp/engine/xp';
 import { getSessionScope, canSeeManager, scopeForbidden } from '@/lib/org/sessionScope';
 
-// Данные табов ЛК (доп. Серёги 31.07 к 2655/2657): стаж из реестра сотрудников
-// (COALESCE(manual_start_date, hire_date), как на странице «Сотрудники») и
+// Данные табов ЛК (доп. Серёги 31.07 к 2655/2657): стаж по человеку на учётке
+// (задача 11110: ручная дата при текущем ФИО, иначе начало его отрезка) и
 // история начислений валюты (леджер: дата, награда, сумма — свежие сверху).
 // Доступ (аудит 09.09, ai_docs/fresh_docs/ACCESS_AUDIT_2026-09-09.md): чужой
 // ?bitrixId — только в пределах среза сессии (canSeeManager: админ — любой,
@@ -28,17 +30,21 @@ export async function GET(req: NextRequest) {
   }
 
   const id = Number(bitrixId);
-  const [reg, ledger] = await Promise.all([
+  const [reg, segs, ledger] = await Promise.all([
     // Задача 2820: раньше водило sa.employees (мёртвая заготовка) — если id туда
     // не попал (52% активных на проверке 03.08), запрос отдавал 0 строк и вкладка
     // «Профиль» молча теряла стаж. hire_date у sa.employees на проде и так всегда
     // пуст (см. features/employees/ui/EmployeesPage.tsx) — единственный реальный
     // источник даты начала — sa.employee_registry, читаем её напрямую.
-    analyticsDb().query<{ start_date: string | null }>(
-      `SELECT to_char(manual_start_date, 'YYYY-MM-DD') AS start_date
-         FROM sa.employee_registry WHERE bitrix_id = $1`,
+    // Задача 11110: дата действует, только если поставлена при текущем ФИО
+    // (to_jsonb — не падаем до миграции sa_org/009).
+    analyticsDb().query<{ start_date: string | null; start_name: string | null }>(
+      `SELECT to_char(r.manual_start_date, 'YYYY-MM-DD') AS start_date,
+              to_jsonb(r) ->> 'manual_start_name' AS start_name
+         FROM sa.employee_registry r WHERE r.bitrix_id = $1`,
       [id],
     ),
+    loadPersonSegments([String(id)]).catch(() => null),
     // Единая «банковская выписка» (доп. Серёги 31.07): авто-начисления движка +
     // ручные поощрения/штрафы (+ сторно-записи) — дата, награда/причина, кем,
     // за что, сумма со знаком. Определение может быть удалено (кастомные) —
@@ -87,9 +93,16 @@ export async function GET(req: NextRequest) {
     .then(r => ({ frameId: r.rows[0]?.frame_id ?? null, backgroundId: r.rows[0]?.background_id ?? null }))
     .catch(() => ({ frameId: null, backgroundId: null }));
 
-  const startDate = reg.rows[0]?.start_date ?? null;
+  // Профиль: ручная дата устарела/пуста → начало отрезка текущего ФИО (если
+  // известно), с пометкой source='segment' — человек видит свой стаж на учётке,
+  // а не стаж предшественника и не пустоту.
+  const t = resolveTenure(
+    reg.rows[0]?.start_date ?? null, reg.rows[0]?.start_name ?? null,
+    segs?.byId.get(String(id)) ?? null, true,
+  );
+  const startDate = t.startDate;
   return NextResponse.json({
-    tenure: startDate ? { startDate, label: tenureLabel(startDate) } : null,
+    tenure: startDate ? { startDate, label: tenureLabel(startDate), source: t.source } : null,
     ledger: ledger.rows,
     rubBalance: Number(rub.rows[0]?.balance ?? 0),
     rubToEballRate: Number(rate.rows[0]?.rate ?? 1),
