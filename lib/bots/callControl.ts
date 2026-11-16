@@ -125,6 +125,8 @@ let lastStaleWarnAt = 0; // in-memory антиспам (процесс на ин
 // Возврат после простоя: разрыв курсора с va.calls больше суток → не догонять историю.
 const VA_RESUME_GAP_MS = 24 * 60 * 60 * 1000;
 const VA_RESUME_WINDOW_MS = 30 * 60 * 1000;
+// Самый старый пропущенный, по которому ещё открываем кейс (лаг n8n/Roan бывал до 5 ч).
+const VA_MISSED_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 function mskHour(): number {
   const msk = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
@@ -199,7 +201,13 @@ async function syncFromVaCalls(db: ReturnType<typeof systemDb>): Promise<Date | 
     const direction = r.direction === 'inbound' ? 'inbound' : r.direction === 'outbound' ? 'outbound' : null;
     // Правило «без сделки — игнор» здесь избыточно (в va.calls без сделки не бывает),
     // но подстрахуемся: пропущенным считаем только missed-входящий СО сделкой.
-    const isMissed = direction === 'inbound' && r.result === 'missed' && r.deal_id != null;
+    // Пропуск старше VA_MISSED_MAX_AGE_MS кейс не открывает: если источник (Roan, дыра
+    // 31.10–11.11) дольёт старые звонки со свежим created_at, каждый такой «пропуск» уже
+    // старше 30 минут и разом ушёл бы эскалацией менеджерам. Событие всё равно пишем —
+    // для резолва и таймеров перезвона оно безвредно.
+    const calledAt: Date | null = r.called_at ?? null;
+    const tooOld = calledAt != null && Date.now() - calledAt.getTime() > VA_MISSED_MAX_AGE_MS;
+    const isMissed = direction === 'inbound' && r.result === 'missed' && r.deal_id != null && !tooOld;
     await db.query(
       `INSERT INTO call_events
          (event_name, bitrix_call_id, direction, call_type_raw, phone_normalized, phone_raw,
