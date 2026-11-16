@@ -226,28 +226,58 @@ async function startReassign(dealId: number, newResponsibleId: string): Promise<
   return String(res);
 }
 
-/** Прошлые сделки заказчика (воронки 0–3, с учётом склейки) — тому же новому ответственному, БП 171 по каждой.
- *  Уже его сделки не трогаем; не больше PREV_REASSIGN_CAP, пауза между запусками — Битрикс вежливо. */
+/** Прошлые сделки заказчика при смене менеджера (16.11). Владелец: «а нельзя ли старые продажи за старым менеджером
+ *  сохранять?» — Монолитика считает продажи по ТЕКУЩЕМУ ответственному сделки (sa.deals.current_manager_id, истории нет),
+ *  поэтому:
+ *   • БП 171 «Сменить ответственного» — только по прошлым НЕпроданным сделкам (открытые и проигранные: sold_at и
+ *     delivered_at пусты) — продажи и отгрузки остаются за прежним менеджером;
+ *   • чтобы новый менеджер видел, что заказчик брал (Будковский: «в новой сделке на стене товары предыдущие не
+ *     отображаются»), — в ленту новой сделки комментарий: последние отгрузки с товарами (crm.deal.productrows.get).
+ *  В фоне; сбой по отдельной сделке — в лог. Не больше PREV_REASSIGN_CAP сделок, пауза — Битрикс вежливо. */
 const PREV_REASSIGN_CAP = 40;
-async function reassignPreviousDeals(clientKey: string, exceptDealId: number, newResponsibleId: string): Promise<number> {
+const PREV_SHIPPED_IN_FEED = 5;
+async function reassignPreviousDeals(clientKey: string, newDealId: number, newResponsibleId: string): Promise<number> {
   const members = await memberKeysOf(clientKey);
   const companies = members.filter(k => k.startsWith('k')).map(k => Number(k.slice(1)));
   const contacts = members.filter(k => !k.startsWith('k')).map(k => Number(k.slice(1)));
-  const r = await analyticsDb().query<{ deal_id: string }>(
-    `SELECT deal_id::text FROM sa.deals
-      WHERE funnel_id IN (0,1,2,3) AND deal_id <> $3
-        AND (company_id = ANY($1::bigint[]) OR contact_id = ANY($2::bigint[]))
-        AND coalesce(current_manager_id::text, '') <> $4
-      ORDER BY created_at DESC LIMIT ${PREV_REASSIGN_CAP}`,
-    [companies, contacts, exceptDealId, newResponsibleId],
-  );
+  const db = analyticsDb();
+  const [open, shipped] = await Promise.all([
+    db.query<{ deal_id: string }>(
+      `SELECT deal_id::text FROM sa.deals
+        WHERE funnel_id IN (0,1,2,3) AND deal_id <> $3 AND sold_at IS NULL AND delivered_at IS NULL
+          AND (company_id = ANY($1::bigint[]) OR contact_id = ANY($2::bigint[]))
+          AND coalesce(current_manager_id::text, '') <> $4
+        ORDER BY created_at DESC LIMIT ${PREV_REASSIGN_CAP}`,
+      [companies, contacts, newDealId, newResponsibleId],
+    ),
+    db.query<{ deal_id: string; delivered_at: Date; amount: string | null; deal_name: string | null }>(
+      `SELECT deal_id::text, delivered_at, amount::text, deal_name FROM sa.deals
+        WHERE funnel_id IN (0,1,2,3) AND delivered_at IS NOT NULL
+          AND (company_id = ANY($1::bigint[]) OR contact_id = ANY($2::bigint[]))
+        ORDER BY delivered_at DESC LIMIT ${PREV_SHIPPED_IN_FEED}`,
+      [companies, contacts],
+    ),
+  ]);
   let started = 0;
-  for (const { deal_id } of r.rows) {
+  for (const { deal_id } of open.rows) {
     try { await startReassign(Number(deal_id), newResponsibleId); started++; }
     catch (e) { console.warn(`[repeat-kanban] БП смены ответственного, сделка ${deal_id}:`, e instanceof Error ? e.message : e); }
     await new Promise(res => setTimeout(res, 400));
   }
-  if (r.rows.length) console.log(`[repeat-kanban] прошлые сделки ${clientKey} → ${newResponsibleId}: запущено ${started} из ${r.rows.length}`);
+  if (open.rows.length) console.log(`[repeat-kanban] прошлые незакрытые сделки ${clientKey} → ${newResponsibleId}: запущено ${started} из ${open.rows.length}`);
+  if (shipped.rows.length) {
+    const blocks: string[] = [];
+    for (const d of shipped.rows) {
+      const rows = await read<{ PRODUCT_NAME?: string; QUANTITY?: number | string; MEASURE_NAME?: string; PRICE?: number | string }[]>('crm.deal.productrows.get', { id: Number(d.deal_id) }).catch(() => null);
+      const lines = (rows ?? []).slice(0, 12).map(r => `• ${String(r.PRODUCT_NAME ?? '').trim()} — ${Number(r.QUANTITY ?? 0)} ${r.MEASURE_NAME ?? ''}`.trim());
+      const more = (rows?.length ?? 0) > 12 ? `\n… и ещё ${rows!.length - 12}` : '';
+      blocks.push(`${ddmmyyyy(d.delivered_at)} — сделка #${d.deal_id}${d.deal_name ? ` «${d.deal_name}»` : ''}, ${rubFmt.format(Math.round(Number(d.amount ?? 0)))} ₽${lines.length ? `\n${lines.join('\n')}${more}` : ''}`);
+      await new Promise(res => setTimeout(res, 300));
+    }
+    await writeOnce(crmWebhook(), 'crm.timeline.comment.add', {
+      fields: { ENTITY_ID: newDealId, ENTITY_TYPE: 'deal', COMMENT: `Заказчик передан другому менеджеру (канбан повторных, Монолитика). Что брал раньше — последние отгрузки:\n\n${blocks.join('\n\n')}` },
+    }).catch(e => console.warn('[repeat-kanban] товары прошлых отгрузок в ленту сделки:', e instanceof Error ? e.message : e));
+  }
   return started;
 }
 
