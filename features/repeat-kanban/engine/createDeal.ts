@@ -226,6 +226,31 @@ async function startReassign(dealId: number, newResponsibleId: string): Promise<
   return String(res);
 }
 
+/** Прошлые сделки заказчика (воронки 0–3, с учётом склейки) — тому же новому ответственному, БП 171 по каждой.
+ *  Уже его сделки не трогаем; не больше PREV_REASSIGN_CAP, пауза между запусками — Битрикс вежливо. */
+const PREV_REASSIGN_CAP = 40;
+async function reassignPreviousDeals(clientKey: string, exceptDealId: number, newResponsibleId: string): Promise<number> {
+  const members = await memberKeysOf(clientKey);
+  const companies = members.filter(k => k.startsWith('k')).map(k => Number(k.slice(1)));
+  const contacts = members.filter(k => !k.startsWith('k')).map(k => Number(k.slice(1)));
+  const r = await analyticsDb().query<{ deal_id: string }>(
+    `SELECT deal_id::text FROM sa.deals
+      WHERE funnel_id IN (0,1,2,3) AND deal_id <> $3
+        AND (company_id = ANY($1::bigint[]) OR contact_id = ANY($2::bigint[]))
+        AND coalesce(current_manager_id::text, '') <> $4
+      ORDER BY created_at DESC LIMIT ${PREV_REASSIGN_CAP}`,
+    [companies, contacts, exceptDealId, newResponsibleId],
+  );
+  let started = 0;
+  for (const { deal_id } of r.rows) {
+    try { await startReassign(Number(deal_id), newResponsibleId); started++; }
+    catch (e) { console.warn(`[repeat-kanban] БП смены ответственного, сделка ${deal_id}:`, e instanceof Error ? e.message : e); }
+    await new Promise(res => setTimeout(res, 400));
+  }
+  if (r.rows.length) console.log(`[repeat-kanban] прошлые сделки ${clientKey} → ${newResponsibleId}: запущено ${started} из ${r.rows.length}`);
+  return started;
+}
+
 export async function createRepeatTask(input: {
   clientKey: string; fallbackManagerId: string; creatorBitrixId: string; comment: string;
   /** Кто написал комментарий (нажавший, его Битрикс-id) — автор сообщения в чате задачи. */
@@ -327,6 +352,11 @@ export async function createRepeatTask(input: {
       throw new DealCreateError(`Сделка #${dealId} готова, но смена менеджера не запустилась: ${e instanceof Error ? e.message : e}. Задачу не ставили.`);
     }
     responsibleId = input.newResponsibleId;
+    // Прошлые сделки заказчика — тем же БП (16.11, Будковский: «новый менеджер не видит предыдущие сделки, и в новой
+    // сделке на стене даже товары предыдущие не отображаются»; владелец: «есть БП специальный — запускаем, когда
+    // „и сменить менеджера на“»). В фоне: задача не ждёт; сбой по отдельной сделке — в лог, не роняет постановку.
+    void reassignPreviousDeals(input.clientKey, dealId, input.newResponsibleId)
+      .catch(e => console.warn(`[repeat-kanban] смена ответственного в прошлых сделках ${input.clientKey}:`, e instanceof Error ? e.message : e));
   }
 
   // Памятка «Перед звонком» (владелец 23.10): приходит внутри сообщения по шаблону (settings.renderTemplate
