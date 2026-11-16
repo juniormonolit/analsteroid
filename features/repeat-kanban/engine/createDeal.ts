@@ -241,10 +241,15 @@ async function reassignPreviousDeals(clientKey: string, newDealId: number, newRe
   const companies = members.filter(k => k.startsWith('k')).map(k => Number(k.slice(1)));
   const contacts = members.filter(k => !k.startsWith('k')).map(k => Number(k.slice(1)));
   const db = analyticsDb();
+  // Заморозка продавца (миграция 266): триггер не даёт смене ответственного в проданной сделке попасть в sa.deals —
+  // отчёты оставляют продажу за продавцом. Есть триггер — БП по ВСЕМ прошлым сделкам (новый менеджер видит в Битриксе
+  // и историю, и товары); нет (миграция не накатана) — только по непроданным, как было.
+  const frozen = await db.query(`SELECT 1 FROM pg_trigger WHERE tgname = 'trg_deals_freeze_seller' AND NOT tgisinternal LIMIT 1`)
+    .then(r => (r.rowCount ?? 0) > 0).catch(() => false);
   const [open, shipped] = await Promise.all([
     db.query<{ deal_id: string }>(
       `SELECT deal_id::text FROM sa.deals
-        WHERE funnel_id IN (0,1,2,3) AND deal_id <> $3 AND sold_at IS NULL AND delivered_at IS NULL
+        WHERE funnel_id IN (0,1,2,3) AND deal_id <> $3 ${frozen ? '' : 'AND sold_at IS NULL AND delivered_at IS NULL'}
           AND (company_id = ANY($1::bigint[]) OR contact_id = ANY($2::bigint[]))
           AND coalesce(current_manager_id::text, '') <> $4
         ORDER BY created_at DESC LIMIT ${PREV_REASSIGN_CAP}`,
@@ -264,7 +269,7 @@ async function reassignPreviousDeals(clientKey: string, newDealId: number, newRe
     catch (e) { console.warn(`[repeat-kanban] БП смены ответственного, сделка ${deal_id}:`, e instanceof Error ? e.message : e); }
     await new Promise(res => setTimeout(res, 400));
   }
-  if (open.rows.length) console.log(`[repeat-kanban] прошлые незакрытые сделки ${clientKey} → ${newResponsibleId}: запущено ${started} из ${open.rows.length}`);
+  if (open.rows.length) console.log(`[repeat-kanban] прошлые сделки ${clientKey} → ${newResponsibleId}${frozen ? ' (все, продавец заморожен)' : ' (непроданные)'}: запущено ${started} из ${open.rows.length}`);
   if (shipped.rows.length) {
     const blocks: string[] = [];
     for (const d of shipped.rows) {
