@@ -53,6 +53,8 @@ export interface ResultTask {
   soldAt: string | null;
   /** Сумма проданной сделки (первая продажа после задачи; 26.10 — «конверсия в суммах»). */
   soldAmount: number | null;
+  /** Проданная сделка (дриллдаун аналитики, 16.11). */
+  soldDealId: number | null;
   shippedAt: string | null;
   shippedAmount: number | null;
   shippedDealId: number | null;
@@ -141,7 +143,7 @@ export async function fetchKanbanResults(opts: { date: string; period: Period; m
     const l = deliveredOf.get(ref) ?? []; l.push(new Date(d.delivered_at).getTime()); deliveredOf.set(ref, l);
   }
 
-  const ships = new Map<string, ShipRow[]>(), sales = new Map<string, { at: number; amount: number }[]>();
+  const ships = new Map<string, ShipRow[]>(), sales = new Map<string, { at: number; amount: number; dealId: number }[]>();
   for (const d of custDeals) {
     const ref = refOfDeal({ funnelId: Number(d.funnel_id), companyId: d.company_id !== null ? Number(d.company_id) : null, contactId: d.contact_id !== null ? Number(d.contact_id) : null });
     if (!ref) continue;
@@ -151,7 +153,7 @@ export async function fetchKanbanResults(opts: { date: string; period: Period; m
       l.push({ at: new Date(d.delivered_at).getTime(), amount: Math.round(Number(d.amount ?? 0)), dealId: Number(d.deal_id), soldAt: soldMs });
       ships.set(ref, l);
     }
-    if (soldMs !== null) { const l = sales.get(ref) ?? []; l.push({ at: soldMs, amount: Math.round(Number(d.amount ?? 0)) }); sales.set(ref, l); }
+    if (soldMs !== null) { const l = sales.get(ref) ?? []; l.push({ at: soldMs, amount: Math.round(Number(d.amount ?? 0)), dealId: Number(d.deal_id) }); sales.set(ref, l); }
   }
   for (const l of ships.values()) l.sort((a, b) => a.at - b.at || a.dealId - b.dealId);
   for (const l of sales.values()) l.sort((a, b) => a.at - b.at);
@@ -185,7 +187,7 @@ export async function fetchKanbanResults(opts: { date: string; period: Period; m
       && (o.at > at || (o.at === at && o.id > id)) && (!ship || o.at < ship.at));
     tasks.push({
       taskId: id, dealId, managerId: t.responsible_id, createdAt: iso(at)!, clientRef: ref,
-      reachedAt: iso(reachedMs), soldAt: iso(soldMs), soldAmount: sale?.amount ?? null,
+      reachedAt: iso(reachedMs), soldAt: iso(soldMs), soldAmount: sale?.amount ?? null, soldDealId: sale?.dealId ?? null,
       shippedAt: iso(ship?.at), shippedAmount: ship?.amount ?? null, shippedDealId: ship?.dealId ?? null,
       preSold: !!ship && ship.soldAt !== null && ship.soldAt <= at,
       superseded, mature: now - at >= MATURE_DAYS * DAY_MS,

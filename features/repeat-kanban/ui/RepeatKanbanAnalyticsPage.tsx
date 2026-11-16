@@ -7,13 +7,15 @@
 // Данные: /analytics (снимки + журнал кликов и событий Битрикса), /analytics/results (задача → продажа → отгрузка,
 // engine/results.ts), /analytics/speed (ждут приёмки, зависло, разбор, очередь — engine/speed.ts). Дерево — analyticsTree.ts.
 import Link from 'next/link';
-import { Fragment, useCallback, useMemo, useRef, useState } from 'react';
+import { createContext, Fragment, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink, Info } from 'lucide-react';
 import { stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { taskUrl } from '../engine/config';
 import type { KanbanAnalytics, MgrDay, JournalRow } from '../engine/analytics';
-import type { KanbanResults } from '../engine/results';
+import type { KanbanResults, ResultTask } from '../engine/results';
+import { Modal } from '@/components/ui/Modal';
+import { DealCard } from '@/features/reports/ui/DealCard';
 import type { KanbanSpeed } from '../engine/speed';
 import type { AiStats } from '../engine/aiStats';
 import type { ManagerSummary } from '@/features/ai-analysis/engine/summary';
@@ -106,7 +108,25 @@ const Btn = ({ on, onClick, children }: { on?: boolean; onClick: () => void; chi
 );
 
 // ── Иерархическая таблица (общая для табов) ──────────────────────────────────
-interface Col { key: string; label: string; hint?: string; sort: (a: MAgg) => number | null; render: (a: MAgg) => React.ReactNode }
+/** Дриллдаун по задачам (владелец 16.11: «цифры нажимабельными с дриллдауном на сделки, как в основных отчётах»). */
+type DrillKind = 'tasks' | 'taken' | 'base' | 'reached' | 'sold' | 'shipped' | 'progress';
+const DRILL_TITLE: Record<DrillKind, string> = {
+  tasks: 'Задачи', taken: 'Взяты из пула', base: 'Взято (без перепоставленных)', reached: 'Дозвонились', sold: 'Продажи после задачи', shipped: 'Отгрузки после задачи', progress: 'Ещё в работе',
+};
+const DrillCtx = createContext<((node: TreeNode, kind: DrillKind) => void) | null>(null);
+interface Col { key: string; label: string; hint?: string; sort: (a: MAgg) => number | null; render: (a: MAgg) => React.ReactNode; drill?: DrillKind }
+/** Ячейка: с дриллдауном — кнопка (подчёркнута пунктиром), без — как была. */
+function DCell({ c, n }: { c: Col; n: TreeNode }) {
+  const drill = useContext(DrillCtx);
+  if (!c.drill || !drill) return <td className={cell}>{c.render(n.agg)}</td>;
+  return (
+    <td className={cell}>
+      <button type="button" onClick={() => drill(n, c.drill!)} title="Показать задачи и сделки"
+        className="min-h-9 rounded px-1 text-right decoration-dotted underline-offset-4 hover:bg-[var(--color-bg-hover)] hover:underline">{c.render(n.agg)}</button>
+    </td>
+  );
+}
+
 function TreeTable({ roots, total, cols, defaultSort, minW }: { roots: TreeNode[]; total: TreeNode; cols: Col[]; defaultSort: string; minW: number }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: defaultSort, dir: -1 });
@@ -157,7 +177,7 @@ function TreeTable({ roots, total, cols, defaultSort, minW }: { roots: TreeNode[
               {n.kind === 'org' && <span className="shrink-0 text-[11px] text-[var(--color-text-muted)]">· {n.agg.managers}</span>}
             </div>
           </td>
-          {cols.map(c => <td key={c.key} className={cell}>{c.render(n.agg)}</td>)}
+          {cols.map(c => <DCell key={c.key} c={c} n={n} />)}
         </tr>
         {isOpen && rows(n.children)}
       </Fragment>
@@ -187,7 +207,7 @@ function TreeTable({ roots, total, cols, defaultSort, minW }: { roots: TreeNode[
             </tr>
             <tr className="border-b-2 border-[var(--color-border-strong)] bg-[var(--color-bg)] font-bold">
               <td className="sticky left-0 z-10 bg-[var(--color-bg)] px-2 py-1.5 text-left">Итого <span className="text-[11px] font-normal text-[var(--color-text-muted)]">· {total.agg.managers}</span></td>
-              {cols.map(c => <td key={c.key} className={cell}>{c.render(total.agg)}</td>)}
+              {cols.map(c => <DCell key={c.key} c={c} n={total} />)}
             </tr>
           </thead>
           <tbody>{rows(viewRoots)}{shown && !shown.roots.length && <tr><td colSpan={cols.length + 1} className="px-3 py-4 text-left text-[var(--color-text-muted)]">Никого не нашли.</td></tr>}</tbody>
@@ -341,6 +361,8 @@ export function RepeatKanbanAnalyticsPage() {
     return buildTree(org, list);
   }, [an.data, res.data, sp.data, ais.data]);
 
+  const [drill, setDrill] = useState<{ node: TreeNode; kind: DrillKind } | null>(null);
+  const openDrill = useCallback((node: TreeNode, kind: DrillKind) => setDrill({ node, kind }), []);
   const loading = an.isLoading || res.isLoading || sp.isLoading;
   const err = an.error ?? res.error ?? sp.error;
   const T = model?.total.agg;
@@ -371,16 +393,109 @@ export function RepeatKanbanAnalyticsPage() {
         </div>
         {err && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-negative)]">{(err as Error).message}</div>}
         {loading && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">Собираю аналитику… за всё время это 5–15 секунд.</div>}
+        <DrillCtx.Provider value={res.data ? openDrill : null}>
         {model && T && tab === 'overview' && <Overview model={model} />}
         {model && T && tab === 'activity' && <Activity model={model} data={an.data} ai={ai.data} aiOk={ai.isSuccess} />}
         {model && T && tab === 'tasks' && <TasksTab model={model} />}
         {model && T && tab === 'results' && <Results model={model} matureDays={res.data?.matureDays ?? 30} />}
+        </DrillCtx.Provider>
+        {drill && res.data && <DrillModal node={drill.node} kind={drill.kind} data={res.data} onClose={() => setDrill(null)} />}
         {model && T && tab === 'pool' && <PoolSpeed model={model} data={an.data} />}
         {model && tab === 'ai' && ais.data && <AiTab model={model} s={ais.data} />}
         {tab === 'ai' && ais.isLoading && <Note>Считаю ИИ-разборы…</Note>}
         {tab === 'journal' && an.data && <Journal data={an.data} />}
       </div>
     </div>
+  );
+}
+
+// ── Дриллдаун: задачи и сделки строки ───────────────────────────────────────────
+const DAY = 86_400_000;
+const fmtDay = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'Europe/Moscow' }) : '');
+function mgrIdsOf(n: TreeNode): Set<string> | null {
+  if (n.id === '__total') return null;
+  const out = new Set<string>();
+  const walk = (x: TreeNode) => { if (x.kind === 'mgr') out.add(x.id.slice(2)); x.children.forEach(walk); };
+  walk(n);
+  return out;
+}
+function drillTasks(all: ResultTask[], mgrs: Set<string> | null, kind: DrillKind): ResultTask[] {
+  // Та же логика, что в агрегате (model): перепоставленные — только в «Задач»/«Взято из пула».
+  const mine = all.filter(t => t.managerId && (!mgrs || mgrs.has(t.managerId)));
+  const live = mine.filter(t => !t.superseded);
+  const list = kind === 'tasks' ? mine
+    : kind === 'taken' ? [...new Map(mine.filter(t => t.clientRef).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(t => [t.clientRef!, t])).values()]
+    : kind === 'base' ? live
+    : kind === 'reached' ? live.filter(t => t.reachedAt)
+    : kind === 'sold' ? live.filter(t => t.soldAt)
+    : kind === 'shipped' ? live.filter(t => t.shippedAt)
+    : live.filter(t => !t.mature && !t.shippedAt);
+  const key = (t: ResultTask) => (kind === 'sold' ? t.soldAt : kind === 'shipped' ? t.shippedAt : t.createdAt) ?? '';
+  return [...list].sort((a, b) => key(b).localeCompare(key(a)));
+}
+const DRILL_SHOW = 500;
+function DrillModal({ node, kind, data, onClose }: { node: TreeNode; kind: DrillKind; data: KanbanResults; onClose: () => void }) {
+  const list = useMemo(() => drillTasks(data.tasks, mgrIdsOf(node), kind), [data.tasks, node, kind]);
+  const shown = list.slice(0, DRILL_SHOW);
+  const [dealId, setDealId] = useState<number | null>(null);
+  const labels = useQuery<{ deals: Record<string, { name: string | null; stage: string | null; amount: number | null; funnel: number }>; names: Record<string, string> }>({
+    queryKey: ['rk-drill', kind, node.id, data.generatedAt],
+    queryFn: async () => {
+      const dealIds = [...new Set(shown.flatMap(t => [t.dealId, t.soldDealId, t.shippedDealId]).filter((x): x is number => !!x))];
+      const r = await fetch('/api/repeat-kanban/analytics/drill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskIds: shown.map(t => t.taskId), dealIds }) });
+      const j = await r.json(); if (!r.ok) throw new Error(j.error ?? 'Ошибка'); return j;
+    },
+    staleTime: 5 * 60_000,
+  });
+  const deals = labels.data?.deals ?? {};
+  const names = labels.data?.names ?? {};
+  const soldSum = list.reduce((s, t) => s + (t.soldAmount ?? 0), 0), shipSum = list.reduce((s, t) => s + (t.shippedAmount ?? 0), 0);
+  const clients = new Set(list.map(t => t.clientRef).filter(Boolean)).size;
+  const DealLink = ({ id, sub }: { id: number | null; sub?: string | null }) => (id ? (
+    <button type="button" onClick={() => setDealId(id)} className="min-h-9 max-w-[220px] text-left text-[var(--color-accent)] hover:underline" title={deals[id]?.name ?? `Сделка #${id}`}>
+      <span className="block truncate">#{id}{deals[id]?.name ? ` · ${deals[id]!.name}` : ''}</span>
+      {(sub || deals[id]?.stage) && <span className="block truncate text-[11px] text-[var(--color-text-muted)]">{sub ?? deals[id]?.stage}</span>}
+    </button>
+  ) : <span className="text-[var(--color-text-muted)]">—</span>);
+  return (
+    <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`${node.id === '__total' ? 'Итого' : node.name} · ${DRILL_TITLE[kind]}`} desktopWidth="sm:max-w-6xl">
+      <div className="flex min-w-0 flex-col gap-3 text-sm">
+        <p className="text-[var(--color-text-secondary)]">
+          {rub.format(list.length)} {kind === 'taken' ? 'заказчиков' : 'задач'}{kind !== 'taken' ? ` · ${rub.format(clients)} заказчиков` : ''}
+          {soldSum && (kind === 'sold' || kind === 'tasks' || kind === 'base') ? ` · продано на ${moneyShort(soldSum)}` : ''}
+          {shipSum && (kind === 'shipped' || kind === 'tasks' || kind === 'base') ? ` · отгружено на ${moneyShort(shipSum)}` : ''}
+          {list.length > DRILL_SHOW ? ` · показаны первые ${DRILL_SHOW}` : ''}
+        </p>
+        <div className="scroll-x max-h-[65dvh] overflow-y-auto rounded-lg border border-[var(--color-border)]">
+          <table className="w-full min-w-[900px] text-[12.5px]">
+            <thead className="sticky top-0 z-10 bg-[var(--color-bg-surface)]">
+              <tr className="border-b border-[var(--color-border)] text-left text-[11.5px] text-[var(--color-text-muted)]">
+                <th className="px-2 py-1.5">Заказчик</th><th className="px-2 py-1.5">Менеджер</th><th className="px-2 py-1.5">Задача</th>
+                <th className="px-2 py-1.5">Сделка задачи</th><th className="px-2 py-1.5">Продажа</th><th className="px-2 py-1.5">Отгрузка</th><th className="px-2 py-1.5 text-right">Потенциал</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map(t => (
+                <tr key={t.taskId} className="border-b border-[var(--color-border)] align-top hover:bg-[var(--color-bg-hover)]">
+                  <td className="max-w-[200px] px-2 py-1"><span className="block truncate" title={t.clientRef ?? ''}>{(t.clientRef && names[t.clientRef]) || (t.clientRef ? `${t.clientRef.startsWith('k') ? 'Компания' : 'Контакт'} #${t.clientRef.slice(1)}` : '—')}</span>
+                    {t.superseded && <span className="text-[11px] text-[var(--color-text-muted)]">перепоставлена</span>}</td>
+                  <td className="max-w-[160px] truncate px-2 py-1">{(t.managerId && data.managers[t.managerId]?.name) || '—'}</td>
+                  <td className="px-2 py-1"><a href={taskUrl(t.taskId)} target="_blank" rel="noreferrer" className="inline-flex min-h-9 items-center gap-1 text-[var(--color-accent)] hover:underline">#{t.taskId}<ExternalLink size={10} /></a>
+                    <span className="block text-[11px] text-[var(--color-text-muted)]">{fmtDay(t.createdAt)}{t.reachedAt ? ' · дозвон' : ''}</span></td>
+                  <td className="px-2 py-1"><DealLink id={t.dealId} /></td>
+                  <td className="px-2 py-1">{t.soldAt ? <><DealLink id={t.soldDealId} sub={`${fmtDay(t.soldAt)} · ${t.soldAmount ? moneyShort(t.soldAmount) : '—'}`} /></> : <span className="text-[var(--color-text-muted)]">—</span>}</td>
+                  <td className="px-2 py-1">{t.shippedAt ? <><DealLink id={t.shippedDealId} sub={`${fmtDay(t.shippedAt)} · ${t.shippedAmount ? moneyShort(t.shippedAmount) : '—'} · ${Math.round((new Date(t.shippedAt).getTime() - new Date(t.createdAt).getTime()) / DAY)} дн.${t.preSold ? ' · продано до задачи' : ''}`} /></> : <span className="text-[var(--color-text-muted)]">—</span>}</td>
+                  <td className="px-2 py-1 text-right tabular-nums">{t.potential ? moneyShort(t.potential) : '—'}</td>
+                </tr>
+              ))}
+              {!shown.length && <tr><td colSpan={7} className="px-3 py-4 text-[var(--color-text-muted)]">Пусто.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        {labels.isError && <p className="text-xs text-[var(--color-negative)]">Названия сделок не загрузились — номера кликабельны.</p>}
+      </div>
+      {dealId !== null && <DealCard dealId={dealId} onClose={() => setDealId(null)} />}
+    </Modal>
   );
 }
 
@@ -406,14 +521,14 @@ function Overview({ model }: { model: { roots: TreeNode[]; total: TreeNode } }) 
   const forecast = (sum: number, a: MAgg) => (a.tasks && sum ? Math.round((a.pool * sum) / a.tasks) : 0);
   const reportCols: Col[] = [
     { key: 'pool', label: 'В пуле', hint: 'Сейчас: заказчики без открытой повторной сделки; ниже — их потенциал (выручка за год, если вернутся)', sort: a => a.pool, render: a => two(rub.format(a.pool), potLine(a.poolPotential)) },
-    { key: 'taken', label: 'Взято из пула', hint: 'Разных заказчиков, по которым за период ставили задачи; ниже — их потенциал', sort: a => a.clientsTaken, render: a => two(rub.format(a.clientsTaken), potLine(a.potTaken)) },
-    { key: 'tasks', label: 'Задач', hint: 'Задачи проекта «Повторные продажи» за период; ниже — доля потенциала пула, взятая в работу', sort: a => a.tasks, render: a => two(rub.format(a.tasks), a.poolPotential && a.potTaken ? `${pctRu(pct(a.potTaken, a.poolPotential + a.potTaken))} пот.` : null) },
-    { key: 'sold', label: 'Продаж', hint: 'Продажа заказчику после задачи (до следующей отгрузки); ниже — потенциал купивших', sort: a => a.soldN, render: a => two(rub.format(a.soldN), potLine(a.potSold)) },
-    { key: 'crSold', label: 'CR Задача → Продажа', hint: 'Продаж / задач; ниже — прогноз: весь пул при таком CR и среднем чеке продажи', sort: a => crT(a.soldN, a), render: a => two(<Light v={crT(a.soldN, a)} lo={5} hi={15} />, forecast(a.soldSum, a) ? `пул ≈ ${moneyShort(forecast(a.soldSum, a))}` : null) },
-    { key: 'soldSum', label: 'Сумма продаж', hint: 'Ниже — какая доля потенциала купивших реализована', sort: a => a.soldSum, render: a => two(a.soldSum ? moneyShort(a.soldSum) : '—', a.potSold && a.soldSum ? `${pctRu(pct(a.soldSum, a.potSold))} пот.` : null) },
-    { key: 'shipped', label: 'Отгрузок', hint: 'Следующая отгрузка заказчика после задачи; ниже — потенциал получивших отгрузку', sort: a => a.shippedN, render: a => two(rub.format(a.shippedN), potLine(a.potShipped)) },
-    { key: 'crShip', label: 'CR Задача → Отгрузка', hint: 'Отгрузок / задач; ниже — прогноз: весь пул при таком CR и среднем чеке отгрузки', sort: a => crT(a.shippedN, a), render: a => two(pctRu(crT(a.shippedN, a)), forecast(a.shippedSum, a) ? `пул ≈ ${moneyShort(forecast(a.shippedSum, a))}` : null) },
-    { key: 'shipSum', label: 'Сумма отгрузок', hint: 'Ниже — какая доля потенциала получивших отгрузку реализована', sort: a => a.shippedSum, render: a => two(a.shippedSum ? moneyShort(a.shippedSum) : '—', a.potShipped && a.shippedSum ? `${pctRu(pct(a.shippedSum, a.potShipped))} пот.` : null) },
+    { key: 'taken', label: 'Взято из пула', hint: 'Разных заказчиков, по которым за период ставили задачи; ниже — их потенциал', sort: a => a.clientsTaken, drill: 'taken', render: a => two(rub.format(a.clientsTaken), potLine(a.potTaken)) },
+    { key: 'tasks', label: 'Задач', hint: 'Задачи проекта «Повторные продажи» за период; ниже — доля потенциала пула, взятая в работу', sort: a => a.tasks, drill: 'tasks', render: a => two(rub.format(a.tasks), a.poolPotential && a.potTaken ? `${pctRu(pct(a.potTaken, a.poolPotential + a.potTaken))} пот.` : null) },
+    { key: 'sold', label: 'Продаж', hint: 'Продажа заказчику после задачи (до следующей отгрузки); ниже — потенциал купивших', sort: a => a.soldN, drill: 'sold', render: a => two(rub.format(a.soldN), potLine(a.potSold)) },
+    { key: 'crSold', label: 'CR Задача → Продажа', hint: 'Продаж / задач; ниже — прогноз: весь пул при таком CR и среднем чеке продажи', sort: a => crT(a.soldN, a), drill: 'sold', render: a => two(<Light v={crT(a.soldN, a)} lo={5} hi={15} />, forecast(a.soldSum, a) ? `пул ≈ ${moneyShort(forecast(a.soldSum, a))}` : null) },
+    { key: 'soldSum', label: 'Сумма продаж', hint: 'Ниже — какая доля потенциала купивших реализована', sort: a => a.soldSum, drill: 'sold', render: a => two(a.soldSum ? moneyShort(a.soldSum) : '—', a.potSold && a.soldSum ? `${pctRu(pct(a.soldSum, a.potSold))} пот.` : null) },
+    { key: 'shipped', label: 'Отгрузок', hint: 'Следующая отгрузка заказчика после задачи; ниже — потенциал получивших отгрузку', sort: a => a.shippedN, drill: 'shipped', render: a => two(rub.format(a.shippedN), potLine(a.potShipped)) },
+    { key: 'crShip', label: 'CR Задача → Отгрузка', hint: 'Отгрузок / задач; ниже — прогноз: весь пул при таком CR и среднем чеке отгрузки', sort: a => crT(a.shippedN, a), drill: 'shipped', render: a => two(pctRu(crT(a.shippedN, a)), forecast(a.shippedSum, a) ? `пул ≈ ${moneyShort(forecast(a.shippedSum, a))}` : null) },
+    { key: 'shipSum', label: 'Сумма отгрузок', hint: 'Ниже — какая доля потенциала получивших отгрузку реализована', sort: a => a.shippedSum, drill: 'shipped', render: a => two(a.shippedSum ? moneyShort(a.shippedSum) : '—', a.potShipped && a.shippedSum ? `${pctRu(pct(a.shippedSum, a.potShipped))} пот.` : null) },
   ];
   return (
     <div className="flex min-w-0 flex-col gap-4">
@@ -641,14 +756,14 @@ function Results({ model, matureDays }: { model: { roots: TreeNode[]; total: Tre
     { label: 'Отгружено', n: T.shippedN, sum: T.shippedSum },
   ];
   const cols: Col[] = [
-    { key: 'base', label: 'Взято', hint: 'Задачи периода без перепоставленных', sort: a => a.base, render: a => rub.format(a.base) },
-    { key: 'reached', label: 'Дозвон', hint: 'Разговор > 20 с по сделке задачи после постановки', sort: a => pct(a.reached, a.base), render: a => pctRu(pct(a.reached, a.base)) },
-    { key: 'sold', label: 'Продано', sort: a => a.soldSum, render: a => <>{a.soldN}<span className="ml-1 text-[11px] text-[var(--color-text-muted)]">{a.soldSum ? moneyShort(a.soldSum) : ''}</span></> },
-    { key: 'crSold', label: 'CR Взят → Продажа', sort: crSold, render: a => <Light v={crSold(a)} lo={10} hi={25} /> },
-    { key: 'shipped', label: 'Отгружено', sort: a => a.shippedSum, render: a => <>{a.shippedN}<span className="ml-1 text-[11px] text-[var(--color-text-muted)]">{a.shippedSum ? moneyShort(a.shippedSum) : ''}</span></> },
-    { key: 'crShip', label: 'CR Взят → Отгрузка', sort: crShipped, render: a => pctRu(crShipped(a)) },
+    { key: 'base', label: 'Взято', hint: 'Задачи периода без перепоставленных', sort: a => a.base, drill: 'base', render: a => rub.format(a.base) },
+    { key: 'reached', label: 'Дозвон', hint: 'Разговор > 20 с по сделке задачи после постановки', sort: a => pct(a.reached, a.base), drill: 'reached', render: a => pctRu(pct(a.reached, a.base)) },
+    { key: 'sold', label: 'Продано', sort: a => a.soldSum, drill: 'sold', render: a => <>{a.soldN}<span className="ml-1 text-[11px] text-[var(--color-text-muted)]">{a.soldSum ? moneyShort(a.soldSum) : ''}</span></> },
+    { key: 'crSold', label: 'CR Взят → Продажа', sort: crSold, drill: 'sold', render: a => <Light v={crSold(a)} lo={10} hi={25} /> },
+    { key: 'shipped', label: 'Отгружено', sort: a => a.shippedSum, drill: 'shipped', render: a => <>{a.shippedN}<span className="ml-1 text-[11px] text-[var(--color-text-muted)]">{a.shippedSum ? moneyShort(a.shippedSum) : ''}</span></> },
+    { key: 'crShip', label: 'CR Взят → Отгрузка', sort: crShipped, drill: 'shipped', render: a => pctRu(crShipped(a)) },
     { key: 'mature', label: `CR за ${matureDays} дн.`, hint: `Только задачи старше ${matureDays} дней: продажа в первые ${matureDays} дней — честная когорта`, sort: a => pct(a.matureSold, a.mature), render: a => (a.mature ? `${pctRu(pct(a.matureSold, a.mature))} из ${a.mature}` : '—') },
-    { key: 'progress', label: 'Ещё в работе', hint: `Задачи моложе ${matureDays} дней без отгрузки`, sort: a => a.inProgress, render: a => a.inProgress || '—' },
+    { key: 'progress', label: 'Ещё в работе', hint: `Задачи моложе ${matureDays} дней без отгрузки`, sort: a => a.inProgress, drill: 'progress', render: a => a.inProgress || '—' },
     { key: 'days', label: 'Дней до отгрузки', hint: 'Медиана от постановки задачи до отгрузки', sort: a => median(a.shipDays), render: a => median(a.shipDays) ?? '—' },
     { key: 'check', label: 'Средний чек', sort: a => (a.shippedN ? a.shippedSum / a.shippedN : null), render: a => (a.shippedN ? moneyShort(Math.round(a.shippedSum / a.shippedN)) : '—') },
   ];
