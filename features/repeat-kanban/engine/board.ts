@@ -56,6 +56,8 @@ export interface RepeatDealInfo {
   managerId: string | null;
   /** Головная товарная группа сделки — для «Свежих продаж» (13.11: карточка показывала отгрузку, а не продажу). */
   group?: string | null;
+  /** В сделке открытая задача проекта — среди нескольких открытых сделок заказчика главная она (16.11). */
+  hasTask?: boolean;
 }
 
 export interface CallInfo { at: string; sec: number; missed: boolean; inbound: boolean }
@@ -271,6 +273,7 @@ interface RepeatDealRow {
   amount: string | null; created_at: Date; lost_at: Date | null; sold_at: Date | null; delivered_at: Date | null; head_group_name?: string | null;
   current_manager_id: number | null;
   is_open: boolean;
+  has_task?: boolean;
 }
 
 /** Последняя повторная сделка каждого заказчика (по created_at). Один проход по sa.deals,
@@ -332,7 +335,12 @@ async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, Repea
                 d.amount, d.created_at, d.lost_at, d.sold_at, d.delivered_at, d.current_manager_id, d.head_group_name,
                 -- Открытая (не отказ и не отгружена, в т.ч. «Продано») — важнее самой свежей (21.10,
                 -- контакт 238334: открытая 215670 «Бронь» была старше отгруженной 267699).
-                coalesce(s.event_type NOT IN ('lost', 'shipped'), false) AS is_open
+                coalesce(s.event_type NOT IN ('lost', 'shipped'), false) AS is_open,
+                -- Открытых повторных сделок несколько — главная та, где открытая задача проекта (16.11, «Хэдс», компания
+                -- 42284: канбан поставил задачу в 279646, назавтра менеджер завёл копию 279845 — карточка показывала
+                -- свежую 279845, задача 176842 пропала с доски: ни приёмки, ни переноса).
+                EXISTS (SELECT 1 FROM sa.bitrix_task_current tk WHERE tk.deal_id = d.deal_id AND tk.group_id = ${REPEAT_PROJECT_GROUP_ID}
+                          AND NOT tk.is_deleted AND tk.status IN (1, 2, 3, 4, 6)) AS has_task
            FROM sa.deals d LEFT JOIN sa.stages s ON s.id = d.stage_id
            LEFT JOIN fix f ON f.deal_id = d.deal_id
            CROSS JOIN LATERAL unnest(ARRAY[
@@ -341,7 +349,7 @@ async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, Repea
            ]) AS r(ref)
           WHERE d.funnel_id = ANY($2::int[]) AND r.ref IS NOT NULL
        ) t WHERE client_key = ANY($1::text[])
-       ORDER BY client_key, is_open DESC, created_at DESC, deal_id DESC
+       ORDER BY client_key, is_open DESC, has_task DESC, created_at DESC, deal_id DESC
      ) x`,
     [refs, [...REPEAT_FUNNEL_IDS], fixIds, fixIds.map(id => fix.get(id)!.contactId), fixIds.map(id => fix.get(id)!.companyId)],
   );
@@ -353,12 +361,15 @@ async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, Repea
     createdAt: iso(r.created_at)!, lostAt: iso(r.lost_at), soldAt: iso(r.sold_at), deliveredAt: iso(r.delivered_at),
     managerId: r.current_manager_id !== null ? String(r.current_manager_id) : null,
     group: r.head_group_name ?? null,
+    hasTask: !!r.has_task,
   } as RepeatDealInfo]));
   const out = new Map<string, RepeatDealInfo>();
   for (const k of keys) {
     // Свои сделки + (для компании) сделки её контактов: открытая важнее, дальше — самая свежая.
     const cands = [refOf(k), ...(contactsOf.get(k) ?? [])].filter(r => byRef.has(r));
-    cands.sort((a, b) => Number(openRef.has(b)) - Number(openRef.has(a)) || byRef.get(b)!.createdAt.localeCompare(byRef.get(a)!.createdAt));
+    cands.sort((a, b) => Number(openRef.has(b)) - Number(openRef.has(a))
+      || Number(!!byRef.get(b)!.hasTask) - Number(!!byRef.get(a)!.hasTask)
+      || byRef.get(b)!.createdAt.localeCompare(byRef.get(a)!.createdAt));
     if (cands[0]) out.set(k, byRef.get(cands[0])!);
   }
   return out;
@@ -613,7 +624,7 @@ export async function buildRepeatBoard(opts: {
     fetchInboundCalls([...new Set(allKeys.map(refOfKey))]),
   ]);
   // Открытая сделка важнее закрытой, дальше — свежая; брак любого члена сильнее отсрочки.
-  const deals = fold(dealsRaw, (a, b) => (isOpen(a) !== isOpen(b) ? isOpen(a) : a.createdAt > b.createdAt));
+  const deals = fold(dealsRaw, (a, b) => (isOpen(a) !== isOpen(b) ? isOpen(a) : !!a.hasTask !== !!b.hasTask ? !!a.hasTask : a.createdAt > b.createdAt));
   const marks = fold(marksRaw, (a, b) => (MARK_RANK[a.kind] ?? 0) > (MARK_RANK[b.kind] ?? 0)
     || (a.kind === b.kind && a.kind === 'snooze' && (a.snoozeUntil ?? '') > (b.snoozeUntil ?? '')));
   const profileTypes = fold(profileTypesRaw);

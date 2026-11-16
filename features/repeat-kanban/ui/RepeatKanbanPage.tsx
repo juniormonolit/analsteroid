@@ -186,6 +186,7 @@ export function RepeatKanbanPage() {
   const [brakFor, setBrakFor] = useState<KanbanCard | null>(null);
   const [mergeFor, setMergeFor] = useState<KanbanCard | null>(null);
   const [tagsFor, setTagsFor] = useState<KanbanCard | null>(null);
+  const [rescheduleFor, setRescheduleFor] = useState<KanbanCard | null>(null);
   const [acceptFor, setAcceptFor] = useState<KanbanCard | null>(null);
   const [checkFor, setCheckFor] = useState<KanbanCard | null>(null);
   // С какой вкладки открыть карточку клиента: значок разбора → сразу «ИИ-анализ».
@@ -324,6 +325,7 @@ export function RepeatKanbanPage() {
       else if (a === 'brak_now') setBrakFor(c);
       else if (a === 'merge') setMergeFor(c);
       else if (a === 'tags') setTagsFor(c);
+      else if (a === 'reschedule') setRescheduleFor(c);
       else if (a === 'accept_task') setAcceptFor(c);
       else if (a === 'open_ai') setOpenCard(c, 'ai');
       else if (a === 'task_check') setCheckFor(c);
@@ -698,6 +700,7 @@ export function RepeatKanbanPage() {
         checkState={data?.aiCounts ? taskChecks?.[String(acceptFor.task.id)] ?? { hasCall: false, check: null } : null}
         renderReassign={reassignOpts ? (v, set) => <ReassignPicker opts={reassignOpts} currentId={acceptFor.managerId} value={v} onChange={set} /> : null}
         onClose={() => setAcceptFor(null)} onSaved={refresh} />}
+      {rescheduleFor?.task && <RescheduleModal card={rescheduleFor} onClose={() => setRescheduleFor(null)} onSaved={refresh} />}
       {tagsFor && <TagsModal title={cardName(tagsFor)} clientKey={tagsFor.clientKey} managerId={tagsFor.managerId} column={tagsFor.column}
         current={tagsFor.tags ?? []} defs={data?.tagDefs ?? []} onClose={() => setTagsFor(null)} onSaved={refresh} onDefsChanged={refresh} />}
     </div>
@@ -1121,7 +1124,7 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
 /** «433 дн.» → «1 г. 2 мес.» (Fable 23.10: в «Золотых рыбках» трёхзначные дни — шум). */
 const ageLabel = (d: number) => (d > 365 ? `${Math.floor(d / 365)} г.${Math.floor((d % 365) / 30.4) ? ` ${Math.floor((d % 365) / 30.4)} мес.` : ''}` : `${d} дн.`);
 
-type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge' | 'tags' | 'accept_task' | 'open_ai' | 'task_check' | 'new_task';
+type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge' | 'tags' | 'accept_task' | 'open_ai' | 'task_check' | 'new_task' | 'reschedule';
 
 /** Редкие действия карточки — в меню «⋯» (владелец 20.10: «глупо, когда висят прямо на лице»). */
 function CardMenu({ items, onAct }: { items: { label: string; act: CardAction; danger?: boolean }[]; onAct: (a: CardAction) => void }) {
@@ -1316,6 +1319,7 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
               <span className="shrink-0 rounded border border-dashed border-[var(--color-border-strong)] px-1 text-[10.5px] text-[var(--color-text-muted)]" title="Тип клиента не указан — заполните в карточке клиента">Тип?</span>
             )}
             <CardMenu items={[
+              ...(canManage && openTask && t!.state !== 'control' ? [{ label: 'Перенести срок…', act: 'reschedule' as const }] : []),
               ...(canManage && openTask && canTaskCol(col) ? [{ label: 'Ещё задача…', act: 'new_task' as const }] : []),
               ...(col.startsWith('pool') && canManage ? [{ label: 'Скрыть из пула', act: 'hide' as const }] : []),
               // Менеджер — из любой колонки (26.10: «буду строиться весной» при открытой сделке), кроме скрытых/брака/«Продано».
@@ -1542,6 +1546,53 @@ function windowEnd(c: KanbanCard): string {
   return mskYmd(now, WINDOW_DAYS);
 }
 const fmtYmd = (ymd: string) => ymd.split('-').reverse().join('.');
+
+/** «Перенести срок» открытой задачи (16.11, Коваленко: «нет варианта перенести на сегодня, чтобы прозванивала ещё раз»).
+ *  Срок меняется в Битриксе от имени РОПа, комментарий — в чат задачи. Сданную задачу переносят в окне приёмки. */
+function RescheduleModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () => void; onSaved: () => void }) {
+  const t = card.task!;
+  const [date, setDate] = useState(() => mskYmd(Date.now()));
+  const [time, setTime] = useState('19:00');
+  const [comment, setComment] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const presets = [{ label: 'Сегодня', v: mskYmd(Date.now()) }, { label: 'Завтра', v: mskYmd(Date.now() + 86_400_000) }, { label: '+3 дня', v: mskYmd(Date.now() + 3 * 86_400_000) }];
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try {
+      await post({ action: 'task_reschedule', taskId: t.id, dealId: t.dealId, deadline: date, deadlineTime: time, comment,
+        clientKey: card.clientKey, managerId: card.managerId, column: card.column });
+      onSaved(); onClose();
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    setBusy(false);
+  };
+  return (
+    <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`Перенести срок · ${cardName(card)}`} desktopWidth="sm:max-w-md">
+      <div className="flex flex-col gap-3 text-sm">
+        <a href={taskUrl(t.id)} target="_blank" rel="noreferrer" className="inline-flex min-w-0 items-center gap-1 text-[var(--color-accent)] hover:underline">
+          <ExternalLink size={13} className="shrink-0" /><span className="truncate">Задача #{t.id} · {t.responsibleName ?? 'менеджер'}{t.deadlineAt ? ` · сейчас до ${fmtDT(t.deadlineAt)}` : ''}</span>
+        </a>
+        <div className="grid grid-cols-3 gap-2">
+          {presets.map(p => <button key={p.label} type="button" onClick={() => setDate(p.v)} className={date === p.v ? BTN_ACTIVE : BTN_IDLE}>{p.label}</button>)}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <input type="date" value={date} min={mskYmd(Date.now())} onChange={e => setDate(e.target.value)} aria-label="Новая дата" className={`${fieldCls} min-h-11 min-w-0 flex-1`} />
+          <input type="time" value={time} onChange={e => setTime(e.target.value)} aria-label="Время" className={`${fieldCls} min-h-11 w-32`} />
+        </div>
+        <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+          Комментарий в задачу (необязательно)
+          <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="Прозвони ещё раз сегодня" className={fieldCls} />
+        </label>
+        <p className="text-xs text-[var(--color-text-muted)]">Срок изменится в Битриксе от вашего имени, комментарий уйдёт в чат задачи.</p>
+        {err && <p className="text-[var(--color-negative)]">{err}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button type="button" disabled={busy || !date} onClick={submit} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white disabled:opacity-50">{busy ? 'Сохраняю…' : 'Перенести'}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 function DeadlinePicker({ card, value, onChange, time, onTime }: {
   card: KanbanCard; value: string; onChange: (v: string) => void; time: string; onTime: (t: string) => void;

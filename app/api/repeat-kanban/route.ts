@@ -26,7 +26,7 @@ import { fetchKanbanSettings, listTemplates, renderTemplate } from '@/features/r
 import { resolvePeriod } from '@/features/repeat-kanban/engine/shippedGroups';
 import { setCustomerTags, TagError } from '@/features/repeat-kanban/engine/tags';
 import { normalizeParticipants } from '@/features/repeat-kanban/engine/participants';
-import { acceptTask, checkTask, closeReplacedTask, closeTasksOnBrak, returnTask, taskDealState, TaskReviewError } from '@/features/repeat-kanban/engine/taskReview';
+import { acceptTask, checkTask, closeReplacedTask, closeTasksOnBrak, rescheduleTask, returnTask, taskDealState, TaskReviewError } from '@/features/repeat-kanban/engine/taskReview';
 import { takeAttachments } from '@/features/repeat-kanban/engine/attachments';
 import { NO_TAG } from '@/features/repeat-kanban/engine/tagColors';
 
@@ -376,6 +376,19 @@ export async function POST(req: NextRequest) {
         payload: { from: managerId, to: newResponsibleId, workflowId: res.reassignWorkflowId ?? null } });
       return res;
     };
+
+    // «Перенести срок» открытой задачи (16.11, taskReview.rescheduleTask).
+    if (body.action === 'task_reschedule') {
+      const taskId = Number(body.taskId), dealId = Number(body.dealId);
+      if (!Number.isInteger(taskId) || taskId <= 0 || !Number.isInteger(dealId) || dealId <= 0) return NextResponse.json({ error: 'Нет задачи или сделки' }, { status: 400 });
+      const d = typeof body.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.deadline) ? body.deadline : null;
+      const t = typeof body.deadlineTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.deadlineTime) ? body.deadlineTime : '19:00';
+      if (!d) return NextResponse.json({ error: 'Укажите новую дату' }, { status: 400 });
+      const comment = typeof body.comment === 'string' ? body.comment.slice(0, 2000) : '';
+      const res = await rescheduleTask({ taskId, dealId, deadline: `${d}T${t}:00+03:00`, comment, authorId: session.bitrixUserId });
+      await logEvent(session, { type: 'task_rescheduled', requestId: rid, clientKey, managerId, columnBefore, dealId, taskId, payload: { deadline: `${d} ${t}`, comment, commented: res.commented } });
+      return NextResponse.json({ ok: true, ...res });
+    }
 
     // Приёмка задачи из канбана (владелец 22.10): принять / принять и закрыть сделку в брак / на доработку.
     if (body.action === 'task_accept' || body.action === 'task_return') {

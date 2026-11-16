@@ -20,6 +20,26 @@ async function taskAction(userId: string | null, method: string, params: Record<
 
 export class TaskReviewError extends Error {}
 
+/** «Перенести срок» открытой задачи (16.11, Коваленко: задача просрочена — «нет варианта перенести на сегодня, чтобы
+ *  прозванивала ещё раз»). Только задачи проекта 118 этой сделки, не закрытые и не ждущие приёмки (там — окно приёмки).
+ *  Срок — от имени РОПа (у исполнителя ALLOW_CHANGE_DEADLINE = N), причина — комментарием в чат задачи от него же. */
+export async function rescheduleTask(input: { taskId: number; dealId: number; deadline: string; comment: string; authorId: string | null }): Promise<{ commented: boolean }> {
+  if (new Date(input.deadline).getTime() < Date.now() + 5 * 60_000) throw new TaskReviewError('Новый срок уже прошёл — выберите время позже');
+  const r = await read<{ task?: BxTask }>('tasks.task.get', { taskId: input.taskId, select: ['ID', 'STATUS', 'GROUP_ID', 'UF_CRM_TASK'] })
+    .catch(e => { throw new TaskReviewError(`Битрикс не отдал задачу ${input.taskId}: ${e instanceof Error ? e.message : e}`); });
+  const t = r?.task;
+  if (!t?.id) { await rememberTaskStatus(input.taskId, 5, new Date().toISOString()); throw new TaskMissingError(`Задача ${input.taskId} удалена в Битриксе — поставьте новую`); }
+  if (Number(t.groupId) !== REPEAT_PROJECT_GROUP_ID) throw new TaskReviewError('Задача не из проекта «Повторные продажи»');
+  if (!(t.ufCrmTask ?? []).includes(`D_${input.dealId}`)) throw new TaskReviewError('Задача привязана к другой сделке — обновите доску');
+  if (String(t.status) === '5') { await rememberTaskStatus(input.taskId, 5, new Date().toISOString()); throw new TaskReviewError('Задача уже закрыта — поставьте новую'); }
+  if (String(t.status) === '4') throw new TaskReviewError('Задача ждёт приёмки — решите её в окне приёмки («На доработку» с новым сроком)');
+  await taskAction(input.authorId, 'tasks.task.update', { taskId: input.taskId, fields: { DEADLINE: input.deadline } });
+  await rememberTaskStatus(input.taskId, Number(t.status), null, input.deadline);
+  const when = new Date(input.deadline).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
+  const text = `Срок перенесён на ${when} (канбан повторных, Монолитика).${input.comment.trim() ? `\n${input.comment.trim()}` : ''}`;
+  return { commented: await note(input.taskId, input.authorId, text) };
+}
+
 interface BxTask { id?: string; status?: string; /** Задачу удалили в Битриксе (checkTask с allowDone). */ deleted?: boolean; groupId?: string; ufCrmTask?: string[] | null; title?: string; closedBy?: string | null; closedDate?: string | null; deadline?: string | null }
 
 // Состояние задачи по Битриксу, которое мы и так узнаём при приёмке (09.11: копия задач sa.bitrix_task_current
