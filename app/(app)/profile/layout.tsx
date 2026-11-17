@@ -1,8 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth/session';
-import { resolveSelfCard } from '@/lib/org/selfCard';
-import { hasPerm } from '@/lib/auth/perms';
-import { hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
+import { profileNavProps } from './profileNavProps';
 import { ProfileMobileNav } from './ProfileMobileNav';
 import { ProfileRail } from './ProfileRail';
 
@@ -17,31 +15,22 @@ import { ProfileRail } from './ProfileRail';
 // строка-селектор со шторкой на тот же список разделов (задача «три уровня меню
 // одновременно», 06.08): раньше здесь жила полоса ProfileNav, а вкладки карточки
 // рисовала ManagerCardPage — два неполных списка на одном экране.
+// Пропсы рельсы (mode, права) считает profileNavProps — общий с канбаном в Битриксе.
 // mode для рельсы решает resolveSelfCard: у РОПа карточка отдела без вкладок —
 // пункты-вкладки не рисуем (были бы мёртвые ссылки).
 export default async function ProfileLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect('/login');
 
-  const self = await resolveSelfCard(session);
-  const railMode = self.kind === 'no-bitrix' ? 'none' : self.mode;
-  // «Заявки» в рельсе — только тем, кому есть что решать (руководство/РОП).
-  const canManageRequests = hasFullManagerAccess(session) || (await managedDepartmentIds(session)).length > 0;
-  // Решение владельца 17.09: всем, кроме супер-админов, в ЛК видны только «Мой отчёт»,
-  // «Статистика», «Мой отдел» (РОП и старше), «Канбан повторных» (с 17.11 вместо «Мои заказчики»), «Настройки». Остальное
-  // (профиль, награды, кошелёк, магазин, квесты, движуха, коллеги…) — скрыто; страницы
-  // этих разделов редиректят сами (см. page.tsx каждого).
-  const restricted = !session.isSuperadmin;
-  // «Канбан повторных» вместо «Мои заказчики» (17.11) — только тем, кому канбан открыт.
-  const canRepeatKanban = hasPerm(session, 'section.repeat_kanban');
+  const nav = await profileNavProps(session);
 
   return (
     // overflow-x-hidden рядом с overflow-y-auto — правило 13 CLAUDE.md (иначе любая
     // забытая ширина внутри вкладки утаскивает вбок всю страницу, а не себя).
     <div className="h-full flex overflow-hidden">
-      <div className="hidden lg:flex shrink-0"><ProfileRail mode={railMode} canManageRequests={canManageRequests} restricted={restricted} canRepeatKanban={canRepeatKanban} /></div>
+      <div className="hidden lg:flex shrink-0"><ProfileRail {...nav} /></div>
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <div className="lg:hidden"><ProfileMobileNav mode={railMode} canManageRequests={canManageRequests} restricted={restricted} canRepeatKanban={canRepeatKanban} /></div>
+        <div className="lg:hidden"><ProfileMobileNav {...nav} /></div>
         <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">{children}</div>
       </div>
     </div>
