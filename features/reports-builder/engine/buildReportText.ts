@@ -75,6 +75,14 @@ export interface ReportSpec {
    * «агрегат везде, кроме личного».
    */
   aggregate?: { title: string; metrics?: ReportMetric[] };
+  /**
+   * Компактная сводка для отчёта ОДНОГО участника (правка владельца 17.11):
+   * без разбивки «Имя — значение» под каждым показателем (имя и так в заголовке)
+   * и без жирного на каждой строке — секция сводки = один блок «Показатель —
+   * значение» подряд. Работает только при entities.length === 1; ежедневные
+   * отчёты «МОСКВА»/«КОВАЛЕНКО» флаг не ставят, их вывод не меняется.
+   */
+  compactSingle?: boolean;
 }
 
 function renderSubtitle(s: SubtitleSpec): string {
@@ -87,6 +95,11 @@ export function headerBlock(title: string, subtitle: SubtitleSpec): Block {
 }
 
 /** Сводный блок: «[b]Метрика — итог[/b]» + строка на каждую сущность. */
+/** Сводная секция одного участника: «Метрика — значение» подряд, одним блоком. */
+function compactOverviewBlock(metrics: ReportMetric[], entityKey: string): Block {
+  return { lines: metrics.map(m => metricLine(m.label, m.values[entityKey] ?? m.values[TOTAL] ?? null, m.format)) };
+}
+
 function overviewBlock(metric: ReportMetric, entities: ReportEntity[]): Block {
   return {
     title: metricLine(metric.label, metric.values[TOTAL] ?? null, metric.format),
@@ -110,14 +123,20 @@ export function buildReportDocument(spec: ReportSpec): ReportDocument {
 
   // Шапка живёт в одной секции с первой сводной группой — так во всех трёх
   // эталонах: разделитель идёт только перед конверсиями, а не после даты.
+  const compact = spec.compactSingle === true && entities.length === 1;
+  const groupBlocks = (group: ReportMetric[]): Block[] =>
+    compact
+      ? (group.length ? [compactOverviewBlock(group, entities[0].key)] : [])
+      : group.map(m => overviewBlock(m, entities));
+
   const [firstOverview, ...restOverview] = overview;
   doc.push([
     headerBlock(spec.title, spec.subtitle),
-    ...(firstOverview ?? []).map(m => overviewBlock(m, entities)),
+    ...groupBlocks(firstOverview ?? []),
   ]);
 
   for (const group of restOverview) {
-    doc.push(group.map(m => overviewBlock(m, entities)));
+    doc.push(groupBlocks(group));
   }
 
   if (entityBlock.length > 0) {

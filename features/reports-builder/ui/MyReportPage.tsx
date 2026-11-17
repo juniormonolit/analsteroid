@@ -439,7 +439,7 @@ export function MyReportPage() {
                         aria-label={`Название «${e.label}» в отчёте`}
                         className="min-h-11 sm:min-h-9 min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[16px] sm:text-sm outline-none"
                       />
-                      <input
+                      {entities.length > 1 && <input
                         value={a.short ?? ''}
                         onChange={ev => setEntityAlias(key, { ...a, short: ev.target.value })}
                         placeholder="кратко"
@@ -447,7 +447,7 @@ export function MyReportPage() {
                         title="Кратко — для строки «ИТОГО (…)»"
                         aria-label={`Кратко для ИТОГО: ${e.label}`}
                         className="min-h-11 sm:min-h-9 w-20 sm:w-16 shrink-0 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[16px] sm:text-sm outline-none"
-                      />
+                      />}
                     </div>
                   </div>
                 );
@@ -467,7 +467,7 @@ export function MyReportPage() {
               ))}
             </div>
             <span className="text-[11px] leading-snug text-[var(--color-text-muted)]">
-              Пустое поле — как в Монолитике. Второе поле у участника — короткое имя для «ИТОГО (…)».
+              Пустое поле — как в Монолитике.{entities.length > 1 && ' Второе поле у участника — короткое имя для «ИТОГО (…)».'}
             </span>
           </div>
 

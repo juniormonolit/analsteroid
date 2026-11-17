@@ -602,5 +602,42 @@ animationCase('длинный отчёт (12 сущностей × 40 метри
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ОДИН УЧАСТНИК: компактная сводка без «Имя — значение» (правка владельца 17.11)
+// ═══════════════════════════════════════════════════════════════════════════════
+{
+  const one = (v: number) => ({ me: v, [TOTAL]: v });
+  const singleSpec = (compactSingle: boolean) => ({
+    title: 'Отчет: Юлия Канищева',
+    subtitle: { style: 'za' as const, date: '2026-11-17' },
+    entities: [{ key: 'me', title: 'Юлия Канищева', blockTitle: 'ПЛАН/ФАКТ С НАЧАЛА МЕСЯЦА' }],
+    overview: [
+      [{ label: '% ПЛАНА (ДЕНЬ)', format: 'pct0' as const, values: { me: { num: 0, den: 100 }, [TOTAL]: { num: 0, den: 100 } } },
+       { label: '% ПЛАНА (МЕСЯЦ)', format: 'pct0' as const, values: { me: { num: 74, den: 100 }, [TOTAL]: { num: 74, den: 100 } } }],
+      [{ label: 'Сумма перв.', format: 'money' as const, values: one(622_000) },
+       { label: 'Брони перв.', format: 'count' as const, values: one(8) }],
+    ],
+    entityBlock: [{ label: 'План продаж', format: 'mln' as const, values: one(1_400_000) }],
+    compactSingle,
+  });
+  eqText(buildReportText(singleSpec(true)), [
+    '[b]Отчет: Юлия Канищева[/b]',
+    '[i]за 17.11.2026[/i]',
+    '',
+    '% ПЛАНА (ДЕНЬ) — 0%',
+    '% ПЛАНА (МЕСЯЦ) — 74%',
+    '',
+    '————',
+    'Сумма перв. — 622 тыс',
+    'Брони перв. — 8',
+    '',
+    '————',
+    '[b]ПЛАН/ФАКТ С НАЧАЛА МЕСЯЦА[/b]',
+    'План продаж — 1,4 млн',
+  ].join('\n'), 'Один участник — компактная сводка');
+  check(buildReportText(singleSpec(false)).includes('Юлия Канищева — 622 тыс'), 'Без флага — разбивка по участнику как раньше');
+  animationCase('один участник, компактно', singleSpec(true));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 console.log(`\n${passed} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

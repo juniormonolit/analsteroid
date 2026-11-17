@@ -317,11 +317,20 @@ export async function buildMyReportSpec(
   const spec: ReportSpec = {
     title: labels.title ?? (onlySelf ? `Отчет: ${display[0]?.title ?? ''}` : `Отчет: ${display.map(d => d.title).join(', ')}`),
     subtitle: { style: 'za', date: dateStr },
-    entities: display.map(d => ({ key: d.key, title: d.title, blockTitle: d.title.toUpperCase() })),
+    // Один участник (правка владельца 17.11): имя уже в заголовке отчёта, поэтому
+    // сводка — без строк «Имя — значение», а блок план/факт подписан не именем
+    // (повтор заголовка), а тем, что в нём считается: месяц по дату отчёта.
+    entities: display.map(d => ({
+      key: d.key,
+      title: d.title,
+      blockTitle: display.length === 1 ? 'ПЛАН/ФАКТ С НАЧАЛА МЕСЯЦА' : d.title.toUpperCase(),
+    })),
+    compactSingle: display.length === 1,
     overview: selectedOverview.length ? [planPct, selectedOverview] : [planPct],
     entityBlock: planFactMetrics,
-    // Агрегат — везде, кроме личного отчёта из одной сущности (правило владельца).
-    aggregate: onlySelf || labels.showTotal === false
+    // Агрегат — везде, кроме отчёта из одной сущности (правило владельца): при
+    // одном участнике (в т.ч. одном отделе) ИТОГО слово в слово повторяет его блок.
+    aggregate: display.length === 1 || labels.showTotal === false
       ? undefined
       : { title: `ИТОГО (${display.map(d => d.short).join('+')})`, metrics: planFactMetrics },
   };
