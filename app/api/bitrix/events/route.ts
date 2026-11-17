@@ -43,7 +43,7 @@ const APP_ROOT = process.cwd().replace(/[/\\]\.next[/\\]standalone[/\\]?$/, '');
 const CAPTURE_PATH = process.env.BITRIX_EVENTS_TOKEN_CAPTURE_PATH || join(APP_ROOT, 'bitrix-events-token.captured');
 function captureEventsToken(data: Record<string, unknown>): void {
   const { token } = pickAuth(data);
-  if (!/^[A-Za-z0-9]{16,64}$/.test(token)) return;
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(token)) return; // 36 симв.: UUID с дефисами
   try {
     let prev: { token: string; hits: number } | null = null;
     if (existsSync(CAPTURE_PATH)) {
