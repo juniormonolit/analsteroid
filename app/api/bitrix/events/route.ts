@@ -37,7 +37,10 @@ let notConfiguredWarned = false;
 // secrets.env и перезапускает. Событие при этом всё равно отклоняется (fail-closed не ослаблен). Домен в
 // теле подделывается — поэтому в файл пишется счётчик совпадений: верить токену, который пришёл ≥2 раз
 // и без «другого токена» в логе.
-const CAPTURE_PATH = process.env.BITRIX_EVENTS_TOKEN_CAPTURE_PATH || join(process.cwd(), 'bitrix-events-token.captured');
+// Прод запускается из ~/analsteroid/.next/standalone (папку перезаписывает каждая выкатка) — файл кладём
+// в корень приложения, рядом с secrets.env.
+const APP_ROOT = process.cwd().replace(/[/\\]\.next[/\\]standalone[/\\]?$/, '');
+const CAPTURE_PATH = process.env.BITRIX_EVENTS_TOKEN_CAPTURE_PATH || join(APP_ROOT, 'bitrix-events-token.captured');
 function captureEventsToken(data: Record<string, unknown>): void {
   const { token } = pickAuth(data);
   if (!/^[A-Za-z0-9]{16,64}$/.test(token)) return;
