@@ -274,7 +274,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   const validTabKeys = (restrictedTabs ? RESTRICTED_TAB_KEYS : MANAGER_TABS.map(t => t.key)) as string[];
   const tab: ManagerTabKey = tabParam && validTabKeys.includes(tabParam)
     ? (tabParam as ManagerTabKey)
-    : (customerParam || restrictedTabs) ? 'customers' : 'profile';
+    : customerParam ? 'customers' : restrictedTabs ? 'stats' : 'profile'; // 17.11: заказчики ушли из меню → по умолчанию «Статистика»
   // Позиция скролла по вкладкам (задача 2947, П2.12 плана мобильной
   // готовности) — все вкладки ЛК рендерятся в ОДНОМ общем скролл-контейнере
   // (managerScrollRef, см. `<PullToRefresh>` ниже), поэтому переключение

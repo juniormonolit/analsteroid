@@ -27,13 +27,14 @@ import { useProfileNav, activeProfileNavItem } from './useProfileNav';
 // правило 8 CLAUDE.md (сначала CSS): «мобильный браузер» и «PWA на телефоне»
 // здесь неразличимы и не должны различаться, оба узкие; PWA на широком десктопе
 // должно вести себя как десктоп — и это то же условие «узкий вьюпорт».
-export function ProfileMobileNav({ mode, canManageRequests = false, restricted = false }: {
+export function ProfileMobileNav({ mode, canManageRequests = false, restricted = false, canRepeatKanban = false }: {
   mode: 'manager' | 'department' | 'none';
   canManageRequests?: boolean;
   /** Не супер-админ: только рабочие разделы (17.09). */
   restricted?: boolean;
+  canRepeatKanban?: boolean;
 }) {
-  const items = useProfileNav({ mode, canManageRequests, restricted });
+  const items = useProfileNav({ mode, canManageRequests, restricted, canRepeatKanban });
   const current = activeProfileNavItem(items);
   const [open, setOpen] = useState(false);
   const pathname = usePathname();

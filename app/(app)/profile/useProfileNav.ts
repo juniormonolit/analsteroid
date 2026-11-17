@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   IdCard, Users, UsersRound, Settings, ClipboardList, Contact,
   Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel, Wallet, Zap, Bell, ClipboardCheck,
-  FileText, Sprout,
+  FileText, Sprout, KanbanSquare,
 } from 'lucide-react';
 import { MANAGER_TABS, type ManagerTabKey } from '@/features/manager-card/ui/ManagerTabs';
 import { useNotifications } from '@/features/profile/ui/NotificationsPage';
@@ -58,7 +58,7 @@ const TAB_ICONS: Record<ManagerTabKey, typeof IdCard> = {
 const GROUP: Record<string, number> = {
   'tab:profile': 0,
   'report': 1, 'tab:stats': 1,
-  'tab:planyorka': 2, 'tab:customers': 2, 'tab:quests': 2,
+  'tab:planyorka': 2, 'repeat-kanban': 2, 'tab:customers': 2, 'tab:quests': 2,
   'tab:rewards': 3, 'tab:skills': 3, 'tab:wallet': 3, 'tab:shop': 3, 'tab:wheel': 3, 'tab:inventory': 3,
   'team': 4, 'requests': 4, 'people': 4, 'pulse': 4,
   'notifications': 5,
@@ -77,12 +77,17 @@ const DEFAULT_GROUP = 2;
  */
 /** Разделы ЛК, доступные не супер-админам (решение владельца 17.09). «Мой отдел» —
  *  только руководителям (canManageRequests — тот же признак «РОП и старше»). */
-const RESTRICTED_KEYS = new Set(['tab:customers', 'tab:stats', 'report', 'team', 'settings']); // «Настройки» — личные (тема, пароль), нужны всем; их ошибочно прятали вместе с остальным (07.10)
+// 17.11 (владелец): «Мои заказчики» в меню заменены «Канбаном повторных» — «канбан — эволюция „Моих заказчиков“,
+// отдельно они больше не нужны». Сама вкладка ?tab=customers жива для старых ссылок (дайджест бота, ?customer=),
+// но в меню её нет ни у кого. Канбан — отдельная страница вне /profile (своё право section.repeat_kanban).
+const RESTRICTED_KEYS = new Set(['repeat-kanban', 'tab:stats', 'report', 'team', 'settings']); // «Настройки» — личные (тема, пароль), нужны всем; их ошибочно прятали вместе с остальным (07.10)
 
-export function useProfileNav({ mode, canManageRequests = false, restricted = false }: {
+export function useProfileNav({ mode, canManageRequests = false, restricted = false, canRepeatKanban = false }: {
   mode: 'manager' | 'department' | 'none';
   canManageRequests?: boolean;
   restricted?: boolean;
+  /** Право section.repeat_kanban (решает сервер в layout). */
+  canRepeatKanban?: boolean;
 }): ProfileNavItem[] {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -116,6 +121,7 @@ export function useProfileNav({ mode, canManageRequests = false, restricted = fa
   if (mode === 'manager' || mode === 'department') {
     for (const t of MANAGER_TABS) {
       if (t.key === 'planyorka' && !planyorkaEnabled) continue;
+      if (t.key === 'customers') continue; // заменены «Канбаном повторных» (17.11), см. RESTRICTED_KEYS
       if (mode === 'department' && !DEPT_TABS.has(t.key)) continue;
       items.push({
         key: `tab:${t.key}`,
@@ -130,6 +136,13 @@ export function useProfileNav({ mode, canManageRequests = false, restricted = fa
     items.push({
       key: 'tab:profile', href: '/profile', label: 'Профиль', Icon: IdCard,
       active: pathname === '/profile',
+    });
+  }
+
+  if (canRepeatKanban) {
+    items.push({
+      key: 'repeat-kanban', href: '/repeat-kanban', label: 'Канбан повторных', Icon: KanbanSquare,
+      active: pathname.startsWith('/repeat-kanban'),
     });
   }
 

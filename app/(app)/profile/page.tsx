@@ -18,7 +18,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
 
   const self = await resolveSelfCard(session);
   // Не супер-админ (17.09): из вкладок карточки доступны только «Мои заказчики» и
-  // «Статистика»; вход без вкладки или на скрытую — на заказчиков. Деп-линк
+  // «Статистика»; вход без вкладки или на скрытую — на «Статистику» (с 17.11: заказчиков
+  // в меню заменил «Канбан повторных», вкладка жива только для старых ссылок). Деп-линк
   // ?customer= без ?tab= и так открывает заказчиков — его не трогаем.
   const restricted = !session.isSuperadmin;
   if (restricted && self.kind === 'card') {
@@ -27,7 +28,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
     if (!(tab === 'customers' || tab === 'stats') && !(typeof sp.customer === 'string' && !tab)) {
       const qs = new URLSearchParams();
       for (const [k, v] of Object.entries(sp)) if (typeof v === 'string' && k !== 'tab') qs.set(k, v);
-      qs.set('tab', 'customers');
+      qs.set('tab', 'stats');
       redirect(`/profile?${qs.toString()}`);
     }
   }
