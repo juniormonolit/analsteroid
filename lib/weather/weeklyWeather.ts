@@ -185,7 +185,22 @@ export async function askWeeklyWeatherAll(): Promise<{ asked: number; autoFilled
       }
       continue;
     }
-    if (row?.asked_at) continue; // уже спрашивали (у Осипова в пятницу и не ответил — ждём тот ответ)
+    // Осипов не ответил на пятничный вопрос про будни (17.11: ответы тогда ещё и не доходили до приложения) —
+    // раньше понедельник молчал «ждём тот ответ», и неделя оставалась пустой. Теперь спрашиваем про всю неделю:
+    // метку части снимаем, ответ ляжет целиком, без «Пн–Пт:».
+    if (split.has(city) && row?.asked_at && !row.answered_at && (await getPart(city, weekStart)) === 'weekdays') {
+      const msgId = await sendBitrixBotMessage(to,
+        `Как погодка на той неделе была? (${WEATHER_CITIES[city].label}, ${fmtRu(weekStart)}—${fmtRu(weekEnd)})\n`
+        + `В пятницу ответа не дождался — расскажи одним сообщением про всю неделю, с выходными.`,
+        undefined, 'weekly_weather');
+      if (msgId > 0) {
+        await setPart(city, weekStart, null);
+        await db.query(`UPDATE weekly_weather SET asked_bitrix_id = $3, asked_at = now(), updated_at = now() WHERE city = $1 AND week_start = $2`, [city, weekStart, to]);
+        asked++;
+      }
+      continue;
+    }
+    if (row?.asked_at) continue; // уже спрашивали
 
     // Канал 'report': владелец назвал живой комментарий обязательным («это
     // обязательно») — вопрос часть отчётности и не должен глохнуть вместе с

@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { handleIncomingBotMessage, handleBindDealCommand } from '@/lib/deal-chats/service';
 import { handleAdviceFeedback } from '@/lib/bot/feedback';
 import { systemDb } from '@/lib/db/clients';
-import { authenticateBitrixEvent } from '@/lib/bitrix/eventsAuth';
+import { authenticateBitrixEvent, pickAuth, tokenHint } from '@/lib/bitrix/eventsAuth';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
 
 // Журнал входящих (панель управления «Аналитиком», 09.09): каждое сообщение/клик
 // человека боту — строкой, с пометкой, какой обработчик его забрал. Не бросает:
@@ -28,6 +30,36 @@ async function logInbound(row: {
 // С 29.09 fail-closed: без BITRIX_EVENTS_APP_TOKEN в окружении события отклоняются.
 let notConfiguredWarned = false;
 
+// Перехват токена (17.11): сервер 62 умер вместе со start.sh, где жил BITRIX_EVENTS_APP_TOKEN, — на новом
+// проде токена нет, все события «Аналитика» отклоняются, ответы людей (погода, «Отчёт») теряются. Узнать
+// токен можно только из самого события, а в лог его писать нельзя (#8256). Поэтому, пока токен НЕ задан,
+// событие с нашим доменом кладёт свой токен в файл 600 рядом с приложением; владелец переносит его в
+// secrets.env и перезапускает. Событие при этом всё равно отклоняется (fail-closed не ослаблен). Домен в
+// теле подделывается — поэтому в файл пишется счётчик совпадений: верить токену, который пришёл ≥2 раз
+// и без «другого токена» в логе.
+const CAPTURE_PATH = process.env.BITRIX_EVENTS_TOKEN_CAPTURE_PATH || join(process.cwd(), 'bitrix-events-token.captured');
+function captureEventsToken(data: Record<string, unknown>): void {
+  const { token } = pickAuth(data);
+  if (!/^[A-Za-z0-9]{16,64}$/.test(token)) return;
+  try {
+    let prev: { token: string; hits: number } | null = null;
+    if (existsSync(CAPTURE_PATH)) {
+      const m = /^BITRIX_EVENTS_APP_TOKEN=(\S+)\s+# hits=(\d+)/.exec(readFileSync(CAPTURE_PATH, 'utf8'));
+      if (m) prev = { token: m[1], hits: Number(m[2]) };
+    }
+    if (prev && prev.token !== token) {
+      console.warn(`[bitrix/events] перехват токена: пришёл ДРУГОЙ токен (${tokenHint(token)}) — файл не тронут, проверить вручную`);
+      return;
+    }
+    const hits = (prev?.hits ?? 0) + 1;
+    writeFileSync(CAPTURE_PATH, `BITRIX_EVENTS_APP_TOKEN=${token}  # hits=${hits}\n`, { mode: 0o600 });
+    chmodSync(CAPTURE_PATH, 0o600);
+    console.warn(`[bitrix/events] токен событий перехвачен в ${CAPTURE_PATH} (${tokenHint(token)}, совпадений ${hits}) — перенести в secrets.env`);
+  } catch (e) {
+    console.warn('[bitrix/events] перехват токена не удался:', e instanceof Error ? e.message : e);
+  }
+}
+
 /** null — событие подлинное; иначе готовый ответ 403. Токен в лог — только первые 4 символа. */
 function authenticateEvent(data: Record<string, unknown>): NextResponse | null {
   const r = authenticateBitrixEvent(data);
@@ -36,10 +68,13 @@ function authenticateEvent(data: Record<string, unknown>): NextResponse | null {
     console.warn('[bitrix/events] отклонено: чужой домен');
   } else if (r.reason === 'token_mismatch') {
     console.warn(`[bitrix/events] отклонено: application_token не совпал (получен ${r.hint})`);
-  } else if (!notConfiguredWarned) {
-    notConfiguredWarned = true;
-    console.error('[bitrix/events] BITRIX_EVENTS_APP_TOKEN не задан — ВСЕ события отклоняются (fail-closed). '
-      + `Задайте его в start.sh = auth[application_token] событий Битрикса (получен ${r.hint}).`);
+  } else {
+    if (!notConfiguredWarned) {
+      notConfiguredWarned = true;
+      console.error('[bitrix/events] BITRIX_EVENTS_APP_TOKEN не задан — ВСЕ события отклоняются (fail-closed). '
+        + `Задайте его в secrets.env = auth[application_token] событий Битрикса (получен ${r.hint}).`);
+    }
+    captureEventsToken(data);
   }
   return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 }
