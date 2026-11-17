@@ -690,7 +690,7 @@ export function RepeatKanbanPage() {
           sideActions={openCard ? <TagDefsCtx.Provider value={tagDefMap}><TaskChecksCtx.Provider value={taskChecks ?? {}}><TaskNotesCtx.Provider value={notes ?? {}}><KanbanSideActions c={openCard} h={handlers} /></TaskNotesCtx.Provider></TaskChecksCtx.Provider></TagDefsCtx.Provider> : undefined} />
       )}
       {taskFor && <TaskModal card={taskFor} load={loadOf(taskFor.managerId)} limit={taskLimit} reassign={reassignOpts} onClose={() => setTaskFor(null)} onSaved={refresh} />}
-      {reviewFor && <ReviewModal card={reviewFor} onClose={() => setReviewFor(null)} onSaved={refresh} />}
+      {reviewFor && <ReviewModal card={reviewFor} reassign={reassignOpts} onClose={() => setReviewFor(null)} onSaved={refresh} />}
       {hideFor && <HideModal card={hideFor} onClose={() => setHideFor(null)} onSaved={refresh} />}
       {hideReqFor && <HideModal card={hideReqFor} request onClose={() => setHideReqFor(null)} onSaved={refresh} />}
       {brakFor && <BrakNowModal card={brakFor} onClose={() => setBrakFor(null)} onSaved={refresh} />}
@@ -2388,7 +2388,7 @@ function BrakNowModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: (
   );
 }
 
-function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () => void; onSaved: () => void }) {
+function ReviewModal({ card, reassign, onClose, onSaved }: { card: KanbanCard; reassign: ReassignOpts | null; onClose: () => void; onSaved: () => void }) {
   // Менеджер просил скрыть (26.10) — по умолчанию согласиться с ним: «Отложить до» его даты; брак — переключением.
   const hr = card.hideRequest;
   const [decision, setDecision] = useState<'brak' | 'no_answer' | 'return' | 'postpone'>(hr ? 'postpone' : 'brak');
@@ -2397,6 +2397,8 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
   const [until, setUntil] = useState(hr?.until ?? postponePresets()[0].value);
   // «Вернуть менеджеру» ставит задачу — участники, как в окне задачи (10.11: «сразу добавить РОПа менеджера»).
   const [parts, setParts] = useState(initialParticipants);
+  // «Вернуть менеджеру» — и сменить менеджера (17.11, владелец: «при возврате нужна возможность сменить менеджера»).
+  const [newManager, setNewManager] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Правило: брак без дозвона и до трёх попыток — только с комментарием РОПа.
@@ -2408,7 +2410,8 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
     try {
       await post({ action: 'review', clientKey: card.clientKey, managerId: card.managerId, column: card.column, dealId: card.deal?.dealId,
         decision, reason: decision === 'brak' ? reason : null, comment, touchesDone: done, until: decision === 'postpone' ? until : undefined,
-        participants: decision === 'return' ? participantsPayload(parts) : undefined });
+        participants: decision === 'return' ? participantsPayload(parts) : undefined,
+        newManagerId: decision === 'return' && newManager ? newManager : undefined });
       onSaved(); onClose();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
@@ -2461,7 +2464,8 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
           ))}
         </div>
         {decision === 'postpone' && <PostponePicker value={until} onChange={setUntil} />}
-        {decision === 'return' && <ParticipantsPicker value={parts} onChange={setParts} managerIds={[card.managerId]} />}
+        {decision === 'return' && reassign && <ReassignPicker opts={reassign} currentId={card.managerId} value={newManager} onChange={setNewManager} />}
+        {decision === 'return' && <ParticipantsPicker value={parts} onChange={setParts} managerIds={[newManager || card.managerId]} />}
         {decision === 'brak' && (
           <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
             Причина
