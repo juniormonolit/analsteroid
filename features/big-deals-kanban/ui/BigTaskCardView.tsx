@@ -44,7 +44,7 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
       onDragEnd={() => onDragEnd?.()}
       data-task-id={card.id}
       title={`№ ${card.id} · создана ${fmtD(card.createdAt)} · ${card.title}`}
-      className={`group relative flex w-full flex-col gap-1.5 overflow-hidden rounded-lg border bg-[var(--color-bg)] p-2.5 pl-3 text-left text-xs shadow-sm outline-none transition hover:border-[var(--color-border-strong)] hover:shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] active:scale-[0.99] ${selected ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : card.stuck ? 'border-[var(--color-negative)]/50' : 'border-[var(--color-border)]'} ${dragging ? 'opacity-40' : ''} ${draggable ? 'cursor-grab' : 'cursor-pointer'}`}
+      className={`group relative flex w-full shrink-0 flex-col gap-1.5 overflow-hidden rounded-lg border bg-[var(--color-bg)] p-2.5 pl-3 text-left text-xs shadow-sm outline-none transition hover:border-[var(--color-border-strong)] hover:shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] active:scale-[0.99] ${selected ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : card.stuck ? 'border-[var(--color-negative)]/50' : 'border-[var(--color-border)]'} ${dragging ? 'opacity-40' : ''} ${draggable ? 'cursor-grab' : 'cursor-pointer'}`}
     >
       {/* Полоса-сигнал слева: застряла — красная, ждёт контроля — акцентная. */}
       {(card.stuck || card.state === 'control') && (
