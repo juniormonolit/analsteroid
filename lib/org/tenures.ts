@@ -33,6 +33,39 @@ export function normName(s: string): string {
   return s.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
 }
 
+// Логин без человека: Битрикс между людьми переименовывает его в заглушку —
+// «Manager106», «User 1891», латинский логин. Без кириллицы = никого нет.
+export function isPlaceholderName(name: string): boolean {
+  return !/[а-яё]/i.test(name) || /^user\s*\d+$/i.test(name.trim());
+}
+
+interface HistRow { name: string; vf: string; vt: string | null }
+interface Segment { name: string; start: string | null; end: string | null }
+
+// История имён логина → периоды людей. Первая запись истории — затравка org-sync
+// 13.07.2026 (начало неизвестно). Заглушка дольше 3 дней разрывает склейку.
+export function historySegments(h: HistRow[]): Segment[] {
+  const out: Segment[] = [];
+  h.forEach((row, i) => {
+    if (isPlaceholderName(row.name)) return;
+    const last = out[out.length - 1];
+    // Тот же человек сразу же или после короткой заглушки (≤ 3 дней) — один период.
+    const gap = last?.end ? (Date.parse(row.vf) - Date.parse(last.end)) / 86_400_000 : Infinity;
+    if (last && gap <= 3 && samePerson(last.name, row.name)) {
+      last.end = row.vt; last.name = row.name;
+    } else {
+      out.push({ name: row.name, start: i === 0 ? null : row.vf, end: row.vt });
+    }
+  });
+  return out;
+}
+
+// С какой даты на логине текущее имя (открытая строка истории), иначе — сегодня.
+function sinceOf(h: HistRow[], name: string, today: string): string {
+  const open = h.length ? h[h.length - 1] : null;
+  return open && !open.vt && normName(open.name) === normName(name) ? open.vf : today;
+}
+
 // «Иванов Иван Сергеевич» ≈ «Иван Иванов»: фамилия и имя совпадают без учёта порядка.
 function samePerson(a: string, b: string): boolean {
   const wa = new Set(normName(a).split(' ')), wb = normName(b).split(' ');
@@ -148,24 +181,30 @@ export async function reconcileTenures(): Promise<ReconcileResult> {
       }
 
       if (!lastBy.has(u.id)) {
-        // Фиксация логина: прошлые имена + текущий человек.
-        for (let i = 0; i < h.length; i++) {
-          const row = h[i];
-          if (!row.vt) continue;
+        // Фиксация логина: история имён → периоды людей (заглушки — «логин свободен»,
+        // подряд идущие записи одного человека склеиваются) + текущий человек.
+        const segs = historySegments(h);
+        for (const s of segs) {
+          if (s.end === null) continue;
           await insertTenure(client, {
-            bitrixId: u.id, personName: row.name, bxName: row.name, startDate: i === 0 ? null : row.vf, endDate: row.vt,
+            bitrixId: u.id, personName: s.name, bxName: s.name, startDate: s.start, endDate: s.end,
             position: null, hrItemId: null, source: 'rename', by: 'org-sync',
           });
         }
-        const openHist = h.length ? h[h.length - 1] : null;
-        const renamedStart = openHist && !openHist.vt && h.length > 1 ? openHist.vf : null;
-        const card = hrBy.get(u.id);
-        await insertTenure(client, {
-          bitrixId: u.id, personName: u.name, bxName: u.name,
-          startDate: manual.get(u.id) ?? card?.hired ?? renamedStart,
-          endDate: null, position: card?.position ?? null, hrItemId: card?.item_id ?? null,
-          source: 'snapshot', by: 'org-sync',
-        });
+        if (!isPlaceholderName(u.name)) {
+          const openSeg = segs.find(s => s.end === null);
+          const segStart = openSeg?.start ?? null;
+          // Ручная дата/дата карточки раньше прихода человека на логин — от предшественника
+          // (ручная) или найм до этого логина; для периода на логине берём дату прихода.
+          const fits = (d: string | null | undefined) => (d && (!segStart || d >= segStart) ? d : null);
+          const card = hrBy.get(u.id);
+          await insertTenure(client, {
+            bitrixId: u.id, personName: u.name, bxName: u.name,
+            startDate: fits(card?.hired) ?? fits(manual.get(u.id)) ?? segStart,
+            endDate: null, position: card?.position ?? null, hrItemId: card?.item_id ?? null,
+            source: 'snapshot', by: 'org-sync',
+          });
+        }
         res.seeded++;
         continue;
       }
@@ -177,24 +216,27 @@ export async function reconcileTenures(): Promise<ReconcileResult> {
         // Человека завели руками раньше, чем Битрикс переименовал логин, — это он и есть.
         await client.query('UPDATE sa.employee_tenures SET bx_name = $2 WHERE id = $1', [cur.id, u.name]);
       } else if (cur && normName(cur.bx_name!) !== normName(u.name)) {
-        // На логине сменилось имя → новый человек. Дата смены — из истории org-sync.
-        const openHist = h.length ? h[h.length - 1] : null;
-        const since = openHist && !openHist.vt && normName(openHist.name) === normName(u.name) ? openHist.vf : today;
+        // На логине сменилось имя → человек ушёл; если новое имя не заглушка — пришёл новый.
+        // Дата смены — из истории org-sync.
+        const since = sinceOf(h, u.name, today);
         await client.query(
           `UPDATE sa.employee_tenures SET end_date = GREATEST(coalesce(start_date, $2::date), $2::date),
                   updated_by = 'org-sync', updated_at = now() WHERE id = $1`, [cur.id, since]);
-        await insertTenure(client, {
-          bitrixId: u.id, personName: u.name, bxName: u.name, startDate: since, endDate: null,
-          position: null, hrItemId: null, source: 'rename', by: 'org-sync',
-        });
+        if (!isPlaceholderName(u.name)) {
+          await insertTenure(client, {
+            bitrixId: u.id, personName: u.name, bxName: u.name, startDate: since, endDate: null,
+            position: null, hrItemId: null, source: 'rename', by: 'org-sync',
+          });
+        }
         res.renamed++;
       } else if (!cur) {
-        // Все периоды закрыты (уволили руками). Пока в Битриксе на логине то же имя —
-        // логин свободен, ничего не открываем. Имя сменилось — сел новый человек.
+        // Открытого периода нет (логин свободен или уволили руками). Заглушка или прежнее
+        // имя в Битриксе — ничего не открываем. Новое настоящее имя — сел новый человек.
+        if (isPlaceholderName(u.name)) continue;
         const last = lastBy.get(u.id)!;
         if (normName(last.bx_name ?? last.person_name) === normName(u.name)) continue;
         await insertTenure(client, {
-          bitrixId: u.id, personName: u.name, bxName: u.name, startDate: today, endDate: null,
+          bitrixId: u.id, personName: u.name, bxName: u.name, startDate: sinceOf(h, u.name, today), endDate: null,
           position: null, hrItemId: null, source: 'snapshot', by: 'org-sync',
         });
         res.seeded++;
