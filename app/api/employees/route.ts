@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { permError } from '@/lib/auth/perms';
+import { hasPerm, permError } from '@/lib/auth/perms';
 import { detectRenames, getEmployeesList } from '@/features/employees/engine/registry';
 import { hasFullManagerAccess } from '@/lib/org/managerAccess';
 import { canSeeManager, getSessionScope } from '@/lib/org/sessionScope';
@@ -21,7 +21,7 @@ import { canSeeManager, getSessionScope } from '@/lib/org/sessionScope';
 // (админ — все), форма ответа прежняя.
 export async function GET() {
   const session = await getSession();
-  const err = permError(session, 'section.employees');
+  const err = hasPerm(session, 'section.employees_edit') ? null : permError(session, 'section.employees');
   if (err) return err;
 
   let detect = null;
@@ -32,6 +32,8 @@ export async function GET() {
     console.error('[employees] детект переименований упал:', e);
   }
   const [allRows, scope] = await Promise.all([getEmployeesList(), getSessionScope(session!)]);
-  const rows = allRows.filter(r => canSeeManager(scope, String(r.bitrixId)));
-  return NextResponse.json({ rows, detect, canOpenCabinet: hasFullManagerAccess(session!) });
+  // Носитель section.employees_edit наводит порядок во всех логинах — видит всех.
+  const canEdit = hasPerm(session!, 'section.employees_edit');
+  const rows = canEdit ? allRows : allRows.filter(r => canSeeManager(scope, String(r.bitrixId)));
+  return NextResponse.json({ rows, detect, canOpenCabinet: hasFullManagerAccess(session!), canEdit });
 }

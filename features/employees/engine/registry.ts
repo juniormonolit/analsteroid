@@ -25,6 +25,8 @@
 
 import { getAllRopAndDirectorIds } from '@/lib/org/callControlScope';
 import { analyticsDb } from '@/lib/db/clients';
+import { getHrCardsByBitrixId, type HrCardInfo } from '@/lib/org/hrCards';
+import { listTenures } from '@/lib/org/tenures';
 export { planRenameOps, normalizeName, type RenameOp } from './tenure';
 
 export interface DetectResult { seeded: number; renamed: number; skippedFlips: number; checkedAt: number }
@@ -45,10 +47,12 @@ export interface EmployeeListRow {
   departmentName: string | null;
   branch: string | null;
   isActive: boolean;
-  hireDate: string | null;          // sa.employees больше не читаем (задача 2820) — всегда null,
-                                     // осталось только для совместимости формы; стаж живёт на manualStartDate
+  hireDate: string | null;          // дата найма из кадровой карточки Битрикса (смарт-процесс 1054,
+                                     // sa.employee_hr_cards); null — карточки нет / не сопоставлена /
+                                     // создана массовой загрузкой 09.12.2024
   manualStartDate: string | null;   // sa.employee_registry — правится в UI
   startDate: string | null;         // COALESCE(manual, hire) — база стажа
+  hrCard: HrCardInfo | null;        // кадровая карточка (должность, стадия) — если сопоставлена
   notes: string;
   updatedBy: string | null;
   updatedAt: string | null;
@@ -62,15 +66,14 @@ export interface EmployeeListRow {
 
 export async function getEmployeesList(): Promise<EmployeeListRow[]> {
   const pool = analyticsDb();
-  const [rows, hist, orgRoles] = await Promise.all([
+  const [rows, hist, orgRoles, hrCards, tenures] = await Promise.all([
     // Задача 2820: раньше водило sa.employees (211 строк, мёртвая заготовка
     // 13.06 — на проверке 03.08 отсутствовало 222 из 429 активных
     // сотрудников). Теперь водит sa.org_resolved_hierarchy — актуальная
-    // оргструктура (ночной синк), hire_date там нет (в sa.employees он и так
+    // оргструктура (ночной синк), даты найма там нет — она из sa.employee_hr_cards (в sa.employees hire_date и так
     // не заполнялся на проде — см. features/employees/ui/EmployeesPage.tsx).
     pool.query(
       `SELECT org.manager_bitrix_user_id::int AS bitrix_id, org.manager_name AS full_name, org.is_active,
-              NULL::date AS hire_date,
               to_char(r.manual_start_date, 'YYYY-MM-DD') AS manual_start_date,
               coalesce(r.notes, '') AS notes, r.updated_by,
               to_char(r.updated_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD HH24:MI') AS updated_at,
@@ -87,7 +90,11 @@ export async function getEmployeesList(): Promise<EmployeeListRow[]> {
         ORDER BY valid_from, id`,
     ),
     getAllRopAndDirectorIds(),
+    getHrCardsByBitrixId(),
+    listTenures(),
   ]);
+  // Открытый период «логин → человек» (таймлайн) — главный источник даты начала.
+  const openStart = new Map(tenures.filter(t => t.endDate === null).map(t => [t.bitrixId, t.startDate]));
 
   const histBy = new Map<string, NameHistoryItem[]>();
   for (const r of hist.rows) {
@@ -98,6 +105,7 @@ export async function getEmployeesList(): Promise<EmployeeListRow[]> {
 
   return rows.rows.map((r) => {
     const id = String(r.bitrix_id);
+    const hr = hrCards.get(r.bitrix_id) ?? null;
     const orgRole: EmployeeOrgRole = orgRoles.directorIds.has(id)
       ? 'director' : orgRoles.ropIds.has(id) ? 'rop' : 'manager';
     return {
@@ -106,9 +114,10 @@ export async function getEmployeesList(): Promise<EmployeeListRow[]> {
       departmentName: r.department_name ?? null,
       branch: r.branch ?? null,
       isActive: !!r.is_active,
-      hireDate: r.hire_date ?? null,
+      hireDate: hr?.hiredDate ?? null,
       manualStartDate: r.manual_start_date ?? null,
-      startDate: r.manual_start_date ?? r.hire_date ?? null,
+      startDate: openStart.get(r.bitrix_id) ?? r.manual_start_date ?? hr?.hiredDate ?? null,
+      hrCard: hr,
       notes: r.notes,
       updatedBy: r.updated_by ?? null,
       updatedAt: r.updated_at ?? null,

@@ -3,6 +3,8 @@ import { timingSafeEqual } from 'crypto';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { runOrgSync } from '@/lib/org/sync';
+import { runHrCardsSync } from '@/lib/org/hrCards';
+import { countTenures, reconcileTenures } from '@/lib/org/tenures';
 
 // Кнопка «Синхронизировать оргструктуру» (задача Серёги 13.07) и ночной cron
 // 04:00 МСК дёргают этот роут. Тянет департаменты + сотрудников из Битрикса
@@ -48,7 +50,27 @@ export async function POST(request: Request) {
 
   try {
     const result = await runOrgSync();
-    return NextResponse.json(result);
+    // Кадровые карточки из смарт-процесса 1054 (стаж) — после оргструктуры, по ней
+    // сопоставляются. Сбой импорта не роняет синк оргструктуры: отдаём ошибку полем.
+    let hrCards: unknown;
+    try {
+      hrCards = await runHrCardsSync();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[org-sync] hr-cards failed:', msg);
+      hrCards = { ok: false, error: msg };
+    }
+    // Периоды «логин → человек» (таймлайн «Сотрудники»): смена имени на логине закрывает
+    // период и открывает новый. До наката миграции 010 (таблицы нет) — пропуск.
+    let tenures: unknown = null;
+    try {
+      if ((await countTenures()) !== null) tenures = await reconcileTenures();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[org-sync] tenures failed:', msg);
+      tenures = { ok: false, error: msg };
+    }
+    return NextResponse.json({ ...result, hrCards, tenures });
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Не удалось синхронизировать оргструктуру';
     console.error('[org-sync] failed:', msg);

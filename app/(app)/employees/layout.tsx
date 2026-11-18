@@ -10,7 +10,7 @@ import { hasFullManagerAccess } from '@/lib/org/managerAccess';
 export default async function EmployeesLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect('/login');
-  if (!hasFullManagerAccess(session) && !hasPerm(session, 'section.employees')) {
+  if (!hasFullManagerAccess(session) && !hasPerm(session, 'section.employees') && !hasPerm(session, 'section.employees_edit')) {
     return <AccessDenied reason="Раздел «Сотрудники» — реестр: стаж и история переименований. Доступ выдаёт администратор в «Настройки → Матрица прав»." />;
   }
   return <>{children}</>;

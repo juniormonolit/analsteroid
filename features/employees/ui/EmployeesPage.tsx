@@ -3,8 +3,9 @@
 // Страница «Сотрудники» (задача 2654): реестр — имя, bitrix_id, отдел, дата начала
 // (инлайн-редактирование → sa.employee_registry.manual_start_date), стаж «X лет Y мес»,
 // раскрывающаяся история переименований логина (слот-модель: имя на логине меняется).
-// hire_date из sa.employees на проде не заполняется (подтверждено: пусто у всех) —
-// стаж живёт на ручной дате; пусто = честное «не заполнено», не нули.
+// Дата начала = ручная, иначе дата найма из кадровой карточки Битрикса (смарт-процесс
+// 1054, sa.employee_hr_cards, ночной импорт lib/org/hrCards.ts) с пометкой «из Битрикса»;
+// пусто = честное «не заполнено», не нули. Под именем — должность и стадия из карточки.
 //
 // Задача 2771 (Серёга зашёл с телефона как админ, не увидел ЛК — «нужен список
 // всех менеджеров и РОПов, чтобы зайти к ним»): добавлены роль (колонка + текст
@@ -20,6 +21,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { ChevronDown, ChevronRight, History, Search, UserCog } from 'lucide-react';
 import { tenureLabel } from '@/features/employees/engine/tenure';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 
 interface NameHistoryItem { name: string; validFrom: string; validTo: string | null }
 type OrgRole = 'director' | 'rop' | 'manager';
@@ -30,7 +32,9 @@ const ROLE_ORDER: Record<OrgRole, number> = { director: 0, rop: 1, manager: 2 };
 interface Row {
   bitrixId: number; fullName: string; departmentName: string | null; branch: string | null;
   isActive: boolean; hireDate: string | null; manualStartDate: string | null;
-  startDate: string | null; notes: string; updatedBy: string | null; updatedAt: string | null;
+  startDate: string | null;
+  hrCard: { hiredDate: string | null; position: string | null; stageName: string | null } | null;
+  notes: string; updatedBy: string | null; updatedAt: string | null;
   nameHistory: NameHistoryItem[]; orgRole: OrgRole;
 }
 
@@ -69,7 +73,7 @@ function fmtDate(iso: string | null): string {
   return `${d}.${m}.${y}`;
 }
 
-function StartDateCell({ row, onSave }: { row: Row; onSave: (v: string | null) => Promise<string | null> }) {
+function StartDateCell({ row, onSave, canEdit }: { row: Row; onSave: (v: string | null) => Promise<string | null>; canEdit: boolean }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +88,11 @@ function StartDateCell({ row, onSave }: { row: Row; onSave: (v: string | null) =
     setEditing(false);
   };
 
+  if (!canEdit) {
+    return row.startDate
+      ? <span className="px-1.5">{fmtDate(row.startDate)}</span>
+      : <span className="px-1.5 text-[var(--color-text-muted)]">не заполнено</span>;
+  }
   if (!editing) {
     return (
       <button
@@ -93,7 +102,7 @@ function StartDateCell({ row, onSave }: { row: Row; onSave: (v: string | null) =
         onClick={() => { setDraft(row.manualStartDate ?? row.startDate ?? ''); setError(null); setEditing(true); }}
       >
         {row.startDate
-          ? <span>{fmtDate(row.startDate)}{row.manualStartDate ? '' : ' (из синка)'}</span>
+          ? <span>{fmtDate(row.startDate)}{row.manualStartDate ? '' : <span className="text-xs text-[var(--color-text-muted)]" title="Дата создания кадровой карточки в смарт-процессе «Сотрудники Монолит». Нажмите, чтобы поправить вручную."> (из Битрикса)</span>}</span>
           : <span className="text-[var(--color-text-muted)]">не заполнено</span>}
       </button>
     );
@@ -129,7 +138,7 @@ export function EmployeesPage() {
   const [openHistory, setOpenHistory] = useState<Set<number>>(new Set());
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
 
-  const { data, isLoading, isError } = useQuery<{ rows: Row[]; canOpenCabinet: boolean }>({
+  const { data, isLoading, isError } = useQuery<{ rows: Row[]; canOpenCabinet: boolean; canEdit?: boolean }>({
     queryKey: ['employees'],
     queryFn: async () => {
       const res = await fetch('/api/employees');
@@ -140,6 +149,7 @@ export function EmployeesPage() {
     refetchOnWindowFocus: false,
   });
   const canOpenCabinet = data?.canOpenCabinet ?? false;
+  const canEdit = data?.canEdit ?? false;
 
   // Список отделов для фильтра — из самих строк (без отдельного запроса).
   const deptOptions = useMemo(() => {
@@ -217,10 +227,9 @@ export function EmployeesPage() {
   return (
     // h-full overflow-y-auto — AppShell main стоит в overflow-hidden, без своего
     // скролл-контейнера страница не прокручивается (тот же фикс, что /charts, 0bdd06f).
-    <div className="h-full overflow-y-auto overflow-x-hidden">
-    <div className="p-4 md:p-6">
+    <div>
+    <div>
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <h1 className="text-lg font-semibold">Сотрудники</h1>
         <div className="relative">
           <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
           <input
@@ -230,14 +239,14 @@ export function EmployeesPage() {
             className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] py-1 pl-7 pr-2 text-sm"
           />
         </div>
-        <select
+        <SearchSelect
+          options={deptOptions.map(d => ({ value: d, label: d }))}
           value={deptFilter}
-          onChange={(e) => setDeptFilter(e.target.value)}
-          className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] py-1 px-2 text-sm text-[var(--color-text)]"
-        >
-          <option value="">Все отделы</option>
-          {deptOptions.map(d => <option key={d} value={d}>{d}</option>)}
-        </select>
+          onChange={setDeptFilter}
+          allLabel="Все отделы"
+          searchable
+          ariaLabel="Отдел"
+        />
         <label className="flex items-center gap-1.5 text-sm text-[var(--color-text-muted)]">
           <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
           показывать неактивных
@@ -290,6 +299,11 @@ export function EmployeesPage() {
                     <tr className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-bg-hover)]">
                       <td className="px-3 py-1.5">
                         <span className={r.isActive ? '' : 'text-[var(--color-text-muted)] line-through'}>{r.fullName}</span>
+                        {r.hrCard?.position || r.hrCard?.stageName ? (
+                          <div className="text-xs text-[var(--color-text-muted)]" title="Из кадровой карточки Битрикса (смарт-процесс «Сотрудники Монолит»)">
+                            {[r.hrCard.position, r.hrCard.stageName].filter(Boolean).join(' · ')}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-1.5 tabular-nums">{r.bitrixId}</td>
                       <td className="px-3 py-1.5">
@@ -307,7 +321,7 @@ export function EmployeesPage() {
                         {r.branch ? <span className="ml-1 text-xs text-[var(--color-text-muted)]">({r.branch})</span> : null}
                       </td>
                       <td className="px-3 py-1.5">
-                        <StartDateCell row={r} onSave={(v) => saveDate(r.bitrixId, v)} />
+                        <StartDateCell row={r} canEdit={canEdit} onSave={(v) => saveDate(r.bitrixId, v)} />
                       </td>
                       <td className="px-3 py-1.5">
                         {tenure ?? <span className="text-[var(--color-text-muted)]">не заполнено</span>}

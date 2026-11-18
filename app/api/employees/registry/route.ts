@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { permError } from '@/lib/auth/perms';
+import { hasPerm, permError } from '@/lib/auth/perms';
 import { upsertRegistry } from '@/features/employees/engine/registry';
 import { validateManualStartDate } from '@/features/employees/engine/tenure';
+import { syncOpenTenureStart } from '@/lib/org/tenures';
 import { canSeeManager, getSessionScope, scopeForbidden } from '@/lib/org/sessionScope';
 
 // Ручные поля реестра сотрудников: дата начала работы (стаж) + заметки.
@@ -10,8 +11,12 @@ import { canSeeManager, getSessionScope, scopeForbidden } from '@/lib/org/sessio
 // приложение её больше не читает нигде — задача 2820) не трогаем и подавно.
 export async function POST(req: Request) {
   const session = await getSession();
-  const err = permError(session, 'section.employees');
+  const err = hasPerm(session, 'section.employees_edit') ? null : permError(session, 'section.employees');
   if (err) return err;
+  // Решение владельца 18.11: даты и заметки правят только админы и носители
+  // section.employees_edit (персональное право). Им виден и правится весь реестр.
+  const canEdit = hasPerm(session!, 'section.employees_edit');
+  if (!canEdit) return NextResponse.json({ error: 'Редактировать сотрудников может администратор или тот, кому выдано право «Сотрудники: редактирование»' }, { status: 403 });
 
   let body: { bitrixId?: unknown; manualStartDate?: unknown; notes?: unknown };
   try {
@@ -27,7 +32,7 @@ export async function POST(req: Request) {
 
   // Аудит 09.09 («Главные дыры» п.6): носитель section.employees правил стаж и
   // заметки любого сотрудника компании. Цель обязана быть в срезе сессии.
-  if (!canSeeManager(await getSessionScope(session!), String(bitrixId))) {
+  if (!canEdit && !canSeeManager(await getSessionScope(session!), String(bitrixId))) {
     return scopeForbidden('Этот сотрудник вне вашего среза');
   }
 
@@ -51,5 +56,6 @@ export async function POST(req: Request) {
   }
 
   await upsertRegistry(bitrixId, patch, session!.login);
+  if ('manualStartDate' in patch) await syncOpenTenureStart(bitrixId, patch.manualStartDate ?? null, session!.login);
   return NextResponse.json({ ok: true });
 }

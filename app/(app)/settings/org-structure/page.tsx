@@ -89,7 +89,10 @@ export default function OrgStructurePage() {
         setMessage({
           type: 'success',
           text: `Синхронизировано: отделов ${d.departments}, сотрудников ${d.managers}` +
-            (d.renamed ? `, переименований ${d.renamed}` : '') + `, за ${(d.ms / 1000).toFixed(1)} с`,
+            (d.renamed ? `, переименований ${d.renamed}` : '') + `, за ${(d.ms / 1000).toFixed(1)} с` +
+            (d.hrCards?.ok
+              ? `. Кадровые карточки: ${d.hrCards.employed} работающих, сопоставлено ${d.hrCards.matched}, с датой найма ${d.hrCards.withHireDate}`
+              : d.hrCards ? `. Кадровые карточки не загружены: ${d.hrCards.error}` : ''),
         });
         load();
       }

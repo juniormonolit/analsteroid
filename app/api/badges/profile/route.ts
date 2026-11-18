@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { tenureLabel } from '@/features/employees/engine/tenure';
+import { getHrCardsByBitrixId } from '@/lib/org/hrCards';
+import { currentStartDate } from '@/lib/org/tenures';
 import { getExpiringSoon } from '@/features/badges/engine/wallet';
 import { fetchXpProfile } from '@/features/xp/engine/xp';
 import { getSessionScope, canSeeManager, scopeForbidden } from '@/lib/org/sessionScope';
 
 // Данные табов ЛК (доп. Серёги 31.07 к 2655/2657): стаж из реестра сотрудников
-// (COALESCE(manual_start_date, hire_date), как на странице «Сотрудники») и
+// (ручная дата из реестра, иначе дата найма из кадровой карточки Битрикса 1054 —
+// как на странице «Сотрудники») и
 // история начислений валюты (леджер: дата, награда, сумма — свежие сверху).
 // Доступ (аудит 09.09, ai_docs/fresh_docs/ACCESS_AUDIT_2026-09-09.md): чужой
 // ?bitrixId — только в пределах среза сессии (canSeeManager: админ — любой,
@@ -87,7 +90,12 @@ export async function GET(req: NextRequest) {
     .then(r => ({ frameId: r.rows[0]?.frame_id ?? null, backgroundId: r.rows[0]?.background_id ?? null }))
     .catch(() => ({ frameId: null, backgroundId: null }));
 
-  const startDate = reg.rows[0]?.start_date ?? null;
+  // Начало открытого периода на логине (таймлайн «Сотрудники») → ручная дата → дата найма
+  // из кадровой карточки Битрикса (1054).
+  const startDate = (await currentStartDate(id).catch(() => null))
+    ?? reg.rows[0]?.start_date
+    ?? (await getHrCardsByBitrixId(id).catch(() => new Map())).get(id)?.hiredDate
+    ?? null;
   return NextResponse.json({
     tenure: startDate ? { startDate, label: tenureLabel(startDate) } : null,
     ledger: ledger.rows,

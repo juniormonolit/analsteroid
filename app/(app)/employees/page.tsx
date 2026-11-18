@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth/session';
 import { hasPerm } from '@/lib/auth/perms';
-import { EmployeesPage } from '@/features/employees/ui/EmployeesPage';
+import { Suspense } from 'react';
+import { EmployeesSection } from '@/features/employees/ui/EmployeesSection';
 
 export const metadata = { title: 'Сотрудники — Аналстероид' };
 
@@ -10,7 +11,7 @@ export const metadata = { title: 'Сотрудники — Аналстерои�
 export default async function Page() {
   const session = await getSession();
   if (!session) redirect('/login');
-  if (!hasPerm(session, 'section.employees')) {
+  if (!hasPerm(session, 'section.employees') && !hasPerm(session, 'section.employees_edit')) {
     return (
       <div className="p-6 text-sm text-[var(--color-text-muted)]">
         Раздел «Сотрудники» закрыт — попросите администратора выдать право
@@ -18,5 +19,6 @@ export default async function Page() {
       </div>
     );
   }
-  return <EmployeesPage />;
+  // useSearchParams во вкладках — под Suspense (иначе Next ругается на CSR bailout).
+  return <Suspense><EmployeesSection /></Suspense>;
 }

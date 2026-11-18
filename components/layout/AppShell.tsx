@@ -507,7 +507,7 @@ function SidebarBody({
     { href: '/map', label: 'Карта объектов', icon: <Map size={18} />, ok: canMore('section.map') },
     // «Сотрудники» (задача 2654) — реестр: стаж + история переименований логина;
     // закрытый раздел по паттерну section.offload (только супер-админ + роли).
-    { href: '/employees', label: 'Сотрудники', icon: <Users size={18} />, ok: canMore('section.employees') },
+    { href: '/employees', label: 'Сотрудники', icon: <Users size={18} />, ok: canMore('section.employees') || canMore('section.employees_edit') },
     // «Презентация» (ТЗ владельца 11.08) — слайды еженедельного собрания;
     // закрытый раздел по паттерну section.offload (только супер-админ + роли).
     { href: '/presentation', label: 'Презентация', icon: <Presentation size={18} />, ok: canMore('section.presentation') },
