@@ -73,6 +73,8 @@ export interface BigTaskCard {
   productGroups: string[];
   /** Сумма из задачи (поле «Общая сумма» описания), если сделки нет. */
   taskAmount: number | null;
+  /** Клиент из описания задачи («Клиент: …») — для поиска и показа. */
+  client?: string | null;
   deal: BigDealInfo | null;
   calls: BigCallStats | null;
   related: BigRelatedTask[];
@@ -93,8 +95,48 @@ export interface BigColumnData {
 }
 
 /** Секции вкладки «Сегодня» — что делать прямо сейчас. */
-export type BigTodayKey = 'control' | 'new' | 'stuck' | 'lost_check' | 'related_answered';
-export interface BigTodaySection { key: BigTodayKey; title: string; hint: string; cards: BigTaskCard[] }
+/** Порядок (владелец 18.11, встреча 11.11): ждут контроля → почти продано (подтверждённая бронь, бронь, счёт) →
+ *  новые → застряли → не продано на проверку → ответили по связанной. Свои колонки — `custom:<id>`. */
+export type BigTodayKey = 'control' | 'almost_sold' | 'new' | 'stuck' | 'lost_check' | 'related_answered' | `custom:${string}`;
+export interface BigTodaySection {
+  key: BigTodayKey; title: string; hint: string; cards: BigTaskCard[];
+  /** Всего подходящих (cards может быть урезан). */
+  total: number;
+  /** Сумма сделок секции. */
+  sum: number;
+  /** Своя колонка пользователя. */
+  custom?: BigCustomColumn;
+}
+
+/** Фильтры доски (query GET /api/big-deals-kanban) — те же условия используют свои колонки и массовое закрытие. */
+export interface BigFilters {
+  groups?: number[];
+  manager?: string | null;
+  /** Товарные группы сделки — через «|» в query. */
+  products?: string[];
+  q?: string | null;
+  /** Сумма сделки (или задачи), ₽. */
+  sumMin?: number | null; sumMax?: number | null;
+  /** Дата создания задачи YYYY-MM-DD, включительно. */
+  createdFrom?: string | null; createdTo?: string | null;
+  /** Статусы задачи. */
+  states?: BigTaskState[];
+  /** Колонки доски (для своих колонок и массового закрытия). */
+  columns?: BigColumnKey[];
+  /** Дней в колонке не меньше. */
+  daysMin?: number | null;
+  /** Не менялась (changedAt) дней не меньше — для разбора завалов. */
+  idleDaysMin?: number | null;
+  stuck?: boolean;
+  /** Звонков после постановки не было. */
+  noCalls?: boolean;
+  /** Сделка: won | lost | open. */
+  deal?: 'won' | 'lost' | 'open' | null;
+}
+export type BigSort = 'default' | 'sum' | 'days' | 'created' | 'idle';
+
+/** Своя колонка «Сегодня» (как в повторке): набор условий BigFilters, хранится в users.ui_prefs.bigDealsColumns (без миграции). */
+export interface BigCustomColumn { id: string; name: string; filters: BigFilters; createdAt: string }
 
 export interface BigBoardResponse {
   columns: BigColumnData[];
@@ -109,7 +151,27 @@ export interface BigBoardResponse {
   generatedAt: string;
   /** Данные из кэша старше 3 мин (идёт фоновое обновление). */
   stale: boolean;
+  /** Свои колонки пользователя (для редактирования). */
+  customColumns: BigCustomColumn[];
 }
+
+/** Аналитика по менеджерам (встреча 11.11: «сколько больших задач, продано, проебано, конверсия — подсветить низкую»).
+ *  GET /api/big-deals-kanban/analytics?<те же фильтры>&from=YYYY-MM-DD&to=YYYY-MM-DD (по дате создания задачи). */
+export interface BigManagerStat {
+  manager: BigPerson;
+  tasks: number; open: number; sold: number; lost: number;
+  /** sold / (sold + lost), null — закрытых нет. */
+  conversion: number | null;
+  soldSum: number; openSum: number;
+  /** Среднее звонков после постановки на задачу. */
+  callsPerTask: number | null;
+}
+export interface BigAnalyticsResponse { from: string; to: string; total: BigManagerStat; managers: BigManagerStat[]; avgConversion: number | null }
+
+/** Массовое закрытие (владелец 18.11). POST /api/big-deals-kanban/mass-close
+ *  { taskIds: number[] } | { filters: BigFilters } + { dryRun?: boolean, comment?: string } →
+ *  dryRun: { count, sample: BigTaskCard[] }; иначе { jobId } — опрос GET /api/big-deals-kanban/mass-close?job=<id> → BigMassCloseJob. */
+export interface BigMassCloseJob { id: string; total: number; done: number; failed: number; errors: string[]; finished: boolean; startedAt: string }
 
 /** GET /api/big-deals-kanban?group=74,81&manager=123&product=Газобетон&q=текст
  *  POST /api/big-deals-kanban/action — тело BigAction, ответ { ok: true, card?: BigTaskCard } | { error }. */
@@ -117,6 +179,9 @@ export type BigAction =
   | { type: 'move'; taskId: number; column: BigColumnKey }
   | { type: 'reassign'; taskId: number; responsibleId: string; comment?: string }
   | { type: 'comment'; taskId: number; text: string; attachments?: string[] }
-  | { type: 'accept'; taskId: number }
+  /** «Ответ увидел, работаем дальше» (владелец 18.11): НЕ закрывает задачу — возвращает в работу с комментарием, срок по желанию. */
+  | { type: 'accept'; taskId: number; comment?: string; deadline?: string }
+  /** Наблюдатели/соисполнители (встреча: «подключаем РОПа в наблюдатели»). */
+  | { type: 'participants'; taskId: number; auditors: string[]; accomplices?: string[] }
   | { type: 'return'; taskId: number; comment: string; deadline?: string }
   | { type: 'complete'; taskId: number };

@@ -251,3 +251,10 @@ export function dealIdOf(uf: string[] | null | undefined): number | null {
   for (const k of uf ?? []) { const m = /^D_(\d+)$/.exec(k); if (m) return Number(m[1]); }
   return null;
 }
+
+/** «[b]Клиент: [/b]Максим Иванов» (или без BB-кодов) → «Максим Иванов» — для поиска по доске. */
+export function clientOf(description: string | null | undefined): string | null {
+  const m = /Клиент\s*:\s*(?:\[\/b\])?\s*([^\n\r[]{1,200})/i.exec(description ?? '');
+  const v = m?.[1].replace(/\s+/g, ' ').trim();
+  return v ? v.slice(0, 120) : null;
+}

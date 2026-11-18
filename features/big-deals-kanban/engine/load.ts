@@ -7,7 +7,7 @@ import type { BigDealInfo, BigRelatedTask, BigTaskCard } from './types';
 import { bxBatch, taskWebhook, type BatchCmd } from './rest';
 import { columnOfStage, stagesOfGroup, type BigStage } from './stages';
 import {
-  callStats, dealIdOf, fetchCalls, fetchDealGroups, fetchDeals, fetchRelated, relatedIndex, loadNames, personOf, productGroupOf, rememberName, taskAmountOf, taskState,
+  callStats, clientOf, dealIdOf, fetchCalls, fetchDealGroups, fetchDeals, fetchRelated, relatedIndex, loadNames, personOf, productGroupOf, rememberName, taskAmountOf, taskState,
 } from './enrich';
 import { resolveSince } from './stageSince';
 
@@ -29,14 +29,8 @@ export interface RawTask {
 
 const iso = (s: string | null | undefined) => (s ? new Date(s).toISOString() : null);
 
-/** Все задачи проектов: открытые + закрытые за CLOSED_DAYS. Первая волна — первые страницы и total, вторая — остальные страницы. */
-export async function fetchRawTasks(groupIds: readonly number[] = BIG_DEALS_GROUP_IDS): Promise<RawTask[]> {
-  const closedSince = new Date(Date.now() - CLOSED_DAYS * 86400_000).toISOString();
-  const filters: Record<string, Record<string, unknown>> = {};
-  for (const g of groupIds) {
-    filters[`o${g}`] = { GROUP_ID: g, '<REAL_STATUS': 5 };
-    filters[`c${g}`] = { GROUP_ID: g, REAL_STATUS: 5, '>=CLOSED_DATE': closedSince };
-  }
+/** Постраничная выборка tasks.task.list по набору фильтров: первая волна — первые страницы и total, вторая — остальные. */
+async function listTasks(filters: Record<string, Record<string, unknown>>): Promise<RawTask[]> {
   const cmd = (f: Record<string, unknown>, start: number): BatchCmd => ({
     method: 'tasks.task.list', params: { filter: f, select: TASK_SELECT, order: { ID: 'asc' }, start },
   });
@@ -56,6 +50,27 @@ export async function fetchRawTasks(groupIds: readonly number[] = BIG_DEALS_GROU
   const seen = new Map<string, RawTask>();
   for (const t of all) seen.set(String(t.id), t);
   return [...seen.values()];
+}
+
+/** Все задачи проектов: открытые + закрытые за CLOSED_DAYS. */
+export async function fetchRawTasks(groupIds: readonly number[] = BIG_DEALS_GROUP_IDS): Promise<RawTask[]> {
+  const closedSince = new Date(Date.now() - CLOSED_DAYS * 86400_000).toISOString();
+  const filters: Record<string, Record<string, unknown>> = {};
+  for (const g of groupIds) {
+    filters[`o${g}`] = { GROUP_ID: g, '<REAL_STATUS': 5 };
+    filters[`c${g}`] = { GROUP_ID: g, REAL_STATUS: 5, '>=CLOSED_DATE': closedSince };
+  }
+  return listTasks(filters);
+}
+
+/** Закрытые задачи, которых НЕТ в снимке (закрыты раньше CLOSED_DAYS), созданные не раньше createdSince. Для аналитики. */
+export async function fetchArchivedRawTasks(createdSinceIso: string, groupIds: readonly number[] = BIG_DEALS_GROUP_IDS): Promise<RawTask[]> {
+  const closedBefore = new Date(Date.now() - CLOSED_DAYS * 86400_000).toISOString();
+  const filters: Record<string, Record<string, unknown>> = {};
+  for (const g of groupIds) {
+    filters[`a${g}`] = { GROUP_ID: g, REAL_STATUS: 5, '<CLOSED_DATE': closedBefore, '>=CREATED_DATE': createdSinceIso };
+  }
+  return listTasks(filters);
 }
 
 /** Сырые задачи → карточки (сделки, звонки, связанные, время в колонке). */
@@ -110,6 +125,7 @@ export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
         return { productGroup: t1, productGroups: t1 ? [t1] : [] };
       })(),
       taskAmount: taskAmountOf(t.description, t.ufAuto593587150308),
+      client: clientOf(t.description),
       deal: dealId ? deals.get(dealId) ?? null : null,
       calls: calls && dealId ? callStats(calls.get(dealId), new Date(createdAt).getTime()) : calls ? callStats([], 0) : null,
       related: dealId ? related.get(`D_${dealId}`) ?? [] : [],
@@ -186,4 +202,38 @@ export async function refreshTask(taskId: number): Promise<BigTaskCard | null> {
   const [card] = await buildCards([t]);
   await saveSnapshot({ at: snap.at, cards: card ? [...others, card] : others });
   return card ?? null;
+}
+
+/** Карточка задачи из снимка (без похода в Битрикс; снимок — память или Redis, пересборку НЕ запускает).
+ *  null — снимка нет или задачи в нём нет (не из проектов / закрыта давно). Для проверки видимости в действиях. */
+export async function cardFromSnapshot(taskId: number): Promise<BigTaskCard | null> {
+  if (!mem) {
+    const redis = await redisReady().catch(() => null);
+    if (redis) {
+      try { const hit = await redis.get(REDIS_KEY); if (hit) mem = JSON.parse(hit) as BigSnapshot; } catch { /* нет кэша */ }
+    }
+  }
+  const c = mem?.cards.find(x => x.id === taskId);
+  return c ? withAge(c) : null;
+}
+
+// ── архив закрытых для аналитики (лениво, отдельно от снимка доски) ───────────
+const ARCHIVE_TTL = 30 * 60_000;
+const archive = new Map<string, { at: number; cards: Promise<BigTaskCard[]> }>();
+
+/** Закрытые раньше CLOSED_DAYS задачи, созданные с даты `fromDate` (YYYY-MM-DD). Кэш 30 мин в памяти. */
+export function loadArchivedCards(fromDate: string): Promise<BigTaskCard[]> {
+  const hit = archive.get(fromDate);
+  if (hit && Date.now() - hit.at < ARCHIVE_TTL) return hit.cards;
+  const t0 = Date.now();
+  const cards = (async () => {
+    const raw = await fetchArchivedRawTasks(new Date(`${fromDate}T00:00:00+03:00`).toISOString());
+    const out = await buildCards(raw);
+    console.log(`[big-deals] архив с ${fromDate}: ${out.length} задач за ${Date.now() - t0} мс`);
+    return out;
+  })();
+  cards.catch(() => archive.delete(fromDate));
+  for (const [k, v] of archive) if (Date.now() - v.at >= ARCHIVE_TTL) archive.delete(k);
+  archive.set(fromDate, { at: Date.now(), cards });
+  return cards;
 }

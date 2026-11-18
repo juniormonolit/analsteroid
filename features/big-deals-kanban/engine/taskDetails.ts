@@ -23,6 +23,11 @@ export interface BigTaskDetails {
   /** Товары сделки не совпадают с товарами из описания (по названиям). */
   productsChanged: boolean;
   chat: BigChatMessage[];
+  /** Участники задачи из Битрикса (свежие, не из снимка доски). */
+  auditors: string[];
+  accomplices: string[];
+  /** Кто смотрит: Bitrix id и может ли управлять ЭТОЙ задачей (роут дописывает). */
+  viewer?: { id: string | null; canManage: boolean };
 }
 
 export interface BxTaskFull extends BxBigTask { description?: string; chatId?: number | string | null }
@@ -69,6 +74,8 @@ export async function fetchTaskDetails(t: BxTaskFull, dealId: number | null): Pr
     dealProducts,
     productsChanged: productsDiffer(taskProducts, dealProducts),
     chat,
+    auditors: (t.auditors ?? []).map(String),
+    accomplices: (t.accomplices ?? []).map(String),
   };
 }
 

@@ -14,3 +14,6 @@ export async function bigActor(session: SessionUser): Promise<BigActor> {
   return { userId: session.bitrixUserId, name: session.displayName ?? null, canManage, zone };
 }
 
+
+// Видимость/управление — одна функция для доски, карточки задачи и действий.
+export { canSeeTask, canManageTask, type TaskPeople, type VisibilityActor } from './visibility';

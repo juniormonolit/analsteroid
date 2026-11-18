@@ -21,11 +21,17 @@ export function plural(n: number, one: string, few: string, many: string) {
 
 export const cardAmount = (c: BigTaskCard): number | null => c.deal?.amount || c.taskAmount || null;
 
-/** «Иванов Пётр Сергеевич» → «Иванов П.» — на карточке место дорого. */
+/** Короткое имя для карточки: «Фамилия И.». Битрикс отдаёт «Имя Фамилия» (две части) — меняем местами;
+ *  три части — это «Фамилия Имя Отчество» из БД, фамилия уже первая. */
 export function shortName(name: string) {
-  const [last, first] = name.trim().split(/\s+/);
-  return first ? `${last} ${first[0]}.` : last ?? name;
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return parts[0] ?? name;
+  const [last, first] = parts.length === 2 ? [parts[1], parts[0]] : [parts[0], parts[1]];
+  return `${last} ${first[0]}.`;
 }
+
+/** «17.11» — дата без года (МСК). */
+export const fmtD = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Moscow' }) : '—');
 
 export const STATE_META: Record<BigTaskState, { label: string; cls: string }> = {
   unread: { label: 'не просмотрена', cls: 'bg-[var(--color-negative-soft)] text-[var(--color-negative)]' },

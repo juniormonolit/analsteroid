@@ -2,13 +2,24 @@
 // Карточка задачи большого чека (решение владельца 18.11: «информативнее битриксовой» — максимум
 // без перехода в Битрикс). Порядок строк по важности: что и на сколько → стадия сделки →
 // кто и чей проект → статус задачи и сколько стоит в колонке → звонки и связанные задачи.
-import { Clock, Link2, Phone, PhoneOff } from 'lucide-react';
+import { Check, Clock, Link2, Phone, PhoneOff } from 'lucide-react';
 import type { BigTaskCard } from '../engine/types';
-import { STATE_META, cardAmount, money, plural, shortName } from './format';
+import { STATE_META, cardAmount, fmtD, money, plural, shortName } from './format';
 
-export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEnd, dragging }: {
+/** Клиент сделки, если движок его отдаёт (поле может прийти позже контракта: строка или { name }). */
+function clientName(card: BigTaskCard): string | null {
+  const c = (card as BigTaskCard & { client?: unknown }).client;
+  if (typeof c === 'string') return c.trim() || null;
+  if (c && typeof c === 'object' && 'name' in c && typeof (c as { name: unknown }).name === 'string') return (c as { name: string }).name.trim() || null;
+  return null;
+}
+
+export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEnd, dragging, selected = null, onSelect }: {
   card: BigTaskCard;
   onOpen: (card: BigTaskCard) => void;
+  /** Режим выделения: null — выключен; нажатие по карточке отмечает её, а не открывает. */
+  selected?: boolean | null;
+  onSelect?: () => void;
   draggable?: boolean;
   onDragStart?: (card: BigTaskCard) => void;
   onDragEnd?: () => void;
@@ -19,20 +30,28 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
   const calls = card.calls;
   const answered = card.related.filter(r => r.state === 'control' || r.state === 'done').length;
   const closed = card.deal?.closed ?? null;
+  const client = clientName(card);
+  const selecting = selected !== null && !!onSelect;
 
   return (
     <button
       type="button"
-      onClick={() => onOpen(card)}
-      draggable={draggable}
+      onClick={() => (selecting ? onSelect!() : onOpen(card))}
+      aria-pressed={selecting ? !!selected : undefined}
+      draggable={draggable && !selecting}
       onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(card.id)); onDragStart?.(card); }}
       onDragEnd={() => onDragEnd?.()}
       data-task-id={card.id}
-      className={`group flex w-full flex-col gap-1.5 rounded-lg border bg-[var(--color-bg)] p-2.5 text-left text-xs shadow-sm outline-none transition hover:border-[var(--color-border-strong)] hover:shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] active:scale-[0.99] ${card.stuck ? 'border-[var(--color-negative)]/50' : 'border-[var(--color-border)]'} ${dragging ? 'opacity-40' : ''} ${draggable ? 'cursor-grab' : 'cursor-pointer'}`}
+      className={`group flex w-full flex-col gap-1.5 rounded-lg border bg-[var(--color-bg)] p-2.5 text-left text-xs shadow-sm outline-none transition hover:border-[var(--color-border-strong)] hover:shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] active:scale-[0.99] ${selected ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : card.stuck ? 'border-[var(--color-negative)]/50' : 'border-[var(--color-border)]'} ${dragging ? 'opacity-40' : ''} ${draggable ? 'cursor-grab' : 'cursor-pointer'}`}
     >
       {/* Что и на сколько */}
       <div className="flex min-w-0 items-start justify-between gap-2">
-        <span className="min-w-0 break-words text-sm font-semibold leading-snug text-[var(--color-text)]" title={card.title}>
+        {selecting && (
+          <span aria-hidden className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border ${selected ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white' : 'border-[var(--color-border-strong)] bg-[var(--color-bg)]'}`}>
+            {selected && <Check size={12} strokeWidth={3} />}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 break-words text-sm font-semibold leading-snug text-[var(--color-text)]" title={card.title}>
           {card.productGroup ?? card.title}
         </span>
         {amount != null && (
@@ -41,6 +60,8 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
           </span>
         )}
       </div>
+
+      {client && <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`Клиент: ${client}`}>{client}</span>}
 
       {/* Стадия сделки и итог */}
       {(card.deal || closed) && (
@@ -86,7 +107,7 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
           )}
         </div>
       )}
-      <span className="text-[10px] text-[var(--color-text-muted)]">№ {card.id}</span>
+      <span className="text-[10px] text-[var(--color-text-muted)]">№ {card.id} · <span title="Дата создания задачи">созд. {fmtD(card.createdAt)}</span></span>
     </button>
   );
 }

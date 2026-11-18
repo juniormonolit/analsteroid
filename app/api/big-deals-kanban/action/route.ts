@@ -8,11 +8,11 @@ import type { BigAction } from '@/features/big-deals-kanban/engine/types';
 
 // Действия канбана больших чеков (engine/actions.ts). Гейт — section.repeat_kanban (те же роли продаж),
 // зона — ropScope/scopeManagers, как у канбана повторных: РОП — свои отделы с поддеревом, менеджер — себя.
-// move/reassign/accept/return/complete — только canManage; comment — любой, кто видит задачу.
+// move/reassign/accept/return/complete/participants — только canManage; comment — любой, кто видит задачу.
 // ?dry=1 — сухой прогон (только админу/полной зоне): ничего не пишет, отдаёт список REST-вызовов.
 export const dynamic = 'force-dynamic';
 
-const TYPES = new Set(['move', 'reassign', 'comment', 'accept', 'return', 'complete']);
+const TYPES = new Set(['move', 'reassign', 'comment', 'accept', 'return', 'complete', 'participants']);
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -21,12 +21,12 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null) as (BigAction & { attachments?: unknown }) | null;
   if (!body || typeof body.type !== 'string' || !TYPES.has(body.type)) return NextResponse.json({ error: 'Некорректный запрос' }, { status: 400 });
   try {
-    const actor = await bigActor(session);
+    const actor = { ...(await bigActor(session)), login: session.login };
     const dryRun = req.nextUrl.searchParams.get('dry') === '1';
     if (dryRun && actor.zone !== 'all') return NextResponse.json({ error: 'Сухой прогон — только админу' }, { status: 403 });
-    const files = body.type === 'comment' || body.type === 'reassign' || body.type === 'return' ? takeAttachments(session.login, body.attachments) : [];
+    const files = body.type === 'comment' || body.type === 'reassign' || body.type === 'return' || body.type === 'accept' ? takeAttachments(session.login, body.attachments) : [];
     const r = await runBigAction(body, actor, { dryRun }, files);
-    console.info(`[big-deals action] ${session.login} ${body.type} task=${body.taskId}${dryRun ? ' DRY' : ''} calls=${r.calls.map(c => c.method).join(',')}`);
+    console.info(`[big-deals action] ${session.login} ${body.type} task=${body.taskId}${dryRun ? ' DRY' : ''}${r.viaWebhook ? ' VIA-WEBHOOK' : ''} calls=${r.calls.map(c => c.method).join(',')}`);
     return NextResponse.json({ ok: true, card: r.card ?? undefined, warnings: r.warnings.length ? r.warnings : undefined, ...(dryRun ? { calls: r.calls } : {}) });
   } catch (e) {
     if (e instanceof BigActionError) return NextResponse.json({ error: e.message }, { status: e.status });

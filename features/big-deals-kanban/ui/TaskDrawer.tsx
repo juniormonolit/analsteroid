@@ -15,9 +15,10 @@ import { STATE_META, cardAmount, fmtDT, money } from './format';
 import { TaskChat } from './TaskDrawerChat';
 import { TaskActions } from './TaskDrawerActions';
 import { Section } from './TaskDrawerShared';
+import { ParticipantsField } from './ParticipantsField';
 
 export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; managers: BigPerson[]; onClose: () => void; onChanged: (card?: BigTaskCard) => void }) {
-  const { card, canManage, managers, onClose, onChanged } = props;
+  const { card, managers, onClose, onChanged } = props;
   const [client, setClient] = useState(false);
   const details = useQuery<BigTaskDetails>({
     queryKey: ['big-deals-task', card.id],
@@ -29,6 +30,8 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
     },
     staleTime: 30_000,
   });
+  // Право управлять ЭТОЙ задачей — от сервера (visibility.ts); пока грузится — роль с доски.
+  const canManage = props.canManage && (details.data?.viewer?.canManage ?? true);
   const checks = useTaskChecks([card.id], canManage);
   const changed = (c?: BigTaskCard) => { void details.refetch(); onChanged(c); };
   const st = STATE_META[card.state];
@@ -138,6 +141,7 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
           {/* Правая колонка: чат и действия */}
           <div className="flex min-w-0 flex-col gap-4">
             {canManage && <TaskActions card={card} managers={managers} onChanged={changed} />}
+            {d && <ParticipantsField taskId={card.id} auditors={d.auditors ?? card.auditors} me={d.viewer?.id ?? null} canManage={canManage && card.state !== 'done'} onChanged={changed} />}
             <TaskChat card={card} messages={d?.chat ?? null} loading={details.isLoading} onSent={changed} />
           </div>
         </div>

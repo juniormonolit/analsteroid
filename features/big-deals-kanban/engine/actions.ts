@@ -14,12 +14,20 @@
 // callAsUser вернёт undefined и действие уйдёт вебхуком: в истории задачи будет админ, а в чате — комментарий
 // «закрыто из канбана» от имени РОПа (кто на самом деле нажал).
 //
+// «Принять» (владелец 18.11) = «ответ увидел, работаем дальше»: задачу НЕ закрываем — tasks.task.disapprove
+// возвращает её из «ждёт контроля» в работу, в чат — «РОП посмотрел ответ, работаем дальше», срок — по желанию.
+// Закрывают задачу только «Не продано → завершить», перенос в AUTO_COMPLETE_COLUMNS и массовое закрытие (massClose.ts).
+//
+// Имя нажавшего — в КАЖДОМ комментарии («из Монолитики · Имя»), даже если действие ушло вебхуком; ушло вебхуком —
+// в ответе warning «выполнено от имени служебной учётки» (в истории задачи Битрикса будет админ, а не РОП).
+//
 // Сухой прогон: runBigAction(..., { dryRun: true }) — ничего не пишет, только читает задачу и возвращает
 // список REST-вызовов, которые ушли бы (scratchpad-скрипт проверки, без записи в прод-портал).
 import { BIG_COLUMNS, BIG_DEALS_GROUP_IDS, AUTO_COMPLETE_COLUMNS, type BigColumnKey } from './config';
 import type { BigAction, BigTaskCard } from './types';
 import { stageIdForColumn } from './stages';
-import { refreshTask } from './load';
+import { cardFromSnapshot, refreshTask } from './load';
+import { canManageTask, canSeeTask, type TaskPeople } from './visibility';
 import { markColumn } from './stageSince';
 import { DealCreateError, postToTaskChat, read, taskWebhook, writeOnce } from '@/features/repeat-kanban/engine/createDeal';
 import { callAsUser, UserCallUnsure } from '@/lib/bitrix/userTokens';
@@ -36,7 +44,15 @@ export interface BigActor {
   canManage: boolean;
   /** Bitrix id менеджеров зоны; 'all' — без ограничений (руководство). */
   zone: Set<string> | 'all';
+  /** Логин Монолитики — подпись в комментарии, если нет ни имени, ни Bitrix id (роут дописывает). */
+  login?: string | null;
 }
+
+/** Подпись нажавшего для комментариев — есть всегда. */
+export function actorLabel(actor: BigActor): string {
+  return actor.name?.trim() || actor.login?.trim() || (actor.userId ? `сотрудник ${actor.userId}` : 'пользователь Монолитики');
+}
+export const VIA_WEBHOOK_WARNING = 'Выполнено от имени служебной учётки Битрикса: вашего токена нет или Битрикс не дал вам прав — в истории задачи будет админ, имя нажавшего указано в комментарии';
 
 export interface BxBigTask {
   id: string;
@@ -54,7 +70,7 @@ export interface BxBigTask {
 
 export interface PlannedCall { as: 'user→webhook' | 'webhook' | 'chat-comment'; method: string; params: Record<string, unknown>; note?: string }
 export interface RunOpts { dryRun?: boolean }
-export interface RunResult { card: BigTaskCard | null; calls: PlannedCall[]; warnings: string[] }
+export interface RunResult { card: BigTaskCard | null; calls: PlannedCall[]; warnings: string[]; viaWebhook: boolean }
 
 const TASK_SELECT = ['ID', 'TITLE', 'STATUS', 'GROUP_ID', 'STAGE_ID', 'RESPONSIBLE_ID', 'CREATED_BY', 'AUDITORS', 'ACCOMPLICES', 'TASK_CONTROL', 'UF_CRM_TASK'];
 const columnTitle = (k: BigColumnKey) => BIG_COLUMNS.find(c => c.key === k)?.title ?? k;
@@ -75,18 +91,21 @@ export async function fetchBigTask<T extends BxBigTask = BxBigTask>(taskId: numb
   return r?.task?.id ? r.task : null;
 }
 
-/** Видит ли задачу: участник сам или исполнитель/постановщик в зоне. */
-export function taskVisible(t: BxBigTask, actor: BigActor): boolean {
-  if (actor.zone === 'all') return true;
-  const me = actor.userId;
-  const people = [t.responsibleId, t.createdBy, ...(t.auditors ?? []), ...(t.accomplices ?? [])].map(String);
-  if (me && people.includes(me)) return true;
-  return [t.responsibleId, t.createdBy].some(id => id && (actor.zone as Set<string>).has(String(id)));
+/** Люди задачи для canSeeTask/canManageTask движка (visibility.ts): свежие поля из Битрикса + ответственный сделки
+ *  из снимка доски (его нет в tasks.task.get) — иначе карточка, видимая на доске по сделке, отвечала бы 403. */
+export async function taskPeople(t: BxBigTask): Promise<TaskPeople> {
+  const snap = await cardFromSnapshot(Number(t.id)).catch(() => null);
+  return {
+    responsibleId: t.responsibleId, createdBy: t.createdBy, auditors: t.auditors ?? [], accomplices: t.accomplices ?? [],
+    dealAssignedId: snap?.deal?.assigned?.id ?? null,
+  };
 }
 
 class Runner {
   calls: PlannedCall[] = [];
   warnings: string[] = [];
+  /** Хоть одно изменение задачи ушло вебхуком (не от имени нажавшего). */
+  viaWebhook = false;
   constructor(private actor: BigActor, private dry: boolean) {}
 
   /** Изменение задачи: токен нажавшего, отказ — вебхук. */
@@ -95,7 +114,7 @@ class Runner {
     if (this.dry) return;
     try {
       const r = await callAsUser(this.actor.userId, method, params);
-      if (r === undefined) await writeOnce(taskWebhook(), method, params);
+      if (r === undefined) { this.viaWebhook = true; await writeOnce(taskWebhook(), method, params); }
     } catch (e) {
       if (e instanceof UserCallUnsure) throw new BigActionError('Битрикс не ответил вовремя — обновите доску и проверьте задачу, прежде чем повторять', 504);
       if (e instanceof DealCreateError || e instanceof Error) throw new BigActionError(humanBx(e), 502);
@@ -106,10 +125,12 @@ class Runner {
   /** Комментарий в чат задачи от имени нажавшего. Не роняет действие: не ушёл — предупреждение. */
   async comment(taskId: number, text: string, files: number[] = [], must = false): Promise<void> {
     const author = this.actor.userId;
-    this.calls.push({ as: 'chat-comment', method: 'task.commentitem.add', params: { TASKID: taskId, FIELDS: { AUTHOR_ID: author, POST_MESSAGE: text, files } } });
+    // Аккаунт не привязан к Битриксу — комментарий уходит от владельца вебхука, имя нажавшего — в тексте.
+    const body = author ? text : `[b]${actorLabel(this.actor)}[/b] (из Монолитики):\n${text}`;
+    this.calls.push({ as: 'chat-comment', method: 'task.commentitem.add', params: { TASKID: taskId, FIELDS: { AUTHOR_ID: author ?? '(вебхук)', POST_MESSAGE: body, files } } });
     if (this.dry) return;
-    if (!author) { if (must) throw new BigActionError('Аккаунт не привязан к Битриксу — комментарий не от кого отправить'); this.warnings.push('Комментарий не отправлен: аккаунт не привязан к Битриксу'); return; }
-    const ok = await postToTaskChat(taskId, author, text, files).catch(e => {
+    if (!author) this.viaWebhook = true;
+    const ok = await (author ? postToTaskChat(taskId, author, body, files) : postAsWebhook(taskId, body, files)).catch(e => {
       if (must) throw new BigActionError(`Комментарий не ушёл: ${humanBx(e)}`, 502);
       return false;
     });
@@ -130,6 +151,21 @@ class Runner {
   }
 }
 
+async function postAsWebhook(taskId: number, text: string, files: number[]): Promise<boolean> {
+  const r = await writeOnce<number>(taskWebhook(), 'task.commentitem.add', {
+    TASKID: taskId, FIELDS: { POST_MESSAGE: text, ...(files.length ? { UF_FORUM_MESSAGE_DOC: files.map(id => `n${id}`) } : {}) },
+  });
+  return Number(r) > 0;
+}
+
+const fmtDeadline = (d: Date) => d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+function parseDeadline(v: string | undefined): Date | null {
+  if (!v) return null;
+  const d = new Date(v);
+  if (!Number.isFinite(d.getTime()) || d.getTime() < Date.now()) throw new BigActionError('Новый срок уже прошёл — выберите позже');
+  return d;
+}
+
 /** Выполнить действие. Проверки зоны — здесь же (роут даёт только actor). */
 export async function runBigAction(action: BigAction, actor: BigActor, opts: RunOpts = {}, uploadedFiles: number[] = []): Promise<RunResult> {
   const taskId = Number(action.taskId);
@@ -138,14 +174,15 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
   if (!t) throw new BigActionError('Задача не найдена в Битриксе — возможно, удалена', 404);
   const groupId = Number(t.groupId);
   if (!BIG_DEALS_GROUP_IDS.includes(groupId)) throw new BigActionError('Задача не из проектов больших сделок', 403);
-  if (!taskVisible(t, actor)) throw new BigActionError('Задача не в вашей зоне', 403);
+  const people = await taskPeople(t);
+  if (!canSeeTask(people, actor)) throw new BigActionError('Задача не в вашей зоне', 403);
   const manageOnly = action.type !== 'comment';
-  if (manageOnly && !actor.canManage) throw new BigActionError('Двигать, переназначать и принимать задачи может только РОП', 403);
+  if (manageOnly && !canManageTask(people, actor)) throw new BigActionError('Двигать, переназначать, принимать задачи и менять участников может только РОП', 403);
 
   const run = new Runner(actor, !!opts.dryRun);
   const status = String(t.status ?? '');
   const control = String(t.taskControl ?? '').toUpperCase() === 'Y';
-  const who = actor.name ? ` (${actor.name})` : '';
+  const who = ` · ${actorLabel(actor)}`;
 
   const moveTo = async (column: BigColumnKey) => {
     const stageId = Number(await stageIdForColumn(groupId, column));
@@ -163,7 +200,7 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
       await moveTo(action.column);
       if (AUTO_COMPLETE_COLUMNS.has(action.column) && status !== '5') {
         await run.close(taskId, status, control);
-        await run.comment(taskId, `Перенесено в «${columnTitle(action.column)}» и закрыто из канбана больших чеков (Монолитика)${who}.`);
+        await run.comment(taskId, `Перенесено в «${columnTitle(action.column)}» и закрыто из канбана больших чеков (Монолитика${who}).`);
       }
       break;
     }
@@ -182,7 +219,7 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
       if (column === 'new') await moveTo('assigned').catch(e => { run.warnings.push(e instanceof Error ? e.message : String(e)); });
       const tz = action.comment?.trim();
       const rname = await read<{ NAME?: string; LAST_NAME?: string }[]>('user.get', { ID: rid }).then(u => [u?.[0]?.NAME, u?.[0]?.LAST_NAME].filter(Boolean).join(' ')).catch(() => '');
-      await run.comment(taskId, `[USER=${rid}]${rname || 'Менеджер'}[/USER], задача назначена на вас${who ? ` РОПом${who}` : ''}.${tz ? `\n[b]ТЗ:[/b]\n${tz.slice(0, 4000)}` : ''}`, uploadedFiles);
+      await run.comment(taskId, `[USER=${rid}]${rname || 'Менеджер'}[/USER], задача назначена на вас из Монолитики${who}.${tz ? `\n[b]ТЗ:[/b]\n${tz.slice(0, 4000)}` : ''}`, uploadedFiles);
       break;
     }
     case 'comment': {
@@ -192,21 +229,59 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
       break;
     }
     case 'accept': {
-      if (status === '5') break; // уже закрыта — цель достигнута
-      if (status !== '4') throw new BigActionError('Задача не ждёт контроля — принимать нечего');
-      await run.task('tasks.task.approve', { taskId });
-      await run.comment(taskId, `Задача принята в канбане больших чеков (Монолитика)${who}.`);
+      // «Ответ увидел, работаем дальше» — НЕ закрывать (владелец 18.11). Ждёт контроля → disapprove (обратно в работу).
+      if (status === '5') throw new BigActionError('Задача уже завершена');
+      const deadline = parseDeadline(action.deadline);
+      if (status === '4') await run.task('tasks.task.disapprove', { taskId }, 'из «ждёт контроля» обратно в работу — задача НЕ закрывается');
+      if (deadline) await run.task('tasks.task.update', { taskId, fields: { DEADLINE: deadline.toISOString() } }).catch(e => { run.warnings.push(`Срок не изменился: ${e instanceof Error ? e.message : e}`); });
+      const text = String(action.comment ?? '').trim();
+      await run.comment(taskId, `РОП посмотрел ответ, работаем дальше (Монолитика${who}).${deadline ? `\nНовый срок: ${fmtDeadline(deadline)}.` : ''}${text ? `\n${text.slice(0, 4000)}` : ''}`, uploadedFiles);
+      break;
+    }
+    case 'participants': {
+      const ids = (v: unknown): string[] | null => {
+        if (v === undefined) return null;
+        if (!Array.isArray(v) || v.length > 50 || !v.every(x => /^\d{1,10}$/.test(String(x)))) throw new BigActionError('Некорректный список участников');
+        return [...new Set(v.map(String))];
+      };
+      const auditors = ids(action.auditors) ?? [];
+      const accomplices = ids(action.accomplices);
+      const curA = (t.auditors ?? []).map(String);
+      const curC = (t.accomplices ?? []).map(String);
+      const same = (a: string[], b: string[]) => a.length === b.length && a.every(x => b.includes(x));
+      const fields: Record<string, unknown> = {};
+      if (!same(auditors, curA)) fields.AUDITORS = auditors.length ? auditors : [''];
+      if (accomplices && !same(accomplices, curC)) fields.ACCOMPLICES = accomplices.length ? accomplices : [''];
+      if (!Object.keys(fields).length) break;
+      await run.task('tasks.task.update', { taskId, fields });
+      // В истории задачи изменение видно от имени нажавшего; ушло вебхуком — подпишем в чате, кто это сделал.
+      if (run.viaWebhook || opts.dryRun) {
+        const diff = (now: string[], was: string[]) => ({ add: now.filter(x => !was.includes(x)), del: was.filter(x => !now.includes(x)) });
+        const a = diff(auditors, curA);
+        const c = accomplices ? diff(accomplices, curC) : { add: [], del: [] };
+        const all = [...new Set([...a.add, ...a.del, ...c.add, ...c.del])];
+        const names = new Map<string, string>();
+        if (all.length) {
+          const us = await read<{ ID: string; NAME?: string; LAST_NAME?: string }[]>('user.get', { filter: { ID: all } }).catch(() => []);
+          for (const u of us ?? []) names.set(String(u.ID), [u.NAME, u.LAST_NAME].filter(Boolean).join(' '));
+        }
+        const list = (ids: string[]) => ids.map(id => `[USER=${id}]${names.get(id) || `сотрудник ${id}`}[/USER]`).join(', ');
+        const parts = [
+          a.add.length ? `добавлены наблюдатели ${list(a.add)}` : '', a.del.length ? `убраны наблюдатели ${list(a.del)}` : '',
+          c.add.length ? `добавлены соисполнители ${list(c.add)}` : '', c.del.length ? `убраны соисполнители ${list(c.del)}` : '',
+        ];
+        await run.comment(taskId, `Участники задачи изменены из Монолитики${who}: ${parts.filter(Boolean).join('; ')}.`);
+      }
       break;
     }
     case 'return': {
       const comment = String(action.comment ?? '').trim();
       if (comment.length < 3) throw new BigActionError('Напишите, что доделать');
       if (status !== '4') throw new BigActionError('Вернуть можно только задачу, которая ждёт контроля');
-      const deadline = action.deadline ? new Date(action.deadline) : null;
-      if (deadline && (!Number.isFinite(deadline.getTime()) || deadline.getTime() < Date.now())) throw new BigActionError('Новый срок уже прошёл — выберите позже');
+      const deadline = parseDeadline(action.deadline);
       await run.task('tasks.task.disapprove', { taskId });
       if (deadline) await run.task('tasks.task.update', { taskId, fields: { DEADLINE: deadline.toISOString() } }).catch(e => { run.warnings.push(`Срок не изменился: ${e instanceof Error ? e.message : e}`); });
-      await run.comment(taskId, `Возвращено на доработку из канбана больших чеков (Монолитика)${who}:\n${comment.slice(0, 4000)}`, uploadedFiles);
+      await run.comment(taskId, `Возвращено на доработку из канбана больших чеков (Монолитика${who}):${deadline ? `\nНовый срок: ${fmtDeadline(deadline)}.` : ''}\n${comment.slice(0, 4000)}`, uploadedFiles);
       break;
     }
     case 'complete': {
@@ -214,7 +289,7 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
       const hasLost = Number(await stageIdForColumn(groupId, 'lost_check')) > 0;
       if (hasLost) await moveTo('lost_check');
       await run.close(taskId, status, control);
-      await run.comment(taskId, `Не продано — задача закрыта из канбана больших чеков (Монолитика)${who}.`);
+      await run.comment(taskId, `Не продано — задача закрыта из канбана больших чеков (Монолитика${who}).`);
       break;
     }
     default:
@@ -225,7 +300,8 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
     console.warn(`[big-deals action] refreshTask ${taskId}:`, e instanceof Error ? e.message : e);
     return null;
   });
-  return { card, calls: run.calls, warnings: run.warnings };
+  if (run.viaWebhook && !opts.dryRun) run.warnings.push(VIA_WEBHOOK_WARNING);
+  return { card, calls: run.calls, warnings: run.warnings, viaWebhook: run.viaWebhook };
 }
 
 /** Текущая колонка задачи — по карточке движка (он знает соответствие стадий проекта колонкам). */
