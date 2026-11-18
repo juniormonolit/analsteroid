@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, AtSign, Plus, Settings2, Trash2 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
-import { DEFAULT_TEMPLATES, MAX_QUESTIONS, MAX_TEMPLATES, type BigQuestionTemplate } from '../engine/templateDefaults';
+import { DEFAULT_TEMPLATES, MAX_QUESTIONS, MAX_TEMPLATES, suggestTemplate, type BigQuestionTemplate } from '../engine/templateDefaults';
 
 const KEY = ['big-deals-templates'];
 
@@ -29,17 +29,21 @@ export const templateText = (qs: string[]) => qs.map((q, i) => `${i + 1}. ${q}`)
 
 const chip = 'min-h-11 rounded-full border px-3 text-left text-[12px] sm:min-h-8';
 
-export function QuestionsBlock({ questions, onInsert, mock = false, rop, title = 'Вопросы и шаблоны' }: {
+export function QuestionsBlock({ questions, onInsert, mock = false, rop, deal, title = 'Вопросы и шаблоны' }: {
   /** Вопросы из описания задачи. */
   questions?: string[];
   onInsert: (text: string) => void;
   mock?: boolean;
   /** РОП исполнителя — кнопка «Отметить РОПа» (упоминание, Битрикс пришлёт ему уведомление). */
   rop?: { id: string; name: string } | null;
+  /** Сделка задачи: шаблон под её стадию — первым и выделен (собрание РОПов 18.11). */
+  deal?: { stageName: string; categoryId?: number | null } | null;
   title?: string;
 }) {
   const t = useBigTemplates(mock);
   const [edit, setEdit] = useState(false);
+  const best = t.data ? suggestTemplate(t.data, deal) : null;
+  const ordered = t.data ? (best ? [best, ...t.data.filter(x => x.id !== best.id)] : t.data) : [];
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex items-center gap-2">
@@ -50,12 +54,17 @@ export function QuestionsBlock({ questions, onInsert, mock = false, rop, title =
         </button>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {t.data?.map(tp => (
-          <button key={tp.id} type="button" onClick={() => onInsert(templateText(tp.questions))} title={templateText(tp.questions)}
-            className={`${chip} border-[var(--color-accent)] text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]`}>
-            {tp.name} <span className="opacity-60 tabular-nums">· {tp.questions.length}</span>
-          </button>
-        ))}
+        {ordered.map(tp => {
+          const isBest = tp.id === best?.id;
+          return (
+            <button key={tp.id} type="button" onClick={() => onInsert(templateText(tp.questions))}
+              title={`${isBest ? `Подходит стадии сделки «${deal?.stageName}»\n\n` : ''}${templateText(tp.questions)}`}
+              className={`${chip} border-[var(--color-accent)] ${isBest ? 'bg-[var(--color-accent)] font-semibold text-white' : 'text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]'}`}>
+              {isBest && <span className="mr-1 text-[10.5px] font-normal uppercase opacity-80">по стадии</span>}
+              {tp.name} <span className="opacity-60 tabular-nums">· {tp.questions.length}</span>
+            </button>
+          );
+        })}
         {rop && (
           <button type="button" onClick={() => onInsert(`[USER=${rop.id}]${rop.name}[/USER], `)} title={`Упомянуть РОПа исполнителя — ${rop.name}: Битрикс пришлёт ему уведомление`}
             className={`${chip} inline-flex items-center gap-1 border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]`}>
@@ -141,7 +150,7 @@ function TemplatesEditor({ initial, mock, onClose }: { initial: BigQuestionTempl
         <div className="flex flex-wrap justify-end gap-2">
           <button type="button" onClick={onClose} className="inline-flex min-h-11 items-center rounded-md border border-[var(--color-border)] px-3 hover:bg-[var(--color-bg-hover)]">Отмена</button>
           <button type="button" onClick={() => setList(DEFAULT_TEMPLATES.map(t => ({ id: t.id, name: t.name, text: t.questions.join('\n') })))}
-            className="inline-flex min-h-11 items-center rounded-md px-3 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Стартовый набор</button>
+            className="inline-flex min-h-11 items-center rounded-md px-3 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Набор РОПа (лист «Для Джуниора»)</button>
           <button type="button" disabled={busy} onClick={save} className="inline-flex min-h-11 items-center rounded-md bg-[var(--color-accent)] px-4 font-medium text-white disabled:opacity-50">{busy ? 'Сохраняю…' : 'Сохранить'}</button>
         </div>
       </div>

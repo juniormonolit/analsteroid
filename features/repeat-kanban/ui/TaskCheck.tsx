@@ -39,7 +39,8 @@ export function useTaskChecks(taskIds: number[], enabled: boolean) {
 /** Блок проверки: результат, если есть; кнопка «Проверить звонок» (стоимость не показываем — владелец 23.10); пока идёт — опрос раз в 4 с. */
 /** Подписи меняет канбан больших чеков (там чек-лист большой сделки, а не проверка пунктов задачи). */
 export interface TaskCheckLabels { title?: string; empty?: string; run?: string }
-export function TaskCheckPanel({ taskId, state, labels }: { taskId: number; state: TaskCheckState | undefined; labels?: TaskCheckLabels }) {
+/** onAsk — канбан больших чеков (собрание РОПов 18.11): «все красные и жёлтые — одной кнопкой требованием менеджеру». */
+export function TaskCheckPanel({ taskId, state, labels, onAsk }: { taskId: number; state: TaskCheckState | undefined; labels?: TaskCheckLabels; onAsk?: (items: string[]) => void }) {
   const qc = useQueryClient();
   const [runId, setRunId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -82,6 +83,13 @@ export function TaskCheckPanel({ taskId, state, labels }: { taskId: number; stat
             </li>
           ))}
         </ul>
+      )}
+      {onAsk && res && res.items.some(it => it.done !== 'yes') && (
+        <button type="button" onClick={() => onAsk(res.items.filter(it => it.done !== 'yes').map(it => it.item))}
+          title="Вставить в сообщение чата задачи пункты, которых не было (красные) или было частично (жёлтые)"
+          className="inline-flex min-h-11 items-center gap-1 self-start rounded-md bg-[var(--color-accent)] px-3 text-xs font-medium text-white active:scale-[0.98]">
+          Спросить по красным и жёлтым ({res.items.filter(it => it.done !== 'yes').length})
+        </button>
       )}
       {running && <p className="text-[var(--color-text-muted)]">Проверяю звонок… обычно 10–20 секунд.</p>}
       {row?.status === 'error' && <p className="text-[var(--color-negative)]">Проверка не удалась{row.error ? `: ${row.error}` : ''}.</p>}

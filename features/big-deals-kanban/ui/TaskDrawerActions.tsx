@@ -11,6 +11,7 @@ import { QuestionsBlock } from './QuestionsBlock';
 import { fmtDT } from './format';
 import { Section, postBigAction } from './TaskDrawerShared';
 import { ConfirmCloseModal } from './MassCloseModal';
+import { DeadlineField } from './DeadlineField';
 
 type Mode = null | 'reassign' | 'return' | 'accept' | 'renew' | 'deadline';
 /** Ждёт подтверждения закрытия: перенос в закрывающую колонку или «Не продано → завершить». */
@@ -83,7 +84,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
         {mode === 'reassign' && (
           <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
             <SearchSelect options={managerOptions} value={manager} onChange={setManager} placeholder="Выберите менеджера" searchable ariaLabel="Менеджер" className="min-h-11 w-full" />
-            <QuestionsBlock questions={questions} mock={mock} onInsert={addTz} title="Вопросы в ТЗ" />
+            <QuestionsBlock questions={questions} deal={card.deal} mock={mock} onInsert={addTz} title="Вопросы в ТЗ" />
             <textarea value={tz} onChange={e => setTz(e.target.value)} rows={4} placeholder="ТЗ менеджеру — уйдёт в чат задачи" className={input} />
             <button type="button" className={`${primary} self-end`} disabled={busy || !manager} onClick={() => run({ type: 'reassign', responsibleId: manager, comment: tz.trim() || undefined })}>
               {busy ? 'Назначаю…' : 'Назначить'}
@@ -94,10 +95,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
         {mode === 'return' && (
           <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
             <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="Что доделать" className={input} />
-            <label className="flex flex-col gap-1 text-[12px] text-[var(--color-text-muted)]">
-              Новый срок (необязательно)
-              <input type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} className={input} />
-            </label>
+            <DeadlineField label="Новый срок (необязательно)" value={deadline} onChange={setDeadline} />
             <button type="button" className={`${primary} self-end`} disabled={busy || comment.trim().length < 3}
               onClick={() => run({ type: 'return', comment: comment.trim(), deadline: deadline ? new Date(deadline).toISOString() : undefined })}>
               {busy ? 'Возвращаю…' : 'Вернуть'}
@@ -109,10 +107,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
           <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
             <p className="text-[12px] text-[var(--color-text-muted)]">Задача вернётся менеджеру в работу (не закроется), в чат уйдёт «РОП посмотрел ответ, работаем дальше». Закрыть — «Не продано → завершить» или перенос в «Продано».</p>
             <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} placeholder="Комментарий менеджеру (необязательно)" className={input} />
-            <label className="flex flex-col gap-1 text-[12px] text-[var(--color-text-muted)]">
-              Новый срок (необязательно)
-              <input type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} className={input} />
-            </label>
+            <DeadlineField label="Новый срок (необязательно)" value={deadline} onChange={setDeadline} />
             <button type="button" className={`${primary} self-end`} disabled={busy}
               onClick={() => run({ type: 'accept', comment: comment.trim() || undefined, deadline: deadline ? new Date(deadline).toISOString() : undefined })}>
               {busy ? 'Отправляю…' : 'Принял, работаем дальше'}
@@ -122,10 +117,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
 
         {mode === 'deadline' && (
           <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
-            <label className="flex flex-col gap-1 text-[12px] text-[var(--color-text-muted)]">
-              Срок исполнения{card.deadlineAt ? ` (сейчас ${fmtDT(card.deadlineAt)})` : ' (сейчас не задан)'}
-              <input type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} className={input} />
-            </label>
+            <DeadlineField label={`Срок исполнения${card.deadlineAt ? ` (сейчас ${fmtDT(card.deadlineAt)})` : ' (сейчас не задан)'}`} value={deadline} onChange={setDeadline} />
             <button type="button" className={`${primary} self-end`} disabled={busy || !deadline} onClick={() => run({ type: 'deadline', deadline: deadlineIso })}>
               {busy ? 'Сохраняю…' : 'Поставить срок'}
             </button>
@@ -135,10 +127,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
         {mode === 'renew' && (
           <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
             <p className="text-[12px] text-[var(--color-text-muted)]">Задача снова станет открытой у {card.responsible.name}, в чат уйдёт, кто и до какого числа её возобновил.</p>
-            <label className="flex flex-col gap-1 text-[12px] text-[var(--color-text-muted)]">
-              Новый срок исполнения (обязательно)
-              <input type="datetime-local" value={deadline} onChange={e => { setDeadline(e.target.value); setSure(false); }} className={input} />
-            </label>
+            <DeadlineField label="Новый срок исполнения (обязательно)" value={deadline} onChange={v => { setDeadline(v); setSure(false); }} />
             <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} placeholder="Комментарий (необязательно)" className={input} />
             {!sure ? (
               <button type="button" className={`${primary} self-end`} disabled={busy || !deadline} onClick={() => setSure(true)}>Возобновить…</button>

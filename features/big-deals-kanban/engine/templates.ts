@@ -4,7 +4,7 @@
 // сохранённый пустой массив — «удалил всё», стартовый набор не возвращаем.
 import { systemDb } from '@/lib/db/clients';
 
-import { DEFAULT_TEMPLATES, MAX_QUESTIONS, MAX_TEMPLATES, type BigQuestionTemplate } from './templateDefaults';
+import { DEFAULT_TEMPLATES, LEGACY_DEFAULT_IDS, MAX_QUESTIONS, MAX_TEMPLATES, type BigQuestionTemplate } from './templateDefaults';
 
 export { DEFAULT_TEMPLATES, MAX_QUESTIONS, MAX_TEMPLATES, type BigQuestionTemplate };
 
@@ -36,7 +36,12 @@ export async function listTemplates(userId: string): Promise<BigQuestionTemplate
     const r = await systemDb().query<{ t: unknown }>(`SELECT ui_prefs->'bigDealsTemplates' AS t FROM users WHERE id = $1`, [userId]);
     const v = r.rows[0]?.t;
     if (v === null || v === undefined) return DEFAULT_TEMPLATES;
-    try { return cleanTemplates(v); } catch { return DEFAULT_TEMPLATES; }
+    try {
+      const list = cleanTemplates(v);
+      // Сохранён прежний стартовый набор без своих шаблонов — отдаём новый (лист РОПа 18.11); свои шаблоны не трогаем.
+      if (list.length && list.every(t => LEGACY_DEFAULT_IDS.has(t.id))) return DEFAULT_TEMPLATES;
+      return list;
+    } catch { return DEFAULT_TEMPLATES; }
   } catch (e) {
     console.warn('[big-deals templates]', e instanceof Error ? e.message : e);
     return DEFAULT_TEMPLATES;

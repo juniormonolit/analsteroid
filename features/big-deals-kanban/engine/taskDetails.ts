@@ -131,7 +131,7 @@ interface ImMessage { id: number; author_id: number; date: string; text: string;
 interface ImUser { id: number; name: string }
 interface ImFile { id: number | string; name?: string }
 
-async function fetchChat(chatId: number): Promise<BigChatMessage[]> {
+export async function fetchChat(chatId: number): Promise<BigChatMessage[]> {
   const r = await read<{ messages?: ImMessage[]; users?: ImUser[]; files?: ImFile[] | Record<string, ImFile> }>('im.dialog.messages.get', { DIALOG_ID: `chat${chatId}`, LIMIT: 50 });
   const users = new Map((r?.users ?? []).map(u => [Number(u.id), u.name]));
   // files — массив или объект по id (PHP); вебхуку без доступа к файлам Битрикс отдаёт пусто — тогда «файл».

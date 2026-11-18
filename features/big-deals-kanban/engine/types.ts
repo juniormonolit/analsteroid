@@ -16,6 +16,12 @@ export interface BigDealInfo {
   amount: number;
   stageId: string;
   stageName: string;
+  /** Цвет стадии из Битрикса (crm.status EXTRA.COLOR) — РОПы 18.11: «стадию подсвечивать цветом, как в сделке». */
+  stageColor?: string | null;
+  /** Воронка: 0/2 — частные лица, 1/3 — стройкомпании (шаблон вопросов под стадию). */
+  categoryId?: number | null;
+  /** Дата создания сделки (ISO) — РОПы 18.11: «от какой даты сделка». */
+  createdAt?: string | null;
   /** Сделка закрыта: won | lost | null (в работе). */
   closed: 'won' | 'lost' | null;
   assigned: BigPerson | null;

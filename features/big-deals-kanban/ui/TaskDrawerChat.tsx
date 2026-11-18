@@ -1,7 +1,7 @@
 'use client';
 // Чат задачи прямо в канбане (встреча 11.11: «чат задачи прямо в канбане, шаблоны вопросов»).
 // Лента — im.dialog.messages.get чата задачи (taskDetails.ts), отправка — action 'comment' от имени нажавшего.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Paperclip, Send } from 'lucide-react';
 import { AttachmentsRow, useAttachments } from '@/features/repeat-kanban/ui/Attachments';
 import type { BigTaskCard } from '../engine/types';
@@ -10,12 +10,14 @@ import { fmtDT } from './format';
 import { QuestionsBlock } from './QuestionsBlock';
 import { Section, postBigAction } from './TaskDrawerShared';
 
-export function TaskChat({ card, messages, loading, onSent, questions, rop, mock = false }: {
+export function TaskChat({ card, messages, loading, onSent, questions, rop, inject, mock = false }: {
   card: BigTaskCard; messages: BigChatMessage[] | null; loading: boolean; onSent: (card?: BigTaskCard) => void;
   /** Вопросы из описания задачи — кнопками в блоке «Вопросы и шаблоны» (РОП 18.11: один блок вместо двух). */
   questions?: string[];
   /** РОП исполнителя — «Отметить РОПа». */
   rop?: { id: string; name: string } | null;
+  /** Текст снаружи (ИИ-оценка: «Спросить по красным и жёлтым») — дописывается в черновик; key — чтобы сработал повтор. */
+  inject?: { text: string; key: number } | null;
   mock?: boolean;
 }) {
   const [text, setText] = useState('');
@@ -25,6 +27,7 @@ export function TaskChat({ card, messages, loading, onSent, questions, rop, mock
   const att = useAttachments();
   // Упоминание РОПа — в начало строки через пробел, остальное — с новой строки.
   const insert = (t: string) => setText(prev => (!prev.trim() ? t : t.startsWith('[USER=') ? `${t}${prev.includes('\n') ? '\n' : ''}${prev.trimStart()}` : `${prev.trimEnd()}\n${t}`));
+  useEffect(() => { if (inject?.text) insert(inject.text); }, [inject?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   const send = async () => {
     if (!text.trim() && !att.files.length) return;
     setBusy(true); setErr(null); setWarn(null);
@@ -57,7 +60,7 @@ export function TaskChat({ card, messages, loading, onSent, questions, rop, mock
         ))}
       </div>
       <div className="mt-3">
-        <QuestionsBlock questions={questions} rop={rop} mock={mock} onInsert={insert} />
+        <QuestionsBlock questions={questions} rop={rop} deal={card.deal} mock={mock} onInsert={insert} />
       </div>
       <div className="mt-2 flex min-w-0 flex-col gap-2" {...att.dropZone}>
         <textarea value={text} onChange={e => setText(e.target.value)} onPaste={att.onPaste} rows={3}

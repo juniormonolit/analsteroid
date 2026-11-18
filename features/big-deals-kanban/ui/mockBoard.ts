@@ -52,7 +52,7 @@ function allCards(): BigTaskCard[] {
       productGroups: n % 7 === 0 ? [] : [PRODUCTS[n % PRODUCTS.length]],
       taskAmount: n % 5 === 0 ? amount : null,
       deal: n % 5 === 0 ? null : {
-        id: 90_000 + n, title: `Сделка ${n}`, amount, stageId: 'C1:EXECUTING', stageName: n % 2 ? 'Счёт выставлен' : 'Подбор товара',
+        id: 90_000 + n, title: `Сделка ${n}`, amount, stageId: n % 2 ? 'C1:1' : 'FINAL_INVOICE', stageName: n % 2 ? 'Отправил счет и договор (Бронь)' : 'Созвонился и озвучил цены (ЧЛ)', stageColor: n % 2 ? '#0072BC' : '#FEAD99', categoryId: n % 2 ? 1 : 0, createdAt: new Date(Date.now() - (n % 9 + 2) * 86_400_000).toISOString(),
         closed, assigned: resp, contactId: null, companyId: null, url: dealUrl(90_000 + n),
       },
       calls: n % 4 === 3 ? null : { total: n % 3 === 0 ? 0 : n % 6, talks: n % 3, talkSeconds: (n % 5) * 95, lastAt: null },

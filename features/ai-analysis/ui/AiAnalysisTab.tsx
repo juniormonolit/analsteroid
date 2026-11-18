@@ -16,6 +16,7 @@ import type { CallListItem } from '../engine/collect';
 import type { AnalysisRow } from '../engine/store';
 import type { QuoteCheck } from '../engine/verify';
 import { memoLines, PROPOSE_ASK_MARK, taskTextPlain } from '../engine/memo';
+import { labelSpeakers, ROLE_LABEL } from '../engine/speakers';
 import { CRITERIA_LABELS, VIOLATION_LABELS, type CriterionVerdict } from '../engine/parse';
 import { CLIENT_TYPES } from '@/features/client-module/engine/types';
 import Link from 'next/link';
@@ -222,15 +223,20 @@ function CallsList({ qs, calls, openId, highlights }: { qs: string; calls: CallL
                 {!full ? <span className="text-[var(--color-text-muted)]">{texts.isError ? 'Не удалось загрузить текст' : 'Загружаем текст…'}</span> : (
                   <>
                     {!full.hasRoles && <div className="mb-1 text-[11px] text-[var(--color-text-muted)]">Роли не размечены распознаванием — сплошной текст</div>}
-                    {full.text!.split('\n').map((ln, i) => {
-                      const hit = heads.some(h => norm(ln).includes(h));
-                      const speaker = ln.match(/^\s*"?(Менеджер|Клиент|Спикер \d)"?\s*[:：]/);
-                      return (
-                        <div key={i} className={`break-words ${hit ? 'rounded bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] px-1' : ''}`}>
-                          {speaker ? <><b className="text-[var(--color-text-muted)]">{speaker[1]}:</b>{ln.slice(speaker[0].length)}</> : ln}
-                        </div>
-                      );
-                    })}
+                    {(() => {
+                      // «Спикер 1/2» → «Менеджер/Клиент» (engine/speakers.ts); строк столько же, сколько в тексте.
+                      const labeled = labelSpeakers(full.text!, c.direction);
+                      return full.text!.split('\n').map((ln, i) => {
+                        const hit = heads.some(h => norm(ln).includes(h));
+                        const l = labeled[i];
+                        const who = l?.speaker ? (l.role ? ROLE_LABEL[l.role] : l.speaker) : null;
+                        return (
+                          <div key={i} className={`break-words ${hit ? 'rounded bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] px-1' : ''}`}>
+                            {who ? <><b className="text-[var(--color-text-muted)]">{who}:</b> {l!.text}</> : ln}
+                          </div>
+                        );
+                      });
+                    })()}
                   </>
                 )}
               </div>
