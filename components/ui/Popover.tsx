@@ -1,4 +1,5 @@
 'use client';
+import { useLayoutEffect, useRef, useState } from 'react';
 import * as RadixPopover from '@radix-ui/react-popover';
 import { twMerge } from 'tailwind-merge';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -24,6 +25,16 @@ import { Tooltip } from '@/components/ui/Tooltip';
  * заведомо выше любой существующей fixed-панели в приложении (максимум
  * сейчас — `z-[70]` у `DealCard`), чтобы popover/datepicker были видны и
  * кликабельны из ЛЮБОЙ панели, включая будущие с ещё большим z.
+ *
+ * Прокрутка внутри модалки (баг 18.11, «Перенести в…» в карточке канбана больших чеков:
+ * список не крутится ни колесом, ни тачем). Radix Dialog (Modal/Drawer) вешает scroll-lock
+ * react-remove-scroll: wheel/touchmove на document отменяются для всего, что вне контента
+ * диалога. Панель поповера порталится в `<body>` — то есть «вне», и её список не
+ * прокручивается. Лечение: если триггер стоит внутри `[role="dialog"]`, поповер
+ * открывается в `modal`-режиме — Radix оборачивает панель в СВОЙ RemoveScroll, он
+ * становится верхним в стеке блокировок (активен только верхний), и прокрутка панели
+ * разрешена. Побочно (как у нативного select): клик мимо панели только закрывает её.
+ * Вне диалогов поведение прежнее (не modal). Явно переопределить — проп `modal`.
  */
 export function Popover({
   trigger,
@@ -36,6 +47,7 @@ export function Popover({
   onOpenChange,
   tooltip,
   sideOffset = 4,
+  modal,
 }: {
   trigger: React.ReactNode;
   children: React.ReactNode;
@@ -49,11 +61,19 @@ export function Popover({
       компонент Tooltip props на ребёнка не пробрасывает, обратный порядок не работает. */
   tooltip?: string;
   sideOffset?: number;
+  /** По умолчанию — авто: true, если триггер внутри Radix Dialog (см. «Прокрутка внутри модалки»). */
+  modal?: boolean;
 }) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [inDialog, setInDialog] = useState(false);
+  // Решаем до первого открытия: modal нужен уже при монтировании Content.
+  useLayoutEffect(() => {
+    setInDialog(!!triggerRef.current?.closest('[role="dialog"],[role="alertdialog"]'));
+  }, []);
   return (
-    <RadixPopover.Root open={open} onOpenChange={onOpenChange}>
+    <RadixPopover.Root open={open} onOpenChange={onOpenChange} modal={modal ?? inDialog}>
       <Tooltip content={tooltip} side="right" disabled={!tooltip || !!open}>
-        <RadixPopover.Trigger asChild>{trigger}</RadixPopover.Trigger>
+        <RadixPopover.Trigger asChild ref={triggerRef}>{trigger}</RadixPopover.Trigger>
       </Tooltip>
       <RadixPopover.Portal>
         <RadixPopover.Content
