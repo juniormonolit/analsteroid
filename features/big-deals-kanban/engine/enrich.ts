@@ -85,6 +85,37 @@ export async function fetchDeals(ids: number[]): Promise<Map<number, BigDealInfo
   return out;
 }
 
+// ── товарные группы сделок (sa.deals: head-группа + группы товаров, как фильтр повторки shippedGroups.ts) ──
+export interface DealGroups { head: string | null; all: string[] }
+/** deal_id → товарные группы. null — БД недоступна (локально так всегда). */
+export async function fetchDealGroups(dealIds: number[]): Promise<Map<number, DealGroups> | null> {
+  const out = new Map<number, DealGroups>();
+  if (!dealIds.length) return out;
+  try {
+    const q = analyticsDb().query<{ deal_id: string; head: string | null; groups: string[] | null }>(
+      `SELECT d.deal_id::text AS deal_id, d.head_group_name AS head,
+              (SELECT array_agg(DISTINCT g) FROM (
+                 SELECT d.head_group_name AS g
+                 UNION SELECT p->>'head_group_name' FROM jsonb_array_elements(coalesce(d.products, '[]'::jsonb)) p
+                  WHERE coalesce(p->>'type', '') <> 'услуга') x
+                WHERE g IS NOT NULL AND g !~* '^(доставка|перевозка|услуг|разное)') AS groups
+         FROM sa.deals d WHERE d.deal_id = ANY($1::bigint[])`,
+      [dealIds],
+    );
+    q.catch(() => {});
+    const res = await Promise.race([q, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout 8s')), 8000))]);
+    for (const r of res.rows) {
+      const head = r.head && !/^(доставка|перевозка|услуг|разное)/i.test(r.head) ? r.head : null;
+      const all = (r.groups ?? []).filter(Boolean).sort((a, b) => a.localeCompare(b, 'ru'));
+      out.set(Number(r.deal_id), { head: head ?? all[0] ?? null, all });
+    }
+    return out;
+  } catch (e) {
+    console.warn('[big-deals] sa.deals (товарные группы) недоступна:', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
 // ── звонки (va.calls, ТОЛЬКО failed_at_stage IS NULL) ──────────────────────
 export interface CallRow { at: number; sec: number }
 /** deal_id → звонки с `sinceIso`. null — БД недоступна (локально так всегда). */

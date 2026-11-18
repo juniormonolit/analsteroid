@@ -12,7 +12,7 @@ import { relatedIndex } from './enrich';
 export interface BigBoardFilters {
   groups?: number[];
   manager?: string | null;
-  product?: string | null;
+  products?: string[] | null;
   q?: string | null;
   force?: boolean;
 }
@@ -66,15 +66,16 @@ export async function boardFromCards(all: BigTaskCard[], o: {
     if (c.deal?.assigned) people.set(c.deal.assigned.id, c.deal.assigned.name);
   }
   const managers: BigPerson[] = [...people].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-  const productGroups = [...new Set(visible.map(c => c.productGroup).filter((x): x is string => !!x))].sort((a, b) => a.localeCompare(b, 'ru'));
+  const productGroups = [...new Set(visible.flatMap(c => c.productGroups))].sort((a, b) => a.localeCompare(b, 'ru'));
 
   const f = o.filters;
   const groups = f.groups?.length ? new Set(f.groups) : null;
   const q = f.q?.trim().toLowerCase() || null;
+  const products = f.products?.length ? new Set(f.products) : null;
   const cards = visible.filter(c =>
     (!groups || groups.has(c.groupId))
     && (!f.manager || c.responsible.id === f.manager || c.deal?.assigned?.id === f.manager)
-    && (!f.product || c.productGroup === f.product)
+    && (!products || c.productGroups.some(g => products.has(g)))
     && (!q || c.title.toLowerCase().includes(q) || String(c.id) === q || (c.deal && String(c.deal.id) === q) || (c.deal?.title ?? '').toLowerCase().includes(q)));
 
   const gids = await columnGroupIds();

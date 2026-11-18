@@ -61,7 +61,12 @@ export function BigDealsKanbanPage() {
   const [view, setView] = useUrlState('view', { ...enumParam(VIEWS, 'board'), mode: 'push' });
   const [groupSel, setGroupSel] = useUrlState('group', listParam([]));
   const [manager, setManager] = useUrlState('manager', stringParam(''));
-  const [products, setProducts] = useUrlState('product', listParam([]));
+  // Через «|»: в названиях товарных групп бывают запятые («Бордюры (поребрики, бортовые камни)»).
+  const [products, setProducts] = useUrlState('product', {
+    ...listParam([]),
+    parse: (raw: string) => (raw === '' ? [] : raw.split('|').filter(Boolean)),
+    serialize: (v: string[]) => { const d = [...new Set(v)]; return d.length ? d.join('|') : null; },
+  });
   const [q, setQ] = useUrlState('q', stringParam(''));
   const [taskParam, setTaskParam] = useUrlState('task', { ...stringParam(''), mode: 'push' });
   const [mockParam] = useUrlState('mock', stringParam(''));
@@ -86,7 +91,7 @@ export function BigDealsKanbanPage() {
       const p = new URLSearchParams();
       if (groupSel.length) p.set('group', groupSel.join(','));
       if (manager) p.set('manager', manager);
-      if (products.length) p.set('product', products.join(','));
+      if (products.length) p.set('product', products.join('|'));
       if (q) p.set('q', q);
       const r = await fetch(`/api/big-deals-kanban${p.size ? `?${p}` : ''}`);
       const j = await r.json().catch(() => ({}));

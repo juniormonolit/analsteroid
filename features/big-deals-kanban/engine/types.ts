@@ -67,8 +67,10 @@ export interface BigTaskCard {
   daysInColumn: number;
   /** Дольше порога STUCK_DAYS. */
   stuck: boolean;
-  /** Товарная группа — первая часть названия задачи до «|» («Газобетон», «Утеплитель Минеральная вата…»). */
+  /** Товарная группа сделки (sa.deals.head_group_name, решение владельца 18.11); БД недоступна — часть названия задачи до «|». */
   productGroup: string | null;
+  /** Все товарные группы сделки (head-группа + группы товаров, без услуг/доставки) — для фильтра. */
+  productGroups: string[];
   /** Сумма из задачи (поле «Общая сумма» описания), если сделки нет. */
   taskAmount: number | null;
   deal: BigDealInfo | null;

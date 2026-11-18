@@ -7,7 +7,7 @@ import type { BigDealInfo, BigRelatedTask, BigTaskCard } from './types';
 import { bxBatch, taskWebhook, type BatchCmd } from './rest';
 import { columnOfStage, stagesOfGroup, type BigStage } from './stages';
 import {
-  callStats, dealIdOf, fetchCalls, fetchDeals, fetchRelated, relatedIndex, loadNames, personOf, productGroupOf, rememberName, taskAmountOf, taskState,
+  callStats, dealIdOf, fetchCalls, fetchDealGroups, fetchDeals, fetchRelated, relatedIndex, loadNames, personOf, productGroupOf, rememberName, taskAmountOf, taskState,
 } from './enrich';
 import { resolveSince } from './stageSince';
 
@@ -70,10 +70,11 @@ export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
   const dbg = process.env.BIGDEALS_DEBUG ? (l: string) => (p: Promise<unknown>) => { const t = Date.now(); p.then(() => console.log(`[big-deals] ${l} ${Date.now() - t} мс`), () => {}); } : null;
   const pDeals = fetchDeals(dealIds).catch(e => { console.warn('[big-deals] deals', e instanceof Error ? e.message : e); return new Map<number, BigDealInfo>(); });
   const pCalls = fetchCalls([...new Set(dealIds)], new Date(minCreated).toISOString());
+  const pGroups = fetchDealGroups([...new Set(dealIds)]);
   // Одна карточка (refreshTask) — прямой запрос по сделке; вся доска — фоновый индекс.
   const pRel = (raw.length <= 5 ? fetchRelated(dealIds.map(id => `D_${id}`)) : Promise.resolve(relatedIndex())).catch(e => { console.warn('[big-deals] related', e instanceof Error ? e.message : e); return new Map<string, BigRelatedTask[]>(); });
   if (dbg) { dbg('deals')(pDeals); dbg('calls')(pCalls); dbg('related')(pRel); }
-  const [deals, calls, related] = await Promise.all([pDeals, pCalls, pRel]);
+  const [deals, calls, related, dealGroups] = await Promise.all([pDeals, pCalls, pRel, pGroups]);
   await loadNames(raw.flatMap(t => [t.responsibleId, t.createdBy]).map(String));
 
   const pre: { t: RawTask; column: BigColumnKey; stageId: number; stageTitle: string }[] = [];
@@ -99,7 +100,15 @@ export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
       auditors: (t.auditors ?? []).map(String),
       createdAt, changedAt: iso(t.changedDate), closedAt: iso(t.closedDate), deadlineAt: iso(t.deadline),
       inColumnSince, daysInColumn: 0, stuck: false,
-      productGroup: productGroupOf(t.title),
+      // Товарная группа — из сделки в БД (владелец 18.11: название задачи — свободный текст, фильтр шумел).
+      // Без БД (локально) — часть названия задачи до «|».
+      ...(() => {
+        const g = dealId ? dealGroups?.get(dealId) : undefined;
+        if (dealGroups && g) return { productGroup: g.head, productGroups: g.all };
+        if (dealGroups) return { productGroup: null, productGroups: [] };
+        const t1 = productGroupOf(t.title);
+        return { productGroup: t1, productGroups: t1 ? [t1] : [] };
+      })(),
       taskAmount: taskAmountOf(t.description, t.ufAuto593587150308),
       deal: dealId ? deals.get(dealId) ?? null : null,
       calls: calls && dealId ? callStats(calls.get(dealId), new Date(createdAt).getTime()) : calls ? callStats([], 0) : null,

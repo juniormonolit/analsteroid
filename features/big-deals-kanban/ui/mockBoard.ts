@@ -30,6 +30,7 @@ export function mockBoard(): BigBoardResponse {
       inColumnSince: new Date(now - days * 86_400_000).toISOString(), daysInColumn: days,
       stuck: days > (STUCK_DAYS[column] ?? 99),
       productGroup: n % 7 === 0 ? null : PRODUCTS[n % PRODUCTS.length],
+      productGroups: n % 7 === 0 ? [] : [PRODUCTS[n % PRODUCTS.length]],
       taskAmount: n % 5 === 0 ? amount : null,
       deal: n % 5 === 0 ? null : {
         id: 90_000 + n, title: `Сделка ${n}`, amount, stageId: 'C1:EXECUTING', stageName: n % 2 ? 'Счёт выставлен' : 'Подбор товара',
