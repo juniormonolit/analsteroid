@@ -146,7 +146,7 @@ export function mockAnalytics(from: string, to: string): BigAnalyticsResponse {
   const sold = sum('sold'), lost = sum('lost');
   const conversion = sold / (sold + lost);
   return {
-    from, to, managers, avgConversion: conversion,
+    from, to, by: 'responsible', managers, avgConversion: conversion,
     total: { manager: { id: '', name: 'Итого' }, tasks: sum('tasks'), open: sum('open'), sold, lost, conversion, soldSum: sum('soldSum'), openSum: sum('openSum'), callsPerTask: 2.4 },
   };
 }

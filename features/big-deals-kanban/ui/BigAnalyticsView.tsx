@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp } from 'lucide-react';
 import { stringParam, useUrlState } from '@/lib/hooks/useUrlState';
-import type { BigAnalyticsResponse, BigFilters, BigManagerStat } from '../engine/types';
+import type { BigAnalyticsBy, BigAnalyticsResponse, BigFilters, BigManagerStat } from '../engine/types';
 import { FIELD } from './BigFiltersPanel';
 import { filtersToParams } from './filters';
 import { money } from './format';
@@ -34,6 +34,9 @@ export function BigAnalyticsView({ filters, mock }: { filters: BigFilters; mock:
   const def = useMemo(() => { const to = new Date(); const from = new Date(to.getTime() - 89 * 86_400_000); return { from: ymd(from), to: ymd(to) }; }, []);
   const [fromRaw, setFrom] = useUrlState('afrom', stringParam(''));
   const [toRaw, setTo] = useUrlState('ato', stringParam(''));
+  // Разрез: исполнитель (кто хорошо выполняет) / постановщик (кто хорошо ставит задачи) — владелец 18.11.
+  const [byRaw, setBy] = useUrlState('aby', stringParam(''));
+  const by: BigAnalyticsBy = byRaw === 'creator' ? 'creator' : 'responsible';
   const from = isDay(fromRaw) ? fromRaw : def.from;
   const to = isDay(toRaw) ? toRaw : def.to;
   const [sort, setSort] = useState<{ key: Key; desc: boolean }>({ key: 'tasks', desc: true });
@@ -42,6 +45,7 @@ export function BigAnalyticsView({ filters, mock }: { filters: BigFilters; mock:
   const scope: BigFilters = { groups: filters.groups, products: filters.products, manager: filters.manager };
   const qs = filtersToParams(scope);
   qs.set('from', from); qs.set('to', to);
+  if (by === 'creator') qs.set('by', 'creator');
   const { data, error, isLoading, isFetching } = useQuery<BigAnalyticsResponse, Error>({
     queryKey: ['big-deals-kanban-analytics', mock ? 'mock' : '', qs.toString()],
     queryFn: async () => {
@@ -80,6 +84,13 @@ export function BigAnalyticsView({ filters, mock }: { filters: BigFilters; mock:
   return (
     <div className="flex min-w-0 flex-col gap-3 px-4 pb-6 pt-3 sm:min-h-0 sm:flex-1 sm:overflow-y-auto sm:px-6">
       <div className="flex min-w-0 flex-wrap items-end gap-2">
+        <div role="group" aria-label="Разрез" className="flex rounded-lg bg-[var(--color-bg-surface)] p-0.5">
+          {([['responsible', 'По исполнителю'], ['creator', 'По постановщику']] as const).map(([k, label]) => (
+            <button key={k} type="button" aria-pressed={by === k} onClick={() => setBy(k === 'creator' ? 'creator' : '')}
+              title={k === 'creator' ? 'Кто ставит задачи и чем они заканчиваются' : 'Кто выполняет задачи и чем они заканчиваются'}
+              className={`min-h-11 rounded-md px-3 text-sm ${by === k ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>{label}</button>
+          ))}
+        </div>
         <label className="flex min-w-0 flex-col gap-1 text-xs text-[var(--color-text-muted)]">Создана с
           <input type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} className={`${FIELD} w-auto bg-[var(--color-bg-surface)]`} />
         </label>
@@ -111,7 +122,7 @@ export function BigAnalyticsView({ filters, mock }: { filters: BigFilters; mock:
                     <th key={c.key} scope="col" title={c.title} className={`px-3 py-1 font-medium ${c.key === 'name' ? 'sticky left-0 z-[1] bg-[var(--color-bg-surface)] text-left' : 'text-right'}`}>
                       <button type="button" onClick={() => setSort(s => ({ key: c.key, desc: s.key === c.key ? !s.desc : c.key !== 'name' }))}
                         className={`inline-flex min-h-11 items-center gap-0.5 ${on ? 'text-[var(--color-text)]' : ''}`}>
-                        {c.label}{on && (sort.desc ? <ArrowDown size={12} aria-hidden /> : <ArrowUp size={12} aria-hidden />)}
+                        {c.key === 'name' ? (by === 'creator' ? 'Постановщик' : 'Исполнитель') : c.label}{on && (sort.desc ? <ArrowDown size={12} aria-hidden /> : <ArrowUp size={12} aria-hidden />)}
                       </button>
                     </th>
                   );

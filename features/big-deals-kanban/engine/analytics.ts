@@ -1,9 +1,9 @@
 // Аналитика канбана больших чеков по менеджерам (встреча 11.11: «сколько больших задач, продано, проебано, конверсия —
-// подсветить низкую»). Менеджер = ответственный задачи. Период — по дате создания задачи (МСК), по умолчанию 90 дней.
+// подсветить низкую»). Разрез (владелец 18.11): by=responsible — исполнитель задачи, by=creator — постановщик. Период — по дате создания задачи (МСК), по умолчанию 90 дней.
 // Снимок доски держит закрытые только за 30 дней, поэтому закрытые раньше догружаются отдельно и лениво (load.ts,
 // loadArchivedCards, кэш 30 мин) — только для аналитики, холодная загрузка доски не растёт.
 import type { SessionUser } from '@/lib/auth/session';
-import type { BigAnalyticsResponse, BigFilters, BigManagerStat, BigPerson, BigTaskCard } from './types';
+import type { BigAnalyticsBy, BigAnalyticsResponse, BigFilters, BigManagerStat, BigPerson, BigTaskCard } from './types';
 import { loadArchivedCards, loadSnapshot, withAge } from './load';
 import { bigActor } from './actor';
 import { canSeeTask, type VisibilityActor } from './visibility';
@@ -35,8 +35,9 @@ const empty = (manager: BigPerson): BigManagerStat =>
 
 /** Чистый расчёт по готовым карточкам (видимость + фильтры + период). */
 export function analyticsFromCards(all: BigTaskCard[], o: {
-  actor: VisibilityActor; filters: BigFilters; from: string; to: string; now?: number;
+  actor: VisibilityActor; filters: BigFilters; from: string; to: string; now?: number; by?: BigAnalyticsBy;
 }): BigAnalyticsResponse {
+  const by: BigAnalyticsBy = o.by === 'creator' ? 'creator' : 'responsible';
   const now = o.now ?? Date.now();
   const f: BigFilters = { ...o.filters, createdFrom: o.from, createdTo: o.to };
   const byId = new Map<number, BigTaskCard>();
@@ -46,8 +47,9 @@ export function analyticsFromCards(all: BigTaskCard[], o: {
   const per = new Map<string, BigManagerStat & { callsN: number; callsSum: number }>();
   const total = { ...empty({ id: 'all', name: 'Все' }), callsN: 0, callsSum: 0 };
   for (const c of cards) {
-    const m = per.get(c.responsible.id) ?? { ...empty(c.responsible), callsN: 0, callsSum: 0 };
-    per.set(c.responsible.id, m);
+    const who = by === 'creator' ? c.creator : c.responsible;
+    const m = per.get(who.id) ?? { ...empty(who), callsN: 0, callsSum: 0 };
+    per.set(who.id, m);
     for (const s of [m, total]) {
       s.tasks++;
       const amount = cardAmount(c);
@@ -64,14 +66,14 @@ export function analyticsFromCards(all: BigTaskCard[], o: {
   const t = fin(total);
   // Средняя конверсия — общая по всем задачам периода (sold / (sold + lost)), а не среднее процентов: у менеджера
   // с двумя задачами не тот вес, что у менеджера с двумястами.
-  return { from: o.from, to: o.to, total: t, managers, avgConversion: t.conversion };
+  return { from: o.from, to: o.to, by, total: t, managers, avgConversion: t.conversion };
 }
 
-export async function buildBigAnalytics(session: SessionUser, filters: BigFilters, period: { from: string; to: string }): Promise<BigAnalyticsResponse> {
+export async function buildBigAnalytics(session: SessionUser, filters: BigFilters, period: { from: string; to: string }, by: BigAnalyticsBy = 'responsible'): Promise<BigAnalyticsResponse> {
   const needArchive = period.from < mskDate(Date.now() - SNAPSHOT_CLOSED_DAYS * DAY);
   const [actor, snap, archived] = await Promise.all([
     bigActor(session), loadSnapshot(), needArchive ? loadArchivedCards(period.from) : Promise.resolve([] as BigTaskCard[]),
   ]);
   // Снимок первым: при дублях (задача закрылась между загрузками) берётся свежая карточка.
-  return analyticsFromCards([...snap.cards, ...archived], { actor, filters, ...period });
+  return analyticsFromCards([...snap.cards, ...archived], { actor, filters, ...period, by });
 }
