@@ -150,7 +150,7 @@ function Section({ s, n }: { s: GuideSection; n: number }): ReactNode {
 
 type Who = 'all' | 'rop' | 'manager';
 
-export function GuidePage({ guide }: { guide: Guide }) {
+export function GuidePage({ guide, backHref = '/repeat-kanban' }: { guide: Guide; backHref?: string }) {
   const [who, setWho] = useState<Who>('all');
   const [active, setActive] = useState<string>(guide.sections[0]?.id ?? '');
   const sections = useMemo(() => guide.sections.filter(s => who === 'all' || !s.audience || s.audience === who), [guide, who]);
@@ -175,7 +175,7 @@ export function GuidePage({ guide }: { guide: Guide }) {
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden bg-[var(--color-bg-surface)]">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6">
-        <Link href="/repeat-kanban" className="inline-flex min-h-11 items-center gap-1.5 self-start text-sm text-[var(--color-accent)] hover:underline">
+        <Link href={backHref} className="inline-flex min-h-11 items-center gap-1.5 self-start text-sm text-[var(--color-accent)] hover:underline">
           <ArrowLeft size={16} /> К канбану
         </Link>
         <div className="flex flex-col gap-2 rounded-2xl bg-[var(--color-accent)] p-5 text-white sm:p-7">
