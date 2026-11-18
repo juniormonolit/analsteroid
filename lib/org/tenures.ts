@@ -43,16 +43,16 @@ interface HistRow { name: string; vf: string; vt: string | null }
 interface Segment { name: string; start: string | null; end: string | null }
 
 // История имён логина → периоды людей. Первая запись истории — затравка org-sync
-// 13.07.2026 (начало неизвестно). Заглушка дольше 3 дней разрывает склейку.
+// 13.07.2026 (начало неизвестно). Склейку разрывает только другой человек.
 export function historySegments(h: HistRow[]): Segment[] {
   const out: Segment[] = [];
   h.forEach((row, i) => {
     if (isPlaceholderName(row.name)) return;
     const last = out[out.length - 1];
-    // Тот же человек сразу же или после короткой заглушки (≤ 3 дней) — один период.
-    const gap = last?.end ? (Date.parse(row.vf) - Date.parse(last.end)) / 86_400_000 : Infinity;
-    if (last && gap <= 3 && samePerson(last.name, row.name)) {
-      last.end = row.vt; last.name = row.name;
+    // Тот же человек снова, а между — никого (только заглушка) — один период.
+    if (last && samePerson(last.name, row.name)) {
+      last.end = row.vt;
+      if (!hasStatusMark(row.name)) last.name = row.name; // имя без пометки «В ОТПУСКЕ» и т.п.
     } else {
       out.push({ name: row.name, start: i === 0 ? null : row.vf, end: row.vt });
     }
@@ -67,9 +67,16 @@ function sinceOf(h: HistRow[], name: string, today: string): string {
 }
 
 // «Иванов Иван Сергеевич» ≈ «Иван Иванов»: фамилия и имя совпадают без учёта порядка.
-function samePerson(a: string, b: string): boolean {
-  const wa = new Set(normName(a).split(' ')), wb = normName(b).split(' ');
-  return wb.length >= 2 && wb.every(w => wa.has(w));
+// Слова ЗАГЛАВНЫМИ — пометки в Битриксе («В ОТПУСКЕ Романова», «УДАЛИТЬ», «РОП МСК»),
+// не часть ФИО: при сравнении людей их не учитываем.
+const personWords = (s: string) => s.trim().split(/\s+/).filter(w => !/^[А-ЯЁA-Z]+$/.test(w)).map(w => normName(w));
+export const hasStatusMark = (s: string) => personWords(s).length !== s.trim().split(/\s+/).length;
+
+export function samePerson(a: string, b: string): boolean {
+  const wa = personWords(a), wb = personWords(b);
+  if (!wa.length || !wb.length) return false;
+  const [short, long] = wa.length <= wb.length ? [wa, new Set(wb)] : [wb, new Set(wa)];
+  return short.every(w => long.has(w));
 }
 
 const todayMsk = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });

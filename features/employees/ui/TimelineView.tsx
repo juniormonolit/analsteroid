@@ -176,8 +176,8 @@ export function TimelineView() {
           <div ref={scrollRef} className="scroll-x rounded-lg border border-[var(--color-border)]">
             <div className="min-w-max text-sm">
               {/* Шапка: годы и месяцы */}
-              <div className="sticky top-0 z-20 flex border-b border-[var(--color-border)] bg-[var(--color-bg-subtle)]">
-                <div className="sticky left-0 z-30 w-36 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-2 py-1 text-xs font-medium uppercase text-[var(--color-text-muted)] sm:w-60">
+              <div className="sticky top-0 z-20 flex border-b border-[var(--color-border)] bg-[var(--color-bg)]">
+                <div className="sticky left-0 z-30 w-36 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-xs font-medium uppercase text-[var(--color-text-muted)] sm:w-60">
                   Логин
                 </div>
                 <div className="relative h-10" style={{ width }}>
