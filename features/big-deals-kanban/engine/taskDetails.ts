@@ -5,7 +5,7 @@ import { read } from '@/features/repeat-kanban/engine/createDeal';
 import { stripBb } from '@/features/repeat-kanban/engine/taskNotes';
 import type { BxBigTask } from './actions';
 
-export interface BigChatMessage { id: number; author: string | null; authorId: string; at: string; text: string; system: boolean }
+export interface BigChatMessage { id: number; author: string | null; authorId: string; at: string; text: string; system: boolean; /** Имена вложенных файлов (картинки и т.п.). */ files?: string[] }
 export interface BigDealProduct { name: string; qty: number; price: number; sum: number; unit: string | null }
 export interface BigTaskDetails {
   taskId: number;
@@ -90,18 +90,25 @@ async function fetchDealProducts(dealId: number): Promise<BigDealProduct[] | nul
   });
 }
 
-interface ImMessage { id: number; author_id: number; date: string; text: string }
+interface ImMessage { id: number; author_id: number; date: string; text: string; params?: { FILE_ID?: (number | string)[] } | null }
 interface ImUser { id: number; name: string }
+interface ImFile { id: number | string; name?: string }
 
 async function fetchChat(chatId: number): Promise<BigChatMessage[]> {
-  const r = await read<{ messages?: ImMessage[]; users?: ImUser[] }>('im.dialog.messages.get', { DIALOG_ID: `chat${chatId}`, LIMIT: 50 });
+  const r = await read<{ messages?: ImMessage[]; users?: ImUser[]; files?: ImFile[] | Record<string, ImFile> }>('im.dialog.messages.get', { DIALOG_ID: `chat${chatId}`, LIMIT: 50 });
   const users = new Map((r?.users ?? []).map(u => [Number(u.id), u.name]));
+  // files — массив или объект по id (PHP); вебхуку без доступа к файлам Битрикс отдаёт пусто — тогда «файл».
+  const fileList = Array.isArray(r?.files) ? r.files : Object.values(r?.files ?? {});
+  const fileNames = new Map(fileList.map(f => [Number(f.id), f.name ?? 'файл']));
+  // Сообщение с одной картинкой — пустой текст + params.FILE_ID. Раньше такие отбрасывались, и фото в ленте
+  // Монолитики не было вовсе (18.11, РОП Осипов: «фотка не отправилась»).
   return (r?.messages ?? [])
-    .map(m => ({ m, text: stripBb(m.text ?? '') }))
-    .filter(x => x.text.length > 0)
+    .map(m => ({ m, text: stripBb(m.text ?? ''), files: (m.params?.FILE_ID ?? []).map(id => fileNames.get(Number(id)) ?? 'файл') }))
+    .filter(x => x.text.length > 0 || x.files.length > 0)
     .sort((a, b) => a.m.date.localeCompare(b.m.date))
-    .map(({ m, text }) => ({
+    .map(({ m, text, files }) => ({
       id: m.id, author: users.get(m.author_id) ?? null, authorId: String(m.author_id),
       at: new Date(m.date).toISOString(), text: text.slice(0, 3000), system: m.author_id === 0,
+      ...(files.length ? { files } : {}),
     }));
 }

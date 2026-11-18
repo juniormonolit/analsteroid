@@ -124,6 +124,15 @@ class Runner {
 
   /** Комментарий в чат задачи от имени нажавшего. Не роняет действие: не ушёл — предупреждение. */
   async comment(taskId: number, text: string, files: number[] = [], must = false): Promise<void> {
+    // Задача нового вида (с чатом): task.commentitem.add кладёт в чат только текст, UF_FORUM_MESSAGE_DOC Битрикс
+    // молча отбрасывает (18.11, РОП Осипов, задача 176566: скриншот 3100488 загружен на Диск, текст в чате есть,
+    // картинки нет — а Монолитика сказала «отправлено»). Пока нет отправки файла в IM-чат от имени пользователя —
+    // честно: одна картинка без текста не уходит (ошибка), с текстом — текст уходит, плюс предупреждение.
+    if (files.length && !this.dry && await taskHasChat(taskId)) {
+      if (!text.trim()) throw new BigActionError(CHAT_FILES_ERROR, 422);
+      files = [];
+      this.warnings.push(CHAT_FILES_WARNING);
+    }
     const author = this.actor.userId;
     // Аккаунт не привязан к Битриксу — комментарий уходит от владельца вебхука, имя нажавшего — в тексте.
     const body = author ? text : `[b]${actorLabel(this.actor)}[/b] (из Монолитики):\n${text}`;
@@ -149,6 +158,15 @@ class Runner {
     }
     if (after !== '5') await this.task('tasks.task.approve', { taskId }, 'приёмка: токен РОПа, если он не постановщик — вебхук админа');
   }
+}
+
+const CHAT_FILES_ERROR = 'Картинку в чат этой задачи из Монолитики пока не отправить: Битрикс принимает в чат новых задач только текст. Отправьте картинку в чате задачи в Битриксе.';
+const CHAT_FILES_WARNING = 'Текст ушёл, а картинку Битрикс в чат задачи не прикрепил (в задачах нового вида файлы из Монолитики пока не доходят) — отправьте её в чате задачи в Битриксе.';
+
+/** У задачи есть чат (задачи нового вида): комментарии — сообщения IM-чата, файлы через commentitem не доходят. */
+async function taskHasChat(taskId: number): Promise<boolean> {
+  const t = await fetchBigTask<BxBigTask & { chatId?: number | string | null }>(taskId, ['CHAT_ID']).catch(() => null);
+  return Number(t?.chatId) > 0;
 }
 
 async function postAsWebhook(taskId: number, text: string, files: number[]): Promise<boolean> {
