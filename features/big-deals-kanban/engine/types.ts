@@ -166,9 +166,16 @@ export interface BigManagerStat {
   /** Среднее звонков после постановки на задачу. */
   callsPerTask: number | null;
 }
-/** Разрез аналитики (владелец 18.11): по исполнителю — кто хорошо выполняет, по постановщику — кто хорошо ставит задачи. */
-export type BigAnalyticsBy = 'responsible' | 'creator';
-export interface BigAnalyticsResponse { from: string; to: string; by: BigAnalyticsBy; total: BigManagerStat; managers: BigManagerStat[]; avgConversion: number | null }
+/** Разрез аналитики (владелец 18.11): по исполнителю — кто хорошо выполняет, по постановщику — кто хорошо ставит задачи,
+ *  по назначившему — кто сменил исполнителя на текущего (история задачи; без смены — постановщик). */
+export type BigAnalyticsBy = 'responsible' | 'creator' | 'assigner';
+export interface BigAnalyticsResponse {
+  from: string; to: string; by: BigAnalyticsBy; total: BigManagerStat; managers: BigManagerStat[]; avgConversion: number | null;
+  /** by=assigner: у скольких задач история ещё догружается в фоне (они пока не в таблице). */
+  pending?: number;
+  /** by=assigner: задач, где исполнителя назначили сменой (а не сразу при создании). */
+  reassigned?: number;
+}
 
 /** Массовое закрытие (владелец 18.11). POST /api/big-deals-kanban/mass-close
  *  { taskIds: number[] } | { filters: BigFilters } + { dryRun?: boolean, comment?: string } →

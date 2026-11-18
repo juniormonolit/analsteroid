@@ -8,6 +8,7 @@ import { loadArchivedCards, loadSnapshot, withAge } from './load';
 import { bigActor } from './actor';
 import { canSeeTask, type VisibilityActor } from './visibility';
 import { cardAmount, matchFilters, mskDate } from './filters';
+import { assignersFor } from './assigners';
 
 export const DEFAULT_DAYS = 90;
 export const MAX_DAYS = 365;
@@ -36,8 +37,10 @@ const empty = (manager: BigPerson): BigManagerStat =>
 /** Чистый расчёт по готовым карточкам (видимость + фильтры + период). */
 export function analyticsFromCards(all: BigTaskCard[], o: {
   actor: VisibilityActor; filters: BigFilters; from: string; to: string; now?: number; by?: BigAnalyticsBy;
+  /** by=assigner: кто назначил исполнителя; null — ещё неизвестно (карточка пропускается). */
+  whoOf?: (c: BigTaskCard) => BigPerson | null;
 }): BigAnalyticsResponse {
-  const by: BigAnalyticsBy = o.by === 'creator' ? 'creator' : 'responsible';
+  const by: BigAnalyticsBy = o.by === 'creator' || o.by === 'assigner' ? o.by : 'responsible';
   const now = o.now ?? Date.now();
   const f: BigFilters = { ...o.filters, createdFrom: o.from, createdTo: o.to };
   const byId = new Map<number, BigTaskCard>();
@@ -47,7 +50,8 @@ export function analyticsFromCards(all: BigTaskCard[], o: {
   const per = new Map<string, BigManagerStat & { callsN: number; callsSum: number }>();
   const total = { ...empty({ id: 'all', name: 'Все' }), callsN: 0, callsSum: 0 };
   for (const c of cards) {
-    const who = by === 'creator' ? c.creator : c.responsible;
+    const who = by === 'assigner' ? o.whoOf?.(c) ?? null : by === 'creator' ? c.creator : c.responsible;
+    if (!who) continue;
     const m = per.get(who.id) ?? { ...empty(who), callsN: 0, callsSum: 0 };
     per.set(who.id, m);
     for (const s of [m, total]) {
@@ -75,5 +79,11 @@ export async function buildBigAnalytics(session: SessionUser, filters: BigFilter
     bigActor(session), loadSnapshot(), needArchive ? loadArchivedCards(period.from) : Promise.resolve([] as BigTaskCard[]),
   ]);
   // Снимок первым: при дублях (задача закрылась между загрузками) берётся свежая карточка.
-  return analyticsFromCards([...snap.cards, ...archived], { actor, filters, ...period, by });
+  const all = [...snap.cards, ...archived];
+  if (by !== 'assigner') return analyticsFromCards(all, { actor, filters, ...period, by });
+  // Кто назначил: история задач — только для карточек периода, видимых пользователю (догрузка в фоне).
+  const inPeriod = all.filter(c => canSeeTask(c, actor) && mskDate(Date.parse(c.createdAt)) >= period.from && mskDate(Date.parse(c.createdAt)) <= period.to);
+  const { map, missing } = await assignersFor(inPeriod);
+  const res = analyticsFromCards(all, { actor, filters, ...period, by, whoOf: c => map.get(c.id)?.person ?? null });
+  return { ...res, pending: missing, reassigned: [...map.values()].filter(a => a.kind === 'reassign').length };
 }

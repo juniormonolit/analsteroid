@@ -5,7 +5,7 @@ import { analyticsPeriod, buildBigAnalytics } from '@/features/big-deals-kanban/
 import { filtersFromQuery } from '@/features/big-deals-kanban/engine/filters';
 
 // Аналитика канбана больших чеков по менеджерам → BigAnalyticsResponse.
-// GET ?<фильтры доски, как у GET /api/big-deals-kanban>&from=YYYY-MM-DD&to=YYYY-MM-DD&by=responsible|creator (дата создания задачи, МСК;
+// GET ?<фильтры доски, как у GET /api/big-deals-kanban>&from=YYYY-MM-DD&to=YYYY-MM-DD&by=responsible|creator|assigner (дата создания задачи, МСК;
 // по умолчанию последние 90 дней, не глубже 365). Видимость — та же зона, что у доски.
 export const dynamic = 'force-dynamic';
 
@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
   const sp = new URL(req.url).searchParams;
   try {
     const { createdFrom: _f, createdTo: _t, ...filters } = filtersFromQuery(sp);
-    const data = await buildBigAnalytics(session, filters, analyticsPeriod(sp.get('from'), sp.get('to')), sp.get('by') === 'creator' ? 'creator' : 'responsible');
+    const data = await buildBigAnalytics(session, filters, analyticsPeriod(sp.get('from'), sp.get('to')), sp.get('by') === 'creator' ? 'creator' : sp.get('by') === 'assigner' ? 'assigner' : 'responsible');
     return NextResponse.json(data, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     console.error('[big-deals-kanban analytics]', e);
