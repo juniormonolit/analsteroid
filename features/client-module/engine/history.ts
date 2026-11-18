@@ -9,6 +9,7 @@
 // вместе, решение владельца 20.10), k<company> — компания.
 import { analyticsDb } from '@/lib/db/clients';
 import type { ClientRef } from './types';
+import { clientDealCond } from './clientDeals';
 
 export interface HistoryPurchase {
   dealId: number; dealName: string | null; amount: number; deliveredAt: string;
@@ -80,7 +81,8 @@ async function fetchClientTasks(where: string, id: number): Promise<HistoryTask[
 }
 
 export async function fetchClientHistory(ref: ClientRef): Promise<ClientHistory> {
-  const where = ref.startsWith('k') ? 'd.company_id = $1' : 'd.contact_id = $1';
+  // Те же сделки, что в таблице карточки (clientDeals.ts: у компании — и брони на её контакт + пустую компанию).
+  const where = clientDealCond(ref, '$1');
   const id = Number(ref.slice(1));
   const db = analyticsDb();
   const [purchases, calls, totals, managers, tasks] = await Promise.all([

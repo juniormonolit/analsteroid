@@ -18,6 +18,7 @@ import { orphanDealIdsOf } from '@/features/repeat-kanban/engine/dealFixes';
 import { memberKeysOf } from '@/features/customers/engine/merge';
 import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { clientHint } from './clientHint';
+import { clientDealCond } from './clientDeals';
 import { validLatLon } from '@/lib/geo/parse';
 import { reverseGeocode, type GeoCandidate } from '@/lib/geo/resolve';
 
@@ -133,7 +134,7 @@ export async function fetchClientModule(ref: ClientRef, opts: { light?: boolean 
   const bxIdsP = light ? Promise.resolve([] as number[]) : withTimeout(orphanDealIdsOf(isCompany ? 'company' : 'contact', id), 3000, [] as number[]);
   const byClient = await db.query<DealRow>(
     `${DEAL_SELECT}
-      WHERE d.funnel_id IN (0,1,2,3) AND ${isCompany ? 'd.company_id' : 'd.contact_id'} = $1
+      WHERE d.funnel_id IN (0,1,2,3) AND ${clientDealCond(ref, '$1')}
       ORDER BY d.created_at DESC NULLS LAST, d.deal_id DESC
       LIMIT 3000`,
     [id],
@@ -632,7 +633,7 @@ async function ownDealIds(ref: ClientRef, ids: number[]): Promise<number[]> {
   const r = await analyticsDb().query<{ deal_id: string }>(
     `SELECT d.deal_id::text AS deal_id FROM sa.deals d
       WHERE d.deal_id = ANY($1::bigint[])
-        AND (${ref.startsWith('k') ? 'd.company_id' : 'd.contact_id'} = $2 OR (${CLIENT_KEY_SQL}) = ANY($3::text[]))`,
+        AND (${clientDealCond(ref, '$2')} OR (${CLIENT_KEY_SQL}) = ANY($3::text[]))`,
     [ids, Number(ref.slice(1)), others],
   );
   return r.rows.map(x => Number(x.deal_id));
