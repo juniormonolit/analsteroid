@@ -27,6 +27,7 @@ export function matchFilters(c: BigTaskCard, f: BigFilters, now = Date.now()): b
   if (f.products?.length && !c.productGroups.some(g => f.products!.includes(g))) return false;
   if (f.columns?.length && !f.columns.includes(c.column)) return false;
   if (f.states?.length && !f.states.includes(c.state)) return false;
+  if (f.hideLost && (c.column === 'lost_check' || c.column === 'lost_done')) return false;
   const amount = cardAmount(c);
   if (f.sumMin != null && amount < f.sumMin) return false;
   if (f.sumMax != null && amount > f.sumMax) return false;
@@ -112,6 +113,7 @@ export function normalizeFilters(raw: unknown): BigFilters {
   if (iMin) f.idleDaysMin = iMin;
   if (r.stuck === true) f.stuck = true;
   if (r.noCalls === true) f.noCalls = true;
+  if (r.hideLost === true) f.hideLost = true;
   if (r.deal === 'won' || r.deal === 'lost' || r.deal === 'open') f.deal = r.deal;
   return f;
 }
@@ -126,6 +128,6 @@ export function filtersFromQuery(sp: URLSearchParams): BigFilters {
     groups: list('group', ','), manager: sp.get('manager'), products: list('product', '|'), q: sp.get('q'),
     sumMin: sp.get('smin'), sumMax: sp.get('smax'), createdFrom: sp.get('cfrom'), createdTo: sp.get('cto'),
     states: list('states', ','), columns: list('cols', ','), daysMin: sp.get('dmin'), idleDaysMin: sp.get('idle'),
-    stuck: sp.get('stuck') === '1', noCalls: sp.get('nocalls') === '1', deal: sp.get('deal'),
+    stuck: sp.get('stuck') === '1', noCalls: sp.get('nocalls') === '1', hideLost: sp.get('nolost') === '1', deal: sp.get('deal'),
   });
 }

@@ -130,6 +130,8 @@ export interface BigFilters {
   stuck?: boolean;
   /** Звонков после постановки не было. */
   noCalls?: boolean;
+  /** Скрыть колонки «Не продано (проверка/проверено)» — кнопка «Ждёт контроля» (владелец 18.11: там тысячи старых отказов). Query nolost=1. */
+  hideLost?: boolean;
   /** Сделка: won | lost | open. */
   deal?: 'won' | 'lost' | 'open' | null;
 }

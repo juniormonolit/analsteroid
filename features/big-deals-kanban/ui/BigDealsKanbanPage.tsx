@@ -150,11 +150,11 @@ export function BigDealsKanbanPage() {
   const onOpen = useCallback((c: BigTaskCard) => { lastOpened.current = c; setTaskParam(String(c.id)); }, [setTaskParam]);
 
   const canManage = !!data?.canManage;
-  const onlyControl = f.states.length === 1 && f.states[0] === 'control';
+  const onlyControl = f.ctl;
   const controlCount = useMemo(() => {
     if (!data) return null;
     const ids = new Set<number>();
-    for (const c of data.columns) for (const k of c.cards) if (k.state === 'control') ids.add(k.id);
+    for (const c of data.columns) for (const k of c.cards) if (k.state === 'control' && k.column !== 'lost_check' && k.column !== 'lost_done') ids.add(k.id);
     return ids.size;
   }, [data]);
   const dragEnabled = canManage && !isTouch;
@@ -263,8 +263,8 @@ export function BigDealsKanbanPage() {
               options={(data?.productGroups ?? []).map(p => ({ value: p, label: p }))} />
           )}
           {activeView !== 'analytics' && (
-            // Быстрый фильтр РОПа (18.11): только «ждёт контроля» — тот же states, что в «Фильтрах», состояние в URL.
-            <button type="button" onClick={() => f.setStates(onlyControl ? [] : ['control'])} aria-pressed={onlyControl}
+            // Быстрый фильтр РОПа (18.11): только «ждёт контроля», без колонок «Не продано» (там тысячи старых отказов); ?ctl=1.
+            <button type="button" onClick={() => f.setCtl(!onlyControl)} aria-pressed={onlyControl}
               className={onlyControl ? BTN_ACTIVE : BTN_IDLE} title={onlyControl ? 'Показать все задачи' : 'Оставить только задачи, которые ждут вашего контроля'}>
               <Eye size={16} aria-hidden /> Ждёт контроля{controlCount != null && <span className="tabular-nums opacity-80">{controlCount}</span>}
             </button>
