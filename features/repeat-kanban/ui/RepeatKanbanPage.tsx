@@ -1875,7 +1875,9 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
   const [queued, setQueued] = useState<{ added: number; updated: number; skipped: number } | null>(null);
   const [templateId, setTemplateId] = useState<string>('');
   const tid = templateId || String(templates.find(t => t.isDefault)?.id ?? templates[0]?.id ?? '');
-  const [deadlineMode, setDeadlineMode] = useState<'today' | 'window' | '3' | '7'>('window');
+  // 'date' — своя дата для всех (18.11, владелец: «не хватает возможности поставить нужную дату при постановке нескольких задач»).
+  const [deadlineMode, setDeadlineMode] = useState<'today' | 'window' | '3' | '7' | 'date'>('window');
+  const [customDate, setCustomDate] = useState(() => mskYmd(Date.now(), 1));
   const [deadlineTime, setDeadlineTime] = useState('19:00');
   const [results, setResults] = useState<Map<string, { ok: boolean; text: string }>>(new Map());
   const [running, setRunning] = useState(false);
@@ -1892,7 +1894,9 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
     setRunning(true);
     try {
       const j = await post({ action: 'queue_add', items: cards.map(c => ({ clientKey: c.clientKey, managerId: c.managerId })),
-        templateId: tid ? Number(tid) : undefined, comment: qComment, deadlineRule: deadlineMode, deadlineTime, newManagerId: newManager || undefined,
+        templateId: tid ? Number(tid) : undefined, comment: qComment, deadlineTime, newManagerId: newManager || undefined,
+        // Своя дата в очереди = «выдать в этот день» со сроком в день выдачи (миграция 263, not_before).
+        ...(deadlineMode === 'date' ? { deadlineRule: 'today', notBefore: customDate > mskYmd(Date.now()) ? customDate : undefined } : { deadlineRule: deadlineMode }),
         participants: participantsPayload(parts) });
       setQueued(j);
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
@@ -1904,7 +1908,7 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
     for (const c of cards) {
       if (stop.current) break;
       if (results.get(c.clientKey)?.ok) continue;
-      const deadline = deadlineMode === 'window' ? windowEnd(c) : deadlineMode === 'today' ? mskYmd(Date.now()) : mskYmd(Date.now(), Number(deadlineMode));
+      const deadline = deadlineMode === 'date' ? customDate : deadlineMode === 'window' ? windowEnd(c) : deadlineMode === 'today' ? mskYmd(Date.now()) : mskYmd(Date.now(), Number(deadlineMode));
       try {
         const j = await post({ action: 'create_task', clientKey: c.clientKey, managerId: c.managerId, column: c.column, text: '', templateId: tid ? Number(tid) : undefined, deadline, deadlineTime, newManagerId: newManager && newManager !== c.managerId ? newManager : undefined, participants: participantsPayload(parts) });
         setResults(m => new Map(m).set(c.clientKey, { ok: true, text: `задача #${j.taskId}` }));
@@ -1944,10 +1948,17 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
         <div className="flex flex-col gap-1.5">
           <span className="text-[var(--color-text-secondary)]">Срок задач</span>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            {([['today', 'Сегодня'], ['window', 'До конца окна — у каждого свой'], ['3', '+3 дня'], ['7', '+7 дней']] as const).map(([v, l]) => (
+            {([['today', 'Сегодня'], ['window', 'До конца окна — у каждого свой'], ['3', '+3 дня'], ['7', '+7 дней'], ['date', 'Своя дата']] as const).map(([v, l]) => (
               <button key={v} type="button" onClick={() => setDeadlineMode(v)} className={deadlineMode === v ? BTN_ACTIVE : BTN_IDLE}>{l}</button>
             ))}
           </div>
+          {deadlineMode === 'date' && (
+            <label className="flex flex-wrap items-center gap-2 text-[var(--color-text-secondary)]">
+              Дата
+              <input type="date" value={customDate} min={mskYmd(Date.now())} onChange={e => e.target.value && setCustomDate(e.target.value)} aria-label="Срок задач — дата" className={`${fieldCls} min-h-11 w-44`} />
+              {mode === 'queue' && customDate > mskYmd(Date.now()) && <span className="text-xs text-[var(--color-text-muted)]">В очереди: задачи выдадутся не раньше этой даты, срок — в день выдачи.</span>}
+            </label>
+          )}
           <label className="flex items-center gap-2 text-[var(--color-text-secondary)]">
             Время
             <input type="time" value={deadlineTime} step={900} onChange={e => e.target.value && setDeadlineTime(e.target.value)} aria-label="Время срока (МСК)" className={`${fieldCls} min-h-11 w-32`} />
