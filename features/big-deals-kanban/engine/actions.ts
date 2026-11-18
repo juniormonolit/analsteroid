@@ -29,7 +29,7 @@ import { stageIdForColumn } from './stages';
 import { cardFromSnapshot, refreshTask } from './load';
 import { canManageTask, canSeeTask, type TaskPeople } from './visibility';
 import { markColumn } from './stageSince';
-import { DealCreateError, postToTaskChat, read, taskWebhook, writeOnce } from '@/features/repeat-kanban/engine/createDeal';
+import { DealCreateError, postToTaskChat, read, ropOfManager, taskWebhook, writeOnce } from '@/features/repeat-kanban/engine/createDeal';
 import { callAsUser, UserCallUnsure } from '@/lib/bitrix/userTokens';
 
 export class BigActionError extends Error {
@@ -227,12 +227,16 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
       if (!/^\d{1,10}$/.test(rid)) throw new BigActionError('Выберите менеджера');
       if (actor.zone !== 'all' && !actor.zone.has(rid) && !(await isActiveManager(rid))) throw new BigActionError('Менеджер не найден среди действующих', 400);
       if (status === '5') throw new BigActionError('Задача уже завершена — переназначить нельзя');
-      const fields: Record<string, unknown> = { RESPONSIBLE_ID: rid };
+      const fields: Record<string, unknown> = {};
+      if (rid !== String(t.responsibleId)) fields.RESPONSIBLE_ID = rid;
       const auditors = (t.auditors ?? []).map(String);
-      if (actor.userId && actor.userId !== rid && !auditors.includes(actor.userId) && String(t.createdBy) !== actor.userId) {
-        fields.AUDITORS = [...auditors, actor.userId];
-      }
-      if (rid !== String(t.responsibleId)) await run.task('tasks.task.update', { taskId, fields });
+      const addAuditors: string[] = [];
+      if (actor.userId && actor.userId !== rid && !auditors.includes(actor.userId) && String(t.createdBy) !== actor.userId) addAuditors.push(actor.userId);
+      // РОП нового исполнителя — ВСЕГДА наблюдателем (РОП Осипов 18.11). Нажавший сам РОП / уже наблюдатель — не дублируем.
+      const rop = await ropOfManager(rid).catch(e => { run.warnings.push(`РОП исполнителя не определён: ${e instanceof Error ? e.message : e}`); return null; });
+      if (rop && rop !== rid && !auditors.includes(rop) && !addAuditors.includes(rop)) addAuditors.push(rop);
+      if (addAuditors.length) fields.AUDITORS = [...auditors, ...addAuditors];
+      if (Object.keys(fields).length) await run.task('tasks.task.update', { taskId, fields }, rop ? `РОП исполнителя по оргструктуре: ${rop}` : 'РОП исполнителя в оргструктуре не найден');
       const column = await currentColumn(taskId, t);
       if (column === 'new') await moveTo('assigned').catch(e => { run.warnings.push(e instanceof Error ? e.message : String(e)); });
       const tz = action.comment?.trim();
@@ -308,6 +312,25 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
       if (hasLost) await moveTo('lost_check');
       await run.close(taskId, status, control);
       await run.comment(taskId, `Не продано — задача закрыта из канбана больших чеков (Монолитика${who}).`);
+      break;
+    }
+    case 'renew': {
+      // «Возобновить» завершённую задачу (РОП 18.11): tasks.task.renew + обязательный новый срок + комментарий кто и до какого.
+      if (status !== '5') throw new BigActionError('Задача не завершена — возобновлять нечего');
+      const deadline = parseDeadline(action.deadline);
+      if (!deadline) throw new BigActionError('Укажите новый срок исполнения');
+      await run.task('tasks.task.renew', { taskId });
+      await run.task('tasks.task.update', { taskId, fields: { DEADLINE: deadline.toISOString() } }).catch(e => { run.warnings.push(`Срок не изменился: ${e instanceof Error ? e.message : e}`); });
+      const text = String(action.comment ?? '').trim();
+      await run.comment(taskId, `Задача возобновлена из канбана больших чеков (Монолитика${who}). Новый срок: ${fmtDeadline(deadline)}.${text ? `\n${text.slice(0, 4000)}` : ''}`);
+      break;
+    }
+    case 'deadline': {
+      if (status === '5') throw new BigActionError('Задача завершена — сначала возобновите её');
+      const deadline = parseDeadline(action.deadline);
+      if (!deadline) throw new BigActionError('Укажите срок');
+      await run.task('tasks.task.update', { taskId, fields: { DEADLINE: deadline.toISOString() } });
+      if (run.viaWebhook || opts.dryRun) await run.comment(taskId, `Срок задачи изменён из Монолитики${who}: ${fmtDeadline(deadline)}.`);
       break;
     }
     default:

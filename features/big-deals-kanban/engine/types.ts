@@ -193,4 +193,8 @@ export type BigAction =
   /** Наблюдатели/соисполнители (встреча: «подключаем РОПа в наблюдатели»). */
   | { type: 'participants'; taskId: number; auditors: string[]; accomplices?: string[] }
   | { type: 'return'; taskId: number; comment: string; deadline?: string }
-  | { type: 'complete'; taskId: number };
+  | { type: 'complete'; taskId: number }
+  /** Возобновить завершённую задачу (РОП 18.11): tasks.task.renew + обязательный новый срок, комментарий кто и до какого. */
+  | { type: 'renew'; taskId: number; deadline: string; comment?: string }
+  /** Поставить/перенести срок открытой задачи (tasks.task.update DEADLINE). */
+  | { type: 'deadline'; taskId: number; deadline: string };

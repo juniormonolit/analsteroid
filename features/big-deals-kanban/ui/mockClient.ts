@@ -23,6 +23,10 @@ export function mockTaskDetails(card: BigTaskCard): BigTaskDetails {
       { label: 'Объект', value: 'МО, Истринский р-н, д. Падиково, участок 14' },
     ],
     taskProducts: [product],
+    questions: ['Когда нужен материал / Когда хотят закупить?', 'Под какие цели нужен материал', 'Есть КП/Счет конкурента. (Прикрепи)', 'Какие следующие договоренности'],
+    dealId: card.deal?.id ?? null,
+    phone: card.deal ? '+7 (916) 123-45-67' : null,
+    rop: { id: '105', name: 'Сергей Осипов' },
     dealProducts: card.deal ? [
       { name: product, qty: Math.round(amount / 5000), price: 4500, sum: Math.round(amount / 5000) * 4500, unit: 'шт' },
       { name: 'Клей для газобетона', qty: 20, price: 450, sum: 9000, unit: 'меш' },

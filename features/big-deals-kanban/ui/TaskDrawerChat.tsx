@@ -7,16 +7,24 @@ import { AttachmentsRow, useAttachments } from '@/features/repeat-kanban/ui/Atta
 import type { BigTaskCard } from '../engine/types';
 import type { BigChatMessage } from '../engine/taskDetails';
 import { fmtDT } from './format';
-import { QUESTION_TEMPLATES } from './questionTemplates';
+import { QuestionsBlock } from './QuestionsBlock';
 import { Section, postBigAction } from './TaskDrawerShared';
 
-export function TaskChat({ card, messages, loading, onSent }: { card: BigTaskCard; messages: BigChatMessage[] | null; loading: boolean; onSent: (card?: BigTaskCard) => void }) {
+export function TaskChat({ card, messages, loading, onSent, questions, rop, mock = false }: {
+  card: BigTaskCard; messages: BigChatMessage[] | null; loading: boolean; onSent: (card?: BigTaskCard) => void;
+  /** Вопросы из описания задачи — кнопками в блоке «Вопросы и шаблоны» (РОП 18.11: один блок вместо двух). */
+  questions?: string[];
+  /** РОП исполнителя — «Отметить РОПа». */
+  rop?: { id: string; name: string } | null;
+  mock?: boolean;
+}) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
   const att = useAttachments();
-  const insert = (t: string) => setText(prev => (prev.trim() ? `${prev.trimEnd()}\n${t}` : t));
+  // Упоминание РОПа — в начало строки через пробел, остальное — с новой строки.
+  const insert = (t: string) => setText(prev => (!prev.trim() ? t : t.startsWith('[USER=') ? `${t}${prev.includes('\n') ? '\n' : ''}${prev.trimStart()}` : `${prev.trimEnd()}\n${t}`));
   const send = async () => {
     if (!text.trim() && !att.files.length) return;
     setBusy(true); setErr(null); setWarn(null);
@@ -48,13 +56,8 @@ export function TaskChat({ card, messages, loading, onSent }: { card: BigTaskCar
           </div>
         ))}
       </div>
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        {QUESTION_TEMPLATES.map(q => (
-          <button key={q.key} type="button" onClick={() => insert(q.text)}
-            className="min-h-11 rounded-full border border-[var(--color-border)] px-3 text-[12px] hover:bg-[var(--color-bg-hover)] sm:min-h-8">
-            {q.label}
-          </button>
-        ))}
+      <div className="mt-3">
+        <QuestionsBlock questions={questions} rop={rop} mock={mock} onInsert={insert} />
       </div>
       <div className="mt-2 flex min-w-0 flex-col gap-2" {...att.dropZone}>
         <textarea value={text} onChange={e => setText(e.target.value)} onPaste={att.onPaste} rows={3}

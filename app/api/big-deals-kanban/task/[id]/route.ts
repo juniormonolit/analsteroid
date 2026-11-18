@@ -6,6 +6,7 @@ import { BigActionError, fetchBigTask, taskPeople } from '@/features/big-deals-k
 import { canManageTask, canSeeTask } from '@/features/big-deals-kanban/engine/visibility';
 import { fetchTaskDetails, type BxTaskFull } from '@/features/big-deals-kanban/engine/taskDetails';
 import { BIG_DEALS_GROUP_IDS } from '@/features/big-deals-kanban/engine/config';
+import { responsibleRop } from '@/features/big-deals-kanban/engine/rop';
 
 // Открытая карточка задачи канбана больших чеков: описание, товары сделки, чат задачи (taskDetails.ts).
 // Только задачи проектов больших сделок и только в зоне смотрящего — чужие задачи по id отсюда не прочитать.
@@ -29,6 +30,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const deal = (t.ufCrmTask ?? []).map(x => /^D_(\d+)$/.exec(String(x))?.[1]).find(Boolean);
     const details = await fetchTaskDetails(t, deal ? Number(deal) : null);
     details.viewer = { id: actor.userId, canManage: canManageTask(people, actor) };
+    details.rop = t.responsibleId ? await responsibleRop(String(t.responsibleId)).catch(() => null) : null;
     return NextResponse.json(details, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     if (e instanceof BigActionError) return NextResponse.json({ error: e.message }, { status: e.status });

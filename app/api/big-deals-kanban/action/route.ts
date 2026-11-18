@@ -8,11 +8,11 @@ import type { BigAction } from '@/features/big-deals-kanban/engine/types';
 
 // Действия канбана больших чеков (engine/actions.ts). Гейт — section.repeat_kanban (те же роли продаж),
 // зона — ropScope/scopeManagers, как у канбана повторных: РОП — свои отделы с поддеревом, менеджер — себя.
-// move/reassign/accept/return/complete/participants — только canManage; comment — любой, кто видит задачу.
+// move/reassign/accept/return/complete/participants/renew/deadline — только canManage; comment — любой, кто видит задачу.
 // ?dry=1 — сухой прогон (только админу/полной зоне): ничего не пишет, отдаёт список REST-вызовов.
 export const dynamic = 'force-dynamic';
 
-const TYPES = new Set(['move', 'reassign', 'comment', 'accept', 'return', 'complete', 'participants']);
+const TYPES = new Set(['move', 'reassign', 'comment', 'accept', 'return', 'complete', 'participants', 'renew', 'deadline']);
 
 export async function POST(req: NextRequest) {
   const session = await getSession();

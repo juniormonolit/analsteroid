@@ -10,7 +10,7 @@
 // Видимость колонок — чистым CSS по вкладке (без гидрации-ветвления); грузить клиента сразу — только на широком экране.
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Clock, ExternalLink, Link2, Phone, PhoneOff } from 'lucide-react';
+import { Check, Clock, Copy, ExternalLink, Link2, Phone, PhoneOff } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
 import { ClientSummaryPanel } from '@/features/client-module/ui/ClientSummaryPanel';
@@ -132,8 +132,9 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
             {card.client && <span className="min-w-0 truncate">Клиент: {card.client}</span>}
             <span className="rounded border border-[var(--color-border)] px-1 text-[10.5px] font-medium uppercase text-[var(--color-text-muted)]" title="Проект">{card.groupShort}</span>
             <span className="flex flex-wrap gap-1.5 sm:ml-auto">
-              <a href={card.url} target="_blank" rel="noreferrer" className={linkBtn}><ExternalLink size={12} /> Задача</a>
-              {deal && <a href={deal.url} target="_blank" rel="noreferrer" className={linkBtn}><ExternalLink size={12} /> Сделка</a>}
+              {d?.phone && <PhoneLink phone={d.phone} />}
+              <a href={card.url} target="_blank" rel="noreferrer" className={linkBtn} title="Задача в Битриксе"><ExternalLink size={12} /> Задача № {card.id}</a>
+              {deal && <a href={deal.url} target="_blank" rel="noreferrer" className={linkBtn} title="Сделка в Битриксе"><ExternalLink size={12} /> Сделка № {deal.id}</a>}
             </span>
           </div>
         </div>
@@ -213,11 +214,11 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
 
           {/* Работа: действия, ИИ-проверка, участники, чат */}
           <div className={`${workVisible} ${col}`}>
-            {canManage && <TaskActions card={card} managers={managers} onChanged={changed} />}
+            {canManage && <TaskActions card={card} managers={managers} onChanged={changed} questions={d?.questions} mock={mock} />}
             {canManage && !mock && (
               <TaskCheckPanel taskId={card.id} state={checks.data?.[String(card.id)]} labels={BIG_CHECK_LABELS} />
             )}
-            <TaskChat card={card} messages={d?.chat ?? null} loading={details.isLoading} onSent={changed} />
+            <TaskChat card={card} messages={d?.chat ?? null} loading={details.isLoading} onSent={changed} questions={d?.questions} rop={d?.rop ?? null} mock={mock} />
             {d && <ParticipantsField taskId={card.id} auditors={d.auditors ?? card.auditors} me={d.viewer?.id ?? null} canManage={canManage && card.state !== 'done'} onChanged={changed} />}
           </div>
 
@@ -238,5 +239,25 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
       <CustomerCardLoader contactId={ref.contactId} companyId={ref.companyId} initialTab={fullClient} onClose={() => setFullClient(null)} />
     )}
     </>
+  );
+}
+
+/** Телефон клиента сделки (РОП 18.11): звонок в один тап (tel:) и копирование. */
+function PhoneLink({ phone }: { phone: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(phone); } catch { window.prompt('Скопируйте телефон', phone); return; }
+    setCopied(true); setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <span className="inline-flex items-stretch">
+      <a href={`tel:${phone.replace(/[^\d+]/g, '')}`} className={`${linkBtn} rounded-r-none font-medium text-[var(--color-text)]`} title="Позвонить клиенту">
+        <Phone size={12} /> {phone}
+      </a>
+      <button type="button" onClick={copy} aria-label="Скопировать телефон" title="Скопировать телефон"
+        className={`${linkBtn} -ml-px rounded-l-none px-2`}>
+        {copied ? <Check size={13} className="text-[var(--color-positive)]" /> : <Copy size={13} />}
+      </button>
+    </span>
   );
 }
