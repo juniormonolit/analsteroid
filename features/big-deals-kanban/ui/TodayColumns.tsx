@@ -49,6 +49,48 @@ export function SelectAllButton({ cards, select }: { cards: BigTaskCard[]; selec
   );
 }
 
+/**
+ * Шапка колонки — ОДНА на «Доску» и «Сегодня» (правка владельца 18.11: на Доске были
+ * сплошные цветные плашки «как в Битриксе», в «Сегодня» — наш вид). Наш вид, как Column в
+ * канбане повторных: без заливки, цвет колонки — только полоской слева; заголовок обычным
+ * текстом, справа счётчик и «⋯», под ним подсказка и сумма. `custom` — своя колонка
+ * (пунктирная рамка вместо полоски). `children` — строка под шапкой («Выбрать показанные»).
+ */
+export function ColumnHeader({ title, hint, total, sum, color, custom, menu, children }: {
+  title: string;
+  hint?: string | null;
+  total: number;
+  sum: number;
+  /** CSS-цвет полоски слева (#hex или var(...)). */
+  color: string;
+  custom?: boolean;
+  menu: MenuItem[];
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className={custom
+      ? 'shrink-0 rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-bg)] px-2 py-1.5'
+      : 'shrink-0 rounded-lg px-2 py-1.5'}
+      style={custom ? undefined : { borderLeft: `3px solid ${color}` }} title={hint ?? undefined}>
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <h2 className="flex min-w-0 items-center gap-1 text-sm font-semibold text-[var(--color-text)]">
+          {custom && <SlidersHorizontal size={13} className="shrink-0 text-[var(--color-accent)]" aria-hidden />}
+          <span className="truncate">{title}</span>
+        </h2>
+        <span className="flex shrink-0 items-center gap-1 text-[var(--color-text-muted)]">
+          <span className="text-sm tabular-nums">{rub.format(total)}</span>
+          <ColumnMenu items={menu} className="hover:bg-[var(--color-bg-hover)]" />
+        </span>
+      </div>
+      <div className="flex min-w-0 items-baseline justify-between gap-2 text-xs text-[var(--color-text-muted)]">
+        <span className="line-clamp-2 min-w-0">{hint}</span>
+        {sum > 0 && <span className="shrink-0 tabular-nums">{moneyShort(sum)}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 const TONE: Record<string, string> = {
   control: '#e69138', almost_sold: '#0070bf', new: '#00c4fb', stuck: 'var(--color-negative)',
   lost_check: '#ff5752', related_answered: '#6aa84f',
@@ -73,26 +115,10 @@ export function TodayColumns({ sections, groups, onOpen, select, custom, menuFor
     const hint = isCustom ? (sec.hint || describeFilters(sec.custom!.filters, groups)) : sec.hint;
     return (
       <section key={sec.key} data-today={sec.key} className="flex h-full w-80 max-w-[85vw] shrink-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
-        <div className={isCustom
-          ? 'rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-bg)] px-2 py-1.5'
-          : 'rounded-lg px-2 py-1.5'}
-          style={isCustom ? undefined : { borderLeft: `3px solid ${TONE[sec.key] ?? 'var(--color-accent)'}` }} title={hint}>
-          <div className="flex min-w-0 items-center justify-between gap-2">
-            <h2 className="flex min-w-0 items-center gap-1 text-sm font-semibold text-[var(--color-text)]">
-              {isCustom && <SlidersHorizontal size={13} className="shrink-0 text-[var(--color-accent)]" aria-hidden />}
-              <span className="truncate">{sec.title}</span>
-            </h2>
-            <span className="flex shrink-0 items-center gap-1 text-[var(--color-text-muted)]">
-              <span className="text-sm tabular-nums">{rub.format(sec.total)}</span>
-              <ColumnMenu items={menu} className="hover:bg-[var(--color-bg-hover)]" />
-            </span>
-          </div>
-          <div className="flex min-w-0 items-baseline justify-between gap-2 text-xs text-[var(--color-text-muted)]">
-            <span className="line-clamp-2 min-w-0">{hint}</span>
-            {sec.sum > 0 && <span className="shrink-0 tabular-nums">{moneyShort(sec.sum)}</span>}
-          </div>
+        <ColumnHeader title={sec.title} hint={hint} total={sec.total} sum={sec.sum} custom={isCustom}
+          color={TONE[sec.key] ?? 'var(--color-accent)'} menu={menu}>
           {select && <SelectAllButton cards={sec.cards} select={select} />}
-        </div>
+        </ColumnHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden">
           {sec.cards.map(c => (
             <BigTaskCardView key={`${sec.key}:${c.id}`} card={c} onOpen={onOpen}

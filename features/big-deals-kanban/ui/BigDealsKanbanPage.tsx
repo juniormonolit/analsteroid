@@ -21,7 +21,7 @@ import { TaskDrawer } from './TaskDrawer';
 import { MassCloseModal, ConfirmCloseModal } from './MassCloseModal';
 import { BigFiltersButton, ResetAllButton, useBigFilters } from './BigFiltersPanel';
 import { CustomColumnModal, type CustomSaveFn } from './CustomColumnModal';
-import { ColumnMenu, SelectAllButton, TodayColumns, type MenuItem, type SelectApi } from './TodayColumns';
+import { ColumnHeader, SelectAllButton, TodayColumns, type MenuItem, type SelectApi } from './TodayColumns';
 import { BigAnalyticsView } from './BigAnalyticsView';
 import { filtersToParams, mergeFilters, todayRule } from './filters';
 import { fmtDT, moneyShort } from './format';
@@ -36,13 +36,6 @@ const CLOSING: ReadonlySet<BigColumnKey> = new Set(['lost_check', 'lost_done']);
 const FINAL = new Set(BIG_COLUMNS.filter(c => c.final).map(c => c.key));
 
 class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
-
-/** Текст на цветной шапке колонки: тёмный на светлых (жёлтый, голубой), белый на тёмных. */
-function textOn(hex: string) {
-  const n = parseInt(hex, 16);
-  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-  return (0.299 * r + 0.587 * g + 0.114 * b) > 165 ? '#1f2328' : '#ffffff';
-}
 
 const cardSum = (cards: BigTaskCard[]) => cards.reduce((s, c) => s + (c.deal?.amount || c.taskAmount || 0), 0);
 
@@ -404,7 +397,7 @@ function Board({ data, selectedGroupIds, dragEnabled, onOpen, onMove, select, me
               return (
                 <div key={col.key} title={`«${col.title}» — нет у выбранных проектов`}
                   className={`flex h-full w-9 shrink-0 flex-col items-center gap-2 rounded-xl bg-[var(--color-bg-surface)] py-2 ${dim ? 'opacity-40' : ''}`}>
-                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: `#${col.color}` }} aria-hidden />
+                  <span className="h-4 w-[3px] shrink-0 rounded-full" style={{ background: `#${col.color}` }} aria-hidden />
                   <span className="text-xs text-[var(--color-text-muted)] [writing-mode:vertical-rl]">{col.title}</span>
                 </div>
               );
@@ -416,20 +409,11 @@ function Board({ data, selectedGroupIds, dragEnabled, onOpen, onMove, select, me
                 onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(o => (o === col.key ? null : o)); }}
                 onDrop={e => { e.preventDefault(); const c = drag; setDrag(null); setOver(null); if (c && dropOk) onMove(c, col.key); }}
                 className={`flex h-full w-72 max-w-[85vw] shrink-0 flex-col overflow-hidden rounded-xl bg-[var(--color-bg-surface)] transition-opacity ${dim ? 'opacity-40' : ''} ${over === col.key ? 'ring-2 ring-[var(--color-accent)]' : ''}`}>
-                <header className="shrink-0 px-2.5 py-2" style={{ background: `#${col.color}`, color: textOn(col.color) }}>
-                  <div className="flex min-w-0 items-center justify-between gap-2">
-                    <span className="min-w-0 truncate text-sm font-semibold" title={col.title}>{col.title}</span>
-                    <span className="flex shrink-0 items-center gap-1">
-                      <span className="text-sm font-semibold tabular-nums">{col.total}</span>
-                      <ColumnMenu items={menu} />
-                    </span>
-                  </div>
-                  <div className="flex min-w-0 items-baseline justify-between gap-2 text-xs opacity-85">
-                    <span className="min-w-0 truncate">{col.hint ?? ''}</span>
-                    {col.sum > 0 && <span className="shrink-0 tabular-nums">{moneyShort(col.sum)}</span>}
-                  </div>
-                </header>
-                {select && col.cards.length > 0 && <div className="shrink-0 px-2.5 pt-1"><SelectAllButton cards={col.cards} select={select} /></div>}
+                <div className="shrink-0 px-2 pt-2">
+                  <ColumnHeader title={col.title} hint={col.hint} total={col.total} sum={col.sum} color={`#${col.color}`} menu={menu}>
+                    {select && <SelectAllButton cards={col.cards} select={select} />}
+                  </ColumnHeader>
+                </div>
                 <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden p-2">
                   {col.cards.map(c => (
                     <BigTaskCardView key={c.id} card={c} onOpen={onOpen}
