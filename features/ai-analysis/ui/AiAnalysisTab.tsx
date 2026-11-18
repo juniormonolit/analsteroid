@@ -16,7 +16,7 @@ import type { CallListItem } from '../engine/collect';
 import type { AnalysisRow } from '../engine/store';
 import type { QuoteCheck } from '../engine/verify';
 import { memoLines, PROPOSE_ASK_MARK, taskTextPlain } from '../engine/memo';
-import { labelSpeakers, ROLE_LABEL } from '../engine/speakers';
+import { hasSpeakerLabels, labelSpeakers, ROLE_LABEL } from '../engine/speakers';
 import { CRITERIA_LABELS, VIOLATION_LABELS, type CriterionVerdict } from '../engine/parse';
 import { CLIENT_TYPES } from '@/features/client-module/engine/types';
 import Link from 'next/link';
@@ -222,10 +222,10 @@ function CallsList({ qs, calls, openId, highlights }: { qs: string; calls: CallL
               <div className="mb-2 mt-1 rounded-lg bg-[var(--color-surface-2,var(--color-bg))] p-2.5 text-[13px] leading-relaxed">
                 {!full ? <span className="text-[var(--color-text-muted)]">{texts.isError ? 'Не удалось загрузить текст' : 'Загружаем текст…'}</span> : (
                   <>
-                    {!full.hasRoles && <div className="mb-1 text-[11px] text-[var(--color-text-muted)]">Роли не размечены распознаванием — сплошной текст</div>}
+                    {!full.hasRoles && !hasSpeakerLabels(full.text) && <div className="mb-1 text-[11px] text-[var(--color-text-muted)]">Роли не размечены распознаванием — сплошной текст</div>}
                     {(() => {
                       // «Спикер 1/2» → «Менеджер/Клиент» (engine/speakers.ts); строк столько же, сколько в тексте.
-                      const labeled = labelSpeakers(full.text!, c.direction);
+                      const labeled = labelSpeakers(full.text!, c.direction, c.manager);
                       return full.text!.split('\n').map((ln, i) => {
                         const hit = heads.some(h => norm(ln).includes(h));
                         const l = labeled[i];

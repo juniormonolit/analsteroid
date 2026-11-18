@@ -10,7 +10,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, FileAudio, Loader2, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing } from 'lucide-react';
 import { apiFetch } from '@/lib/client/apiFetch';
 import type { CallListItem } from '@/features/ai-analysis/engine/collect';
-import { labelSpeakers, ROLE_LABEL, type SpeakerRole } from '@/features/ai-analysis/engine/speakers';
+import { hasSpeakerLabels, labelSpeakers, ROLE_LABEL, type SpeakerRole } from '@/features/ai-analysis/engine/speakers';
 import { plural } from './format';
 
 const POLL_MS = 10_000;
@@ -69,9 +69,9 @@ function mockCalls(transcribed: boolean): CallListItem[] {
 // ── Текст разговора: пузыри чата ──────────────────────────────────────────
 interface Bubble { role: SpeakerRole | null; who: string | null; text: string }
 
-function toBubbles(text: string, direction: string | null): Bubble[] {
+function toBubbles(text: string, direction: string | null, manager: string | null): Bubble[] {
   const out: Bubble[] = [];
-  for (const l of labelSpeakers(text, direction)) {
+  for (const l of labelSpeakers(text, direction, manager)) {
     const t = l.text.trim();
     if (!t) continue;
     // Строка без метки — продолжение предыдущей реплики.
@@ -82,8 +82,10 @@ function toBubbles(text: string, direction: string | null): Bubble[] {
 }
 
 function Dialogue({ call }: { call: CallListItem }) {
-  const bubbles = useMemo(() => (call.hasRoles ? toBubbles(call.text ?? '', call.direction) : []), [call]);
-  if (!call.hasRoles || !bubbles.length) {
+  // Метки «Спикер N [мм:сс]:» бывают и в сыром тексте (formatted_dialogue пуст) — смотрим на сам текст, не на hasRoles.
+  const labeled = call.hasRoles || hasSpeakerLabels(call.text);
+  const bubbles = useMemo(() => (labeled ? toBubbles(call.text ?? '', call.direction, call.manager ?? null) : []), [call, labeled]);
+  if (!labeled || !bubbles.length) {
     return (
       <div className="mt-1">
         <div className="mb-1 text-[12px] text-[var(--color-text-muted)]">Роли не размечены распознаванием — сплошной текст</div>
