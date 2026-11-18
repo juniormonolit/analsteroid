@@ -12,7 +12,7 @@ import { bitrixIdOfLogin, saveTranscribeDone, saveTranscribeWait } from './store
 import { requestTranscription, transcribeCandidates, transcribeEnabled, transcriptionState, TRANSCRIBE_POLL_MS, TRANSCRIBE_TIMEOUT_MS, type TranscribeState } from './transcribe';
 import { backfillParsed, claimNext, findDone, heartbeat, refreshLinksLines, requeueStale, saveDone, saveDuplicate, saveError, saveTaskCheckDone } from './store';
 import { buildLinksFacts, clarifyLines, proposeLines, type LinksResult } from './links';
-import { callsAfterTask, fetchTaskInfo, parseTaskCheck, taskCheckSystem, taskCheckUser, TASK_CHECK_VERSION } from './taskCheck';
+import { BIG_DEAL_CHECK_VERSION, bigDealCheckSystem, callsAfterTask, fetchTaskInfo, isBigDealTask, parseTaskCheck, taskCheckSystem, taskCheckUser, TASK_CHECK_VERSION } from './taskCheck';
 import { chat } from './llm';
 import { getActivePrompt } from './promptStore';
 import { parseReport } from './parse';
@@ -150,15 +150,17 @@ async function runTaskCheck(id: number, taskId: number): Promise<void> {
   const t = await fetchTaskInfo(taskId);
   if (!t) throw new Error(`Задача #${taskId} не найдена в копии Битрикса`);
   const calls = await callsAfterTask(t);
-  if (!calls.length) throw new Error('После постановки задачи нет расшифрованных разговоров дольше 20 секунд — проверять нечего');
+  const big = isBigDealTask(t);
+  if (!calls.length) throw new Error(big ? 'По сделке нет расшифрованных разговоров дольше 20 секунд (за 14 дней до задачи и после) — оценивать нечего' : 'После постановки задачи нет расшифрованных разговоров дольше 20 секунд — проверять нечего');
   void heartbeat(id, 'thinking');
   const { text } = taskCheckUser(t, calls);
-  const llm = await chat({ system: taskCheckSystem(), user: text, reasoningEffort: DEFAULT_REASONING_EFFORT });
+  // Большие чеки — свой промпт-чек-лист (владелец 18.11), повторка — проверка пунктов задачи.
+  const llm = await chat({ system: big ? bigDealCheckSystem() : taskCheckSystem(), user: text, reasoningEffort: DEFAULT_REASONING_EFFORT });
   const { result, quotes } = parseTaskCheck(llm.content, calls);
   await saveTaskCheckDone(id, {
     model: llm.model, reportMd: llm.content, quotes, parsed: { taskCheck: result }, callsCount: calls.length,
     inputTokens: llm.usage.promptTokens, cachedTokens: llm.usage.cachedTokens, outputTokens: llm.usage.completionTokens,
-    reasoningTokens: llm.usage.reasoningTokens, costRub: llm.costRub, seconds: llm.seconds, promptVersion: TASK_CHECK_VERSION,
+    reasoningTokens: llm.usage.reasoningTokens, costRub: llm.costRub, seconds: llm.seconds, promptVersion: big ? BIG_DEAL_CHECK_VERSION : TASK_CHECK_VERSION,
   });
   console.log(`[aiAnalysis] #${id} проверка задачи ${taskId}: ${result.verdict ?? '?'}, ${llm.seconds} с, ${llm.costRub} ₽`);
 }

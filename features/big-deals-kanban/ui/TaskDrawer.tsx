@@ -16,7 +16,14 @@ import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
 import { ClientSummaryPanel } from '@/features/client-module/ui/ClientSummaryPanel';
 import { TabsRibbon } from '@/features/client-module/ui/CardHeader';
 import type { ClientCardTab } from '@/features/client-module/ui/ClientModuleWidget';
-import { TaskCheckPanel, useTaskChecks } from '@/features/repeat-kanban/ui/TaskCheck';
+import { TaskCheckPanel, useTaskChecks, type TaskCheckLabels } from '@/features/repeat-kanban/ui/TaskCheck';
+
+/** ИИ-оценка по чек-листу большой сделки (промпт bigDealCheckSystem, владелец 18.11). */
+const BIG_CHECK_LABELS: TaskCheckLabels = {
+  title: 'ИИ-оценка сделки',
+  empty: 'По сделке нет звонков с расшифровкой (за 14 дней до задачи и после) — оценивать нечего.',
+  run: 'Оценить звонки',
+};
 import { useMediaQuery } from '@/lib/hooks/useMediaQuery';
 import type { BigPerson, BigTaskCard } from '../engine/types';
 import type { BigTaskDetails } from '../engine/taskDetails';
@@ -208,7 +215,7 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
           <div className={`${workVisible} ${col}`}>
             {canManage && <TaskActions card={card} managers={managers} onChanged={changed} />}
             {canManage && !mock && (
-              <TaskCheckPanel taskId={card.id} state={checks.data?.[String(card.id)]} />
+              <TaskCheckPanel taskId={card.id} state={checks.data?.[String(card.id)]} labels={BIG_CHECK_LABELS} />
             )}
             <TaskChat card={card} messages={d?.chat ?? null} loading={details.isLoading} onSent={changed} />
             {d && <ParticipantsField taskId={card.id} auditors={d.auditors ?? card.auditors} me={d.viewer?.id ?? null} canManage={canManage && card.state !== 'done'} onChanged={changed} />}

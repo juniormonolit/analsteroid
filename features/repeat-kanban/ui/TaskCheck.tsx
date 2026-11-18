@@ -37,7 +37,9 @@ export function useTaskChecks(taskIds: number[], enabled: boolean) {
 }
 
 /** Блок проверки: результат, если есть; кнопка «Проверить звонок» (стоимость не показываем — владелец 23.10); пока идёт — опрос раз в 4 с. */
-export function TaskCheckPanel({ taskId, state }: { taskId: number; state: TaskCheckState | undefined }) {
+/** Подписи меняет канбан больших чеков (там чек-лист большой сделки, а не проверка пунктов задачи). */
+export interface TaskCheckLabels { title?: string; empty?: string; run?: string }
+export function TaskCheckPanel({ taskId, state, labels }: { taskId: number; state: TaskCheckState | undefined; labels?: TaskCheckLabels }) {
   const qc = useQueryClient();
   const [runId, setRunId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -63,11 +65,11 @@ export function TaskCheckPanel({ taskId, state }: { taskId: number; state: TaskC
     <div className="flex min-w-0 flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-2.5 text-[13px]">
       <div className="flex flex-wrap items-center gap-2">
         <PhoneCall size={14} className="shrink-0 text-[var(--color-accent)]" />
-        <span className="font-semibold text-[var(--color-text)]">Звонок по задаче</span>
+        <span className="font-semibold text-[var(--color-text)]">{labels?.title ?? 'Звонок по задаче'}</span>
         {v && <span className="rounded px-1.5 py-0.5 text-[11.5px] font-semibold" style={{ background: v.bg, color: v.fg }}>{v.label}</span>}
         {row?.status === 'done' && <span className="text-[11px] text-[var(--color-text-muted)]">проверено {new Date(row.createdAt).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Moscow' })}</span>}
       </div>
-      {!state?.hasCall && !res && <p className="text-[var(--color-text-muted)]">После постановки задачи звонков с расшифровкой нет — проверять нечего.</p>}
+      {!state?.hasCall && !res && <p className="text-[var(--color-text-muted)]">{labels?.empty ?? 'После постановки задачи звонков с расшифровкой нет — проверять нечего.'}</p>}
       {res && res.items.length > 0 && (
         <ul className="flex flex-col gap-1">
           {res.items.map((it, i) => (
@@ -87,7 +89,7 @@ export function TaskCheckPanel({ taskId, state }: { taskId: number; state: TaskC
       {state?.hasCall && !running && (
         <button type="button" onClick={run}
           className="inline-flex min-h-11 items-center gap-1 self-start rounded-md border border-[var(--color-border)] px-3 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] active:scale-[0.98]">
-          <PhoneCall size={13} /> {res || row?.status === 'error' ? 'Проверить заново' : 'Проверить звонок'}
+          <PhoneCall size={13} /> {res || row?.status === 'error' ? 'Проверить заново' : labels?.run ?? 'Проверить звонок'}
         </button>
       )}
     </div>
