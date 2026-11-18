@@ -1,10 +1,11 @@
 'use client';
 // Карточка задачи большого чека (решение владельца 18.11: «информативнее битриксовой» — максимум
 // без перехода в Битрикс). Порядок строк по важности: что и на сколько → стадия сделки →
-// кто и чей проект → статус задачи и сколько стоит в колонке → звонки и связанные задачи.
+// клиент и исполнитель → стадия сделки → сигналы одной строкой (статус, дни в колонке, звонки, ответ по связанным).
+// Компоновка 18.11 (план Fable): 4 строки вместо 7, № и дата создания — в подсказке, полоса-сигнал слева.
 import { Check, Clock, Link2, Phone, PhoneOff } from 'lucide-react';
 import type { BigTaskCard } from '../engine/types';
-import { STATE_META, cardAmount, fmtD, money, plural, shortName } from './format';
+import { STATE_META, cardAmount, fmtD, money, shortName } from './format';
 
 /** Клиент сделки, если движок его отдаёт (поле может прийти позже контракта: строка или { name }). */
 function clientName(card: BigTaskCard): string | null {
@@ -42,8 +43,13 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
       onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(card.id)); onDragStart?.(card); }}
       onDragEnd={() => onDragEnd?.()}
       data-task-id={card.id}
-      className={`group flex w-full flex-col gap-1.5 rounded-lg border bg-[var(--color-bg)] p-2.5 text-left text-xs shadow-sm outline-none transition hover:border-[var(--color-border-strong)] hover:shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] active:scale-[0.99] ${selected ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : card.stuck ? 'border-[var(--color-negative)]/50' : 'border-[var(--color-border)]'} ${dragging ? 'opacity-40' : ''} ${draggable ? 'cursor-grab' : 'cursor-pointer'}`}
+      title={`№ ${card.id} · создана ${fmtD(card.createdAt)} · ${card.title}`}
+      className={`group relative flex w-full flex-col gap-1.5 overflow-hidden rounded-lg border bg-[var(--color-bg)] p-2.5 pl-3 text-left text-xs shadow-sm outline-none transition hover:border-[var(--color-border-strong)] hover:shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] active:scale-[0.99] ${selected ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : card.stuck ? 'border-[var(--color-negative)]/50' : 'border-[var(--color-border)]'} ${dragging ? 'opacity-40' : ''} ${draggable ? 'cursor-grab' : 'cursor-pointer'}`}
     >
+      {/* Полоса-сигнал слева: застряла — красная, ждёт контроля — акцентная. */}
+      {(card.stuck || card.state === 'control') && (
+        <span aria-hidden className={`absolute inset-y-0 left-0 w-[3px] ${card.stuck ? 'bg-[var(--color-negative)]' : 'bg-[var(--color-accent)]'}`} />
+      )}
       {/* Что и на сколько */}
       <div className="flex min-w-0 items-start justify-between gap-2">
         {selecting && (
@@ -51,7 +57,7 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
             {selected && <Check size={12} strokeWidth={3} />}
           </span>
         )}
-        <span className="min-w-0 flex-1 break-words text-sm font-semibold leading-snug text-[var(--color-text)]" title={card.title}>
+        <span className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-semibold leading-snug text-[var(--color-text)]">
           {card.productGroup ?? card.title}
         </span>
         {amount != null && (
@@ -61,53 +67,54 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
         )}
       </div>
 
-      {client && <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`Клиент: ${client}`}>{client}</span>}
+      {/* Кто: клиент · исполнитель · проект */}
+      <div className="flex min-w-0 items-center gap-1.5 text-[var(--color-text-secondary)]">
+        {client && <span className="min-w-0 truncate" title={`Клиент: ${client}`}>{client}</span>}
+        {client && <span aria-hidden className="shrink-0 text-[var(--color-text-muted)]">·</span>}
+        <span className={`truncate ${client ? 'shrink-0 max-w-[45%]' : 'min-w-0'}`} title={`Исполнитель: ${card.responsible.name}`}>{shortName(card.responsible.name)}</span>
+        <span className="ml-auto shrink-0 rounded border border-[var(--color-border)] px-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]" title="Проект">{card.groupShort}</span>
+      </div>
 
       {/* Стадия сделки и итог */}
       {(card.deal || closed) && (
-        <div className="flex min-w-0 flex-wrap items-center gap-1">
+        <div className="flex min-w-0 items-center gap-1">
           {closed === 'won' && <span className="rounded bg-[var(--color-positive)]/15 px-1.5 py-0.5 font-semibold text-[var(--color-positive)]">сделка выиграна</span>}
           {closed === 'lost' && <span className="rounded bg-[var(--color-negative-soft)] px-1.5 py-0.5 font-semibold text-[var(--color-negative)]">сделка проиграна</span>}
-          {card.deal && !closed && <span className="min-w-0 truncate text-[var(--color-text-secondary)]" title={`Стадия сделки: ${card.deal.stageName}`}>{card.deal.stageName}</span>}
-        </div>
-      )}
-
-      {/* Кто и чей проект */}
-      <div className="flex min-w-0 items-center gap-1.5 text-[var(--color-text-secondary)]">
-        <span className="min-w-0 truncate" title={card.responsible.name}>{shortName(card.responsible.name)}</span>
-        <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">{card.groupShort}</span>
-      </div>
-
-      {/* Статус задачи и время в колонке */}
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-        <span className={`rounded px-1.5 py-0.5 font-medium ${state.cls}`}>{state.label}</span>
-        <span className={`inline-flex items-center gap-0.5 ${card.stuck ? 'font-semibold text-[var(--color-negative)]' : 'text-[var(--color-text-muted)]'}`}
-          title={card.stuck ? 'Стоит в колонке дольше нормы' : 'Сколько дней задача в этой колонке'}>
-          <Clock size={11} aria-hidden />{card.daysInColumn} дн. в колонке
-        </span>
-      </div>
-
-      {/* Звонки после постановки и связанные задачи */}
-      {(calls || card.related.length > 0) && (
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-[var(--color-text-muted)]">
-          {calls && (calls.total > 0 ? (
-            <span className="inline-flex items-center gap-0.5" title="Звонков по сделке после постановки задачи; минуты — разговоры длиннее 20 с">
-              <Phone size={11} aria-hidden />{calls.total} {plural(calls.total, 'звонок', 'звонка', 'звонков')} · {Math.round(calls.talkSeconds / 60)} мин
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-0.5 text-[var(--color-warning)]" title="После постановки задачи по сделке не звонили">
-              <PhoneOff size={11} aria-hidden />звонков не было
-            </span>
-          ))}
-          {card.related.length > 0 && (
-            <span className={`inline-flex items-center gap-0.5 ${answered ? 'text-[var(--color-positive)]' : ''}`}
-              title={`Связанных задач по сделке: ${card.related.length}${answered ? `, с ответом: ${answered}` : ', ответа пока нет'}`}>
-              <Link2 size={11} aria-hidden />{card.related.length}{answered ? ` · ответ ${answered}` : ''}
+          {card.deal && !closed && (
+            <span className="inline-flex min-w-0 items-center gap-1 text-[var(--color-text-secondary)]" title={`Стадия сделки: ${card.deal.stageName}`}>
+              <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-accent)]" /><span className="truncate">{card.deal.stageName}</span>
             </span>
           )}
         </div>
       )}
-      <span className="text-[10px] text-[var(--color-text-muted)]">№ {card.id} · <span title="Дата создания задачи">созд. {fmtD(card.createdAt)}</span></span>
+
+      {/* Сигналы одной строкой, порядок постоянный (глаз идёт по одной вертикали): статус · дни · звонки · ответ */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <span className={`rounded px-1.5 py-0.5 font-medium ${state.cls}`}>{state.label}</span>
+        <span className={`inline-flex items-center gap-0.5 tabular-nums ${card.stuck ? 'font-semibold text-[var(--color-negative)]' : 'text-[var(--color-text-muted)]'}`}
+          title={card.stuck ? `${card.daysInColumn} дн. в колонке — дольше нормы` : `${card.daysInColumn} дн. в этой колонке`}>
+          <Clock size={11} aria-hidden />{card.daysInColumn} дн.
+        </span>
+        {calls && (calls.total > 0 ? (
+          <span className="inline-flex items-center gap-0.5 tabular-nums text-[var(--color-text-muted)]" title={`Звонков по сделке после постановки задачи: ${calls.total}; разговоры длиннее 20 с — ${Math.round(calls.talkSeconds / 60)} мин`}>
+            <Phone size={11} aria-hidden />{calls.total} · {Math.round(calls.talkSeconds / 60)} мин
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-0.5 font-medium text-[var(--color-warning)]" title="После постановки задачи по сделке не звонили">
+            <PhoneOff size={11} aria-hidden />0
+          </span>
+        ))}
+        {card.related.length > 0 && (answered ? (
+          <span className="inline-flex items-center gap-0.5 rounded bg-[var(--color-positive)]/15 px-1.5 py-0.5 font-medium text-[var(--color-positive)]"
+            title={`Связанных задач (логист, снабжение): ${card.related.length}, с ответом: ${answered}`}>
+            <Link2 size={11} aria-hidden />ответ{card.related.length > 1 ? ` ${answered}/${card.related.length}` : ''}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-0.5 text-[var(--color-text-muted)]" title={`Связанных задач: ${card.related.length}, ответа пока нет`}>
+            <Link2 size={11} aria-hidden />ждём
+          </span>
+        ))}
+      </div>
     </button>
   );
 }

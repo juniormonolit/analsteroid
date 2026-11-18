@@ -323,7 +323,7 @@ export function BigDealsKanbanPage() {
       )}
 
       {openCard && (
-        <TaskDrawer card={openCard} canManage={canManage} managers={data?.managers ?? []}
+        <TaskDrawer card={openCard} canManage={canManage} managers={data?.managers ?? []} mock={mock}
           onClose={() => setTaskParam('')}
           onChanged={card => {
             if (card) qc.setQueryData<BigBoardResponse>(queryKey, d => (d ? placeCard(d, card) : d));
