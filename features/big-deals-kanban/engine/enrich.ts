@@ -122,25 +122,23 @@ export async function fetchDealGroups(dealIds: number[]): Promise<Map<number, De
   }
 }
 
-// ── «Нераспределённые» (РОП Осипов 19.11: «все, где не назначен менеджер») ──────────
-// Задача без менеджера = висит на РОПе или директоре отдела: исполнитель — руководитель по оргструктуре
-// (sa.org_resolved_hierarchy). Кэш 10 мин; null — БД недоступна (локально), признак тогда не ставим.
-let headsMemo: { at: number; ids: Set<string> } | null = null;
-export async function fetchHeads(): Promise<Set<string> | null> {
-  if (headsMemo && Date.now() - headsMemo.at < 10 * 60_000) return headsMemo.ids;
+// ── «Нераспределённые»: рядовые менеджеры по оргструктуре ───────────────────────────
+// Менеджер, который сам себе поставил задачу (Девришев, Пыжьянова), — не «без менеджера». Рядовой = в
+// sa.org_resolved_hierarchy у него есть РОП и это не он сам. Кэш 10 мин; null — БД недоступна (локально).
+let plainMemo: { at: number; ids: Set<string> } | null = null;
+export async function fetchPlainManagers(): Promise<Set<string> | null> {
+  if (plainMemo && Date.now() - plainMemo.at < 10 * 60_000) return plainMemo.ids;
   try {
     const q = analyticsDb().query<{ id: string }>(
-      `SELECT DISTINCT x.id FROM sa.org_resolved_hierarchy h
-         CROSS JOIN LATERAL (VALUES (h.rop_bitrix_user_id::text), (h.department_director_bitrix_user_id::text)) x(id)
-        WHERE h.is_active AND x.id IS NOT NULL`);
+      `SELECT DISTINCT manager_bitrix_user_id::text AS id FROM sa.org_resolved_hierarchy
+        WHERE is_active AND rop_bitrix_user_id IS NOT NULL AND rop_bitrix_user_id <> manager_bitrix_user_id`);
     q.catch(() => {});
     const res = await Promise.race([q, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout 8s')), 8000))]);
-    const ids = new Set(res.rows.map(r => String(r.id)));
-    headsMemo = { at: Date.now(), ids };
-    return ids;
+    plainMemo = { at: Date.now(), ids: new Set(res.rows.map(r => String(r.id))) };
+    return plainMemo.ids;
   } catch (e) {
-    console.warn('[big-deals] оргструктура (РОПы) недоступна:', e instanceof Error ? e.message : e);
-    return headsMemo?.ids ?? null;
+    console.warn('[big-deals] оргструктура (рядовые менеджеры) недоступна:', e instanceof Error ? e.message : e);
+    return plainMemo?.ids ?? null;
   }
 }
 
