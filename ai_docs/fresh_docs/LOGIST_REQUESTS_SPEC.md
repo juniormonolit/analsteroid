@@ -142,9 +142,89 @@
 - Миграции с 267 (system DB): `logist_queues`, `logist_queue_members`, `logist_requests`, `logist_request_items`,
   `logist_request_offers` + `_offer_lines`, `logist_request_messages`, `logist_request_events`,
   `logist_request_settings`. GRANT роли приложения (см. 257/261). `logist_kanban_cards` — дроп отдельной миграцией после выкатки.
-- Код: `features/logist-kanban/{engine,ui,guide}`, API `app/api/logist-kanban/*`, триггер `app/api/logist-requests/trigger`.
+- Код: `features/logist-kanban/{engine,ui,guide}` (движок запросов — `engine/requests/`), API `app/api/logist-kanban/*` (см. «API»;
+  `requests/[id]` и корневой `route.ts` — ещё прототип на `sd`, их снесёт S3), триггер `app/api/logist-requests/trigger`.
 - Битрикс: `bx()` из `lib/bitrix/notify.ts`, `writeOnce()` для создания (без ретраев), `callAsUser()` для действий
   от имени сотрудника. Вызывать Битрикс как можно реже: доска читает только нашу БД.
+
+## API (S1, 19.11 — контракт для S2–S5)
+
+**Контракт типов — `features/logist-kanban/engine/requests/contract.ts`** (без рантайм-импортов, тянуть можно и в
+клиент). Поля только добавляются; переименование — правкой спеки и всех потребителей в одном коммите.
+Даты — ISO UTC, календарные — `YYYY-MM-DD`; люди — bitrix id. Ошибка любого эндпоинта — `{ error, code? }`,
+`code`: `forbidden` (403) / `not_found` (404) / `conflict` (409, устарела `version`) / `transition` (409, действие
+недоступно в статусе) / `invalid` (400).
+
+| Метод и путь | Тело → ответ | Кто |
+|---|---|---|
+| `GET /api/logist-kanban/board?view=board\|deals&<фильтры>&limit=100` | → `BoardResponse` (колонки, свои черновики, плитки, варианты фильтров, `me`) | все вошедшие; данные режутся видимостью |
+| `POST /api/logist-kanban/drafts` | `CreateDraftBody` → `CreateDraftResponse` (201 создан / 200 уже был) | менеджер; от чужого имени — `canManage` |
+| `GET /api/logist-kanban/request/:id[?peek=1]` | → `RequestDetails` (позиции, варианты, чат, журнал, циклы, `can`, `roles`); без `peek` — чат прочитан | кто видит |
+| `PATCH /api/logist-kanban/request/:id` | `UpdateDraftBody` → `RequestDetails` (= `update_draft`) | автор черновика |
+| `POST /api/logist-kanban/request/:id/action` | `ActionBody` → `ActionResponse` | по `can` |
+| `GET /api/logist-kanban/request/:id/messages?after=<id>` | → `MessagesResponse` (новые сообщения + лента событий) | кто видит |
+| `POST /api/logist-kanban/request/:id/messages` | `PostMessageBody` → `PostMessageResponse` (201) | кто видит |
+| `GET /api/logist-kanban/deal/:dealId` | → `DealRequestsResponse` (запросы по сделке, открытый по типу) | кто видит |
+| `GET /api/logist-kanban/queues` | → `QueuesResponse` (очереди, настройки, `canManage`) | все вошедшие |
+| `PUT /api/logist-kanban/queues` | `QueueUpsertBody` → `{ queue }` (участники — полной заменой) | `canManage` |
+| `POST /api/logist-kanban/queues/seed` | → `SeedQueuesResponse` — посев из снимка Панели снабжения | `canManage` |
+| `GET` / `PUT /api/logist-kanban/settings` | `SettingsBody` (частично) → `LogistSettings` | чтение — все; запись — `canManage` |
+
+Действия (`ActionBody.action`), допустимые статусы → новый статус, кто (админ = `canManage` — всё допустимое):
+
+| action | из | в | кто |
+|---|---|---|---|
+| `update_draft` (шапка + позиции полной заменой) | draft | — | менеджер-автор |
+| `send` (проверки: очередь, ≥1 позиция, у `cheaper` цена конкурента по позиции или общая) | draft | new | менеджер |
+| `take` | new | in_work | логист очереди |
+| `release` | in_work | new | держатель, руководитель очереди |
+| `transfer {queueId}` | new, in_work | new (держатель снят) | держатель, логист очереди (не взятый), руководитель очереди |
+| `reassign {logistBitrixId}` | new, in_work, answered | in_work (answered — без смены) | руководитель очереди, РОП зоны |
+| `answer {offer}` (ещё варианты — можно повторно) | new, in_work, answered | answered | держатель; из «Новых» — логист очереди (становится держателем) |
+| `withdraw_offer {offerId}` | in_work, answered | — | держатель |
+| `return {comment}` (новый цикл; без держателя → new) | answered | in_work | менеджер |
+| `accept {offerId}` → хук записи товаров сделки (S4) | answered | accepted | менеджер |
+| `cancel {reason?}` | draft, new, in_work, answered | cancelled | менеджер, РОП зоны |
+| `add_items {items}` | draft…answered | — | менеджер |
+
+Видимость (`status.ts canSee`, в SQL — `repo.ts visibilitySql`): черновик — автору и `canManage`; остальное — менеджеру
+запроса, держателю, участникам очереди, РОПу зоны (`ropScope` → менеджеры), `canManage` — всё.
+`canManageLogistKanban` = супер-админ / роль «Администратор» / пофамильное право `action.logist_kanban.manage`.
+Разделу-странице по-прежнему нужен `section.logist_kanban` (это решает S3); API открыт всем вошедшим, потому что
+менеджеры создают и смотрят свои запросы без этого права.
+
+Фильтры доски — `LogistFilters`, списки повторяющимися ключами (`?type=supply&queue=5&queue=7`, в названиях групп
+запятые). Разбор/сборка — `parseFilters` / `filtersToSearchParams` (`engine/requests/filters.ts`, клиентобезопасен).
+Сортировка `?sort=priority|sum|waiting|created`. Закрытые без периода — за 45 дней. Плитки — за `from..to` или 30 дней.
+
+Точки расширения (`engine/requests/hooks.ts`, вызываются после коммита, ошибка не откатывает действие):
+`afterLogistChange(ctx)` — S4 (дубль-задача, статусы, комментарии) и S5 (уведомления);
+`writeDealRowsForAcceptedOffer(...)` — S4, сейчас заглушка → `deal_rows_status='skipped'`.
+Триггер S2 зовёт движок напрямую: `createDraft(actor, { source: 'robot', … })` из `repo.ts` + `readDeal()` /
+`managerRegion()` из `dealSource.ts` (повторная стадия при открытом запросе того же типа вернёт его же, `created=false`).
+
+Модули движка `features/logist-kanban/engine/requests/`: `contract` (типы), `status` (переходы/права), `worktime`
+(9–18 МСК поверх `lib/supplyPanel/calc.ts`), `cycles` (циклы по журналу), `priority` (SLA, огонёк, настройки по
+умолчанию), `filters`, `tiles`, `validate` (тела API, суммы варианта), `routing` (очередь по умолчанию, посев из
+Панели снабжения), `mapper`, `repo` (БД), `queues`, `actor`, `dealSource` (чтение Битрикса), `hooks`, `http`.
+Проверки: `npm run test:logist-requests` (чистые функции), `scripts/smoke-logist-requests.ts` (полный путь на
+одноразовом локальном Postgres, инструкция в шапке файла).
+
+Миграция **267** (`migrations/267_logist_requests.sql`): 12 таблиц — очереди и участники, запросы (поля дубль-задачи
+`bx_task_id`/`bx_sync_status`/`bx_sync_error`, записи товаров `deal_rows_*`, `version` для оптимистичной блокировки),
+позиции, варианты + строки, сообщения, файлы, наблюдатели, прочитанность, журнал (append-only триггером, роли
+приложения — только SELECT/INSERT), настройки. Идемпотентна, гранты по образцу 257/261.
+
+### Открыто после S1
+
+- **Загрузка файлов** — таблица `logist_request_files` и `fileIds` в телах есть, эндпоинта загрузки нет: файлы живут
+  на Диске Битрикса (`features/repeat-kanban/engine/attachments.ts`), это запись в Битрикс → S4. Контракт под него:
+  `POST /api/logist-kanban/files` (multipart `files`) → `{ files: FileRef[] }` со строкой в `logist_request_files` (request_id NULL до привязки).
+- **Исход сделки** — `syncDealOutcomes()` в `repo.ts` (sa.deals sold_at/lost_at → `deal_outcome` + событие) написан,
+  фоновая задача не подключена (прод: `BACKGROUND_JOBS_ALLOW`).
+- **Наблюдатели** — таблица есть, действий добавить/убрать нет (нужны S3 — решить при вёрстке карточки).
+- Посев очередей ставит участниками тех, кто ответил в проекте ≥ 3 раз за 60 дней (открытый вопрос 3 владельцу);
+  ручной состав не перетирается.
 
 ## Подсессии
 
