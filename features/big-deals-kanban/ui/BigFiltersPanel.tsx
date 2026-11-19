@@ -46,6 +46,8 @@ export function useBigFilters() {
   const [sort, setSort] = useUrlState('sort', enumParam(SORTS, 'default'));
   // Кнопка «Ждёт контроля» на доске (владелец 18.11): статус «ждёт контроля» БЕЗ колонок «Не продано» — там тысячи старых отказов.
   const [ctl, setCtl] = useUrlState('ctl', boolParam(false));
+  // Кнопка «Нераспределённые» (РОП Осипов 19.11): открытые задачи, где менеджер не назначен (висят на РОПе/директоре).
+  const [unas, setUnas] = useUrlState('unas', boolParam(false));
   const batch = useUrlStateBatch();
 
   const filters = useMemo<BigFilters>(() => ({
@@ -57,23 +59,24 @@ export function useBigFilters() {
     createdFrom: isDay(cfrom), createdTo: isDay(cto),
     states: ctl ? ['control'] as BigTaskState[] : states as BigTaskState[],
     hideLost: ctl || undefined,
+    unassigned: unas || undefined,
     idleDaysMin: posInt(idle),
     stuck, noCalls,
     deal: deal === 'won' || deal === 'lost' || deal === 'open' ? deal : null,
-  }), [groupSel, manager, products, q, smin, smax, cfrom, cto, states, idle, stuck, noCalls, deal, ctl]);
+  }), [groupSel, manager, products, q, smin, smax, cfrom, cto, states, idle, stuck, noCalls, deal, ctl, unas]);
 
   /** Сколько условий включено в панели «Фильтры» (проекты/менеджер/группы/поиск — на виду, не считаем). */
   const panelActive = [smin || smax, cfrom || cto, states.length, idle, stuck, noCalls, deal, sort !== 'default'].filter(Boolean).length;
-  const anyActive = ctl || panelActive > 0 || groupSel.length > 0 || !!manager || products.length > 0 || !!q;
+  const anyActive = ctl || unas || panelActive > 0 || groupSel.length > 0 || !!manager || products.length > 0 || !!q;
 
   const resetPanel = () => batch({ smin: null, smax: null, cfrom: null, cto: null, states: null, idle: null, stuck: null, nocalls: null, deal: null, sort: null });
-  const resetAll = () => batch({ ctl: null, group: null, manager: null, product: null, q: null, smin: null, smax: null, cfrom: null, cto: null, states: null, idle: null, stuck: null, nocalls: null, deal: null, sort: null });
+  const resetAll = () => batch({ ctl: null, unas: null, group: null, manager: null, product: null, q: null, smin: null, smax: null, cfrom: null, cto: null, states: null, idle: null, stuck: null, nocalls: null, deal: null, sort: null });
 
   return {
     filters, sort: sort as BigSort, panelActive, anyActive, resetPanel, resetAll,
     groupSel, setGroupSel, manager, setManager, products, setProducts, q, setQ,
     smin, setSmin, smax, setSmax, cfrom, setCfrom, cto, setCto, states, setStates, idle, setIdle,
-    stuck, setStuck, noCalls, setNoCalls, deal, setDeal, setSort, ctl, setCtl,
+    stuck, setStuck, noCalls, setNoCalls, deal, setDeal, setSort, ctl, setCtl, unas, setUnas,
   };
 }
 export type BigFilterState = ReturnType<typeof useBigFilters>;

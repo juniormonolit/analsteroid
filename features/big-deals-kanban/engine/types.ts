@@ -73,6 +73,8 @@ export interface BigTaskCard {
   daysInColumn: number;
   /** Дольше порога STUCK_DAYS. */
   stuck: boolean;
+  /** Менеджер не назначен: исполнитель — РОП/директор отдела по оргструктуре (кнопка «Нераспределённые»). */
+  unassigned?: boolean;
   /** Товарная группа сделки (sa.deals.head_group_name, решение владельца 18.11); БД недоступна — часть названия задачи до «|». */
   productGroup: string | null;
   /** Все товарные группы сделки (head-группа + группы товаров, без услуг/доставки) — для фильтра. */
@@ -138,6 +140,8 @@ export interface BigFilters {
   noCalls?: boolean;
   /** Скрыть колонки «Не продано (проверка/проверено)» — кнопка «Ждёт контроля» (владелец 18.11: там тысячи старых отказов). Query nolost=1. */
   hideLost?: boolean;
+  /** Только «Нераспределённые» — открытые задачи без менеджера (исполнитель — РОП/директор). Query unas=1. */
+  unassigned?: boolean;
   /** Сделка: won | lost | open. */
   deal?: 'won' | 'lost' | 'open' | null;
 }

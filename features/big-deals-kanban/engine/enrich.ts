@@ -122,6 +122,28 @@ export async function fetchDealGroups(dealIds: number[]): Promise<Map<number, De
   }
 }
 
+// ── «Нераспределённые» (РОП Осипов 19.11: «все, где не назначен менеджер») ──────────
+// Задача без менеджера = висит на РОПе или директоре отдела: исполнитель — руководитель по оргструктуре
+// (sa.org_resolved_hierarchy). Кэш 10 мин; null — БД недоступна (локально), признак тогда не ставим.
+let headsMemo: { at: number; ids: Set<string> } | null = null;
+export async function fetchHeads(): Promise<Set<string> | null> {
+  if (headsMemo && Date.now() - headsMemo.at < 10 * 60_000) return headsMemo.ids;
+  try {
+    const q = analyticsDb().query<{ id: string }>(
+      `SELECT DISTINCT x.id FROM sa.org_resolved_hierarchy h
+         CROSS JOIN LATERAL (VALUES (h.rop_bitrix_user_id::text), (h.department_director_bitrix_user_id::text)) x(id)
+        WHERE h.is_active AND x.id IS NOT NULL`);
+    q.catch(() => {});
+    const res = await Promise.race([q, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout 8s')), 8000))]);
+    const ids = new Set(res.rows.map(r => String(r.id)));
+    headsMemo = { at: Date.now(), ids };
+    return ids;
+  } catch (e) {
+    console.warn('[big-deals] оргструктура (РОПы) недоступна:', e instanceof Error ? e.message : e);
+    return headsMemo?.ids ?? null;
+  }
+}
+
 // ── звонки (va.calls, ТОЛЬКО failed_at_stage IS NULL) ──────────────────────
 export interface CallRow { at: number; sec: number }
 /** deal_id → звонки с `sinceIso`. null — БД недоступна (локально так всегда). */

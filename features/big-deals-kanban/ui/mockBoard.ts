@@ -43,7 +43,7 @@ function allCards(): BigTaskCard[] {
     const base = {
       id: 480_000 + n, title: `${PRODUCTS[n % PRODUCTS.length]} | ${Math.round(amount / 1000)} тыс | ${resp.name.split(' ')[1]}`,
       groupId: g.id, groupShort: g.short, stageId: 1000 + n, stageTitle: column, column,
-      state: STATES[n % STATES.length], responsible: resp, creator: PEOPLE[0], auditors: [],
+      state: STATES[n % STATES.length], responsible: resp, creator: PEOPLE[0], auditors: [], unassigned: resp.id === PEOPLE[0].id,
       createdAt: new Date(now - (days + 2 + (n % 11)) * DAY).toISOString(),
       changedAt: new Date(now - ((n * 2) % 12) * DAY).toISOString(), closedAt: null, deadlineAt: null,
       inColumnSince: new Date(now - days * DAY).toISOString(), daysInColumn: days,
@@ -73,6 +73,7 @@ export function matchFilters(c: BigTaskCard, f: BigFilters): boolean {
   const idleDays = Math.floor((Date.now() - new Date(c.changedAt ?? c.createdAt).getTime()) / DAY);
   if (f.groups?.length && !f.groups.includes(c.groupId)) return false;
   if (f.manager && c.responsible.id !== f.manager) return false;
+  if (f.unassigned && (!c.unassigned || c.state === 'done' || c.column === 'sold' || c.column === 'lost_check' || c.column === 'lost_done')) return false;
   if (f.products?.length && !c.productGroups.some(p => f.products!.includes(p))) return false;
   if (f.q) { const q = f.q.toLowerCase(); if (!(`${c.id} ${c.title} ${c.deal?.title ?? ''} ${(c as { client?: string }).client ?? ''}`.toLowerCase().includes(q))) return false; }
   const a = amountOf(c);

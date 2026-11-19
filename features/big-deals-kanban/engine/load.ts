@@ -7,7 +7,7 @@ import type { BigDealInfo, BigRelatedTask, BigTaskCard } from './types';
 import { bxBatch, taskWebhook, type BatchCmd } from './rest';
 import { columnOfStage, stagesOfGroup, type BigStage } from './stages';
 import {
-  callStats, clientOf, dealIdOf, fetchCalls, fetchDealGroups, fetchDeals, fetchRelated, relatedIndex, loadNames, personOf, productGroupOf, rememberName, taskAmountOf, taskState,
+  callStats, clientOf, dealIdOf, fetchCalls, fetchDealGroups, fetchHeads, fetchDeals, fetchRelated, relatedIndex, loadNames, personOf, productGroupOf, rememberName, taskAmountOf, taskState,
 } from './enrich';
 import { resolveSince } from './stageSince';
 
@@ -89,7 +89,7 @@ export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
   // Одна карточка (refreshTask) — прямой запрос по сделке; вся доска — фоновый индекс.
   const pRel = (raw.length <= 5 ? fetchRelated(dealIds.map(id => `D_${id}`)) : Promise.resolve(relatedIndex())).catch(e => { console.warn('[big-deals] related', e instanceof Error ? e.message : e); return new Map<string, BigRelatedTask[]>(); });
   if (dbg) { dbg('deals')(pDeals); dbg('calls')(pCalls); dbg('related')(pRel); }
-  const [deals, calls, related, dealGroups] = await Promise.all([pDeals, pCalls, pRel, pGroups]);
+  const [deals, calls, related, dealGroups, heads] = await Promise.all([pDeals, pCalls, pRel, pGroups, fetchHeads()]);
   await loadNames(raw.flatMap(t => [t.responsibleId, t.createdBy]).map(String));
 
   const pre: { t: RawTask; column: BigColumnKey; stageId: number; stageTitle: string }[] = [];
@@ -115,6 +115,8 @@ export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
       auditors: (t.auditors ?? []).map(String),
       createdAt, changedAt: iso(t.changedDate), closedAt: iso(t.closedDate), deadlineAt: iso(t.deadline),
       inColumnSince, daysInColumn: 0, stuck: false,
+      // Менеджер не назначен: исполнитель — РОП/директор отдела. Оргструктура недоступна — не знаем (false).
+      unassigned: !!heads?.has(String(t.responsibleId)),
       // Товарная группа — из сделки в БД (владелец 18.11: название задачи — свободный текст, фильтр шумел).
       // Без БД (локально) — часть названия задачи до «|».
       ...(() => {

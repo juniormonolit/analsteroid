@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckSquare, Eye, HelpCircle, RefreshCw, Search, X } from 'lucide-react';
+import { CheckSquare, Eye, HelpCircle, RefreshCw, Search, UserX, X } from 'lucide-react';
 import { enumParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { useIsTouch } from '@/lib/hooks/useMediaQuery';
 import { SearchSelect } from '@/components/ui/SearchSelect';
@@ -157,6 +157,14 @@ export function BigDealsKanbanPage() {
     for (const c of data.columns) for (const k of c.cards) if (k.state === 'control' && k.column !== 'lost_check' && k.column !== 'lost_done') ids.add(k.id);
     return ids.size;
   }, [data]);
+  // «Нераспределённые» (РОП 19.11): открытые задачи без менеджера — исполнитель РОП/директор (card.unassigned).
+  const unassignedCount = useMemo(() => {
+    if (!data) return null;
+    const ids = new Set<number>();
+    for (const c of data.columns) for (const k of c.cards)
+      if (k.unassigned && k.state !== 'done' && k.column !== 'sold' && k.column !== 'lost_check' && k.column !== 'lost_done') ids.add(k.id);
+    return ids.size;
+  }, [data]);
   const dragEnabled = canManage && !isTouch;
   const activeView = view === 'analytics' && data && !canManage ? 'board' : view;
 
@@ -267,6 +275,12 @@ export function BigDealsKanbanPage() {
             <button type="button" onClick={() => f.setCtl(!onlyControl)} aria-pressed={onlyControl}
               className={onlyControl ? BTN_ACTIVE : BTN_IDLE} title={onlyControl ? 'Показать все задачи' : 'Оставить только задачи, которые ждут вашего контроля'}>
               <Eye size={16} aria-hidden /> Ждёт контроля{controlCount != null && <span className="tabular-nums opacity-80">{controlCount}</span>}
+            </button>
+          )}
+          {activeView !== 'analytics' && (
+            <button type="button" onClick={() => f.setUnas(!f.unas)} aria-pressed={f.unas}
+              className={f.unas ? BTN_ACTIVE : BTN_IDLE} title={f.unas ? 'Показать все задачи' : 'Только задачи, где менеджер не назначен (висят на РОПе)'}>
+              <UserX size={16} aria-hidden /> Нераспределённые{unassignedCount != null && <span className="tabular-nums opacity-80">{unassignedCount}</span>}
             </button>
           )}
           {activeView !== 'analytics' && <BigFiltersButton s={f} />}
