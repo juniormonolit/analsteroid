@@ -2,18 +2,24 @@
 import { systemDb } from '@/lib/db/clients';
 import { loadSnapshot } from '@/lib/supplyPanel/snapshot';
 import type { LogistQueue, QueueMember, QueueUpsertBody, SeedQueuesResponse } from './contract';
-import { queuesFromSupplyFacts } from './routing';
+import { bx } from '@/lib/bitrix/notify';
+import { taskWebhook } from '@/features/repeat-kanban/engine/createDeal';
+import type { SyncMembersResponse } from './contract';
+import { membersFromBitrix, queuesFromSupplyFacts, type BxGroupMember, type BxUser } from './routing';
 import { InputError } from './validate';
 
 interface QueueRow {
   id: number; group_id: number; name: string; region: string | null; dept: string | null; product_groups: string[];
   sla_hours: string | null; active: boolean; source: 'supply_panel' | 'manual'; sort: number;
-  members: { user_bitrix_id: string; user_name: string | null; role: 'logist' | 'lead' }[] | null;
+  members_synced_at: Date | null; members_sync_error: string | null;
+  members: { user_bitrix_id: string; user_name: string | null; role: 'logist' | 'lead'; source: 'bitrix' | 'manual';
+             bx_role: string | null; work_position: string | null; synced_at: string | null }[] | null;
 }
 
 export async function loadQueues(opts: { activeOnly?: boolean } = {}): Promise<LogistQueue[]> {
   const r = await systemDb().query<QueueRow>(
-    `SELECT q.*, (SELECT jsonb_agg(jsonb_build_object('user_bitrix_id', m.user_bitrix_id, 'user_name', m.user_name, 'role', m.role)
+    `SELECT q.*, (SELECT jsonb_agg(jsonb_build_object('user_bitrix_id', m.user_bitrix_id, 'user_name', m.user_name, 'role', m.role,
+                                                       'source', m.source, 'bx_role', m.bx_role, 'work_position', m.work_position, 'synced_at', m.synced_at)
                                    ORDER BY m.role DESC, m.user_name)
                     FROM logist_queue_members m WHERE m.queue_id = q.id) AS members
        FROM logist_queues q ${opts.activeOnly ? 'WHERE q.active' : ''}
@@ -21,7 +27,12 @@ export async function loadQueues(opts: { activeOnly?: boolean } = {}): Promise<L
   return r.rows.map(q => ({
     id: q.id, groupId: q.group_id, name: q.name, region: q.region, dept: q.dept, productGroups: q.product_groups ?? [],
     slaHours: q.sla_hours === null ? null : Number(q.sla_hours), active: q.active, source: q.source, sort: q.sort,
-    members: (q.members ?? []).map((m): QueueMember => ({ bitrixId: m.user_bitrix_id, name: m.user_name, role: m.role })),
+    members: (q.members ?? []).map((m): QueueMember => ({
+      bitrixId: m.user_bitrix_id, name: m.user_name, role: m.role, source: m.source, bxRole: m.bx_role, workPosition: m.work_position,
+      syncedAt: m.synced_at ? new Date(m.synced_at).toISOString() : null,
+    })),
+    membersSyncedAt: q.members_synced_at ? new Date(q.members_synced_at).toISOString() : null,
+    membersSyncError: q.members_sync_error,
   }));
 }
 
@@ -40,14 +51,6 @@ export function parseQueueBody(raw: unknown): QueueUpsertBody {
     slaHours: sla, active: r.active !== false, sort: Number.isInteger(r.sort) ? Number(r.sort) : 0,
   };
   if (r.id != null) { const id = Number(r.id); if (!Number.isInteger(id) || id <= 0) throw new InputError('Некорректный id очереди'); out.id = id; }
-  if (Array.isArray(r.members)) {
-    out.members = r.members.slice(0, 200).map(x => {
-      const m = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
-      const bitrixId = String(m.bitrixId ?? '').trim();
-      if (!/^\d{1,10}$/.test(bitrixId)) throw new InputError('Некорректный участник очереди');
-      return { bitrixId, name: s(m.name, 200), role: m.role === 'lead' ? 'lead' : 'logist' };
-    });
-  }
   return out;
 }
 
@@ -69,15 +72,6 @@ export async function upsertQueue(b: QueueUpsertBody, by: string): Promise<Logis
          RETURNING id`, vals);
     const id = r.rows[0]?.id;
     if (!id) throw new InputError('Очередь не найдена');
-    if (b.members) {
-      await client.query('DELETE FROM logist_queue_members WHERE queue_id = $1', [id]);
-      for (const m of b.members) {
-        await client.query(
-          `INSERT INTO logist_queue_members (queue_id, user_bitrix_id, user_name, role, added_by) VALUES ($1,$2,$3,$4,$5)
-           ON CONFLICT (queue_id, user_bitrix_id) DO UPDATE SET user_name=EXCLUDED.user_name, role=EXCLUDED.role`,
-          [id, m.bitrixId, m.name, m.role, by]);
-      }
-    }
     await client.query('COMMIT');
     const all = await loadQueues();
     return all.find(q => q.id === id)!;
@@ -91,12 +85,11 @@ export async function upsertQueue(b: QueueUpsertBody, by: string): Promise<Logis
 }
 
 /** Посев из снимка Панели снабжения: проекты → очереди (название/регион/департамент обновляются только
- *  у очередей source='supply_panel'; ручные не трогаем). Участники — кто отвечал в проекте за 60 дней,
- *  добавляются только в очереди без участников (ручной состав не перетираем). */
-export async function seedQueuesFromSupplyPanel(by: string, now = new Date()): Promise<SeedQueuesResponse> {
+ *  у очередей source='supply_panel'; ручные не трогаем). Состав — отдельно, syncQueueMembersFromBitrix(). */
+export async function seedQueuesFromSupplyPanel(by: string): Promise<SeedQueuesResponse> {
   const snap = await loadSnapshot();
   if (!snap) throw new InputError('Снимок Панели снабжения ещё не загружен — посев невозможен');
-  const seeds = queuesFromSupplyFacts(snap.facts, now);
+  const seeds = queuesFromSupplyFacts(snap.facts);
   let inserted = 0, updated = 0;
   const client = await systemDb().connect();
   try {
@@ -112,13 +105,6 @@ export async function seedQueuesFromSupplyPanel(by: string, now = new Date()): P
       const row = r.rows[0];
       if (!row) continue;
       if (row.inserted) inserted++; else updated++;
-      if (s.members.length) {
-        await client.query(
-          `INSERT INTO logist_queue_members (queue_id, user_bitrix_id, user_name, added_by)
-           SELECT $1, x.id, x.name, $4 FROM unnest($2::text[], $3::text[]) AS x(id, name)
-            WHERE NOT EXISTS (SELECT 1 FROM logist_queue_members WHERE queue_id = $1)`,
-          [row.id, s.members.map(m => m.bitrixId), s.members.map(m => m.name), by]);
-      }
     }
     await client.query('COMMIT');
   } catch (e) {
@@ -128,4 +114,103 @@ export async function seedQueuesFromSupplyPanel(by: string, now = new Date()): P
     client.release();
   }
   return { inserted, updated, total: seeds.length, source: `Панель снабжения, снимок ${snap.builtAt}` };
+}
+
+// ── состав очередей из участников проектов Битрикса ────────────────────────────────────
+
+type BxPage<T> = { result?: T; next?: number; total?: number; error?: string; error_description?: string };
+
+async function bxAll<T>(method: string, params: Record<string, unknown>): Promise<T[]> {
+  const out: T[] = [];
+  let start: number | undefined = 0;
+  for (let guard = 0; start !== undefined && guard < 40; guard++) {
+    const body = await bx(taskWebhook(), method, { ...params, start }) as BxPage<T[]>;
+    if (body.error) throw new Error(`${method}: ${body.error} ${body.error_description ?? ''}`.trim());
+    if (!Array.isArray(body.result)) throw new Error(`${method}: пустой ответ`);
+    out.push(...body.result);
+    start = typeof body.next === 'number' ? body.next : undefined;
+  }
+  return out;
+}
+
+const SYNC_LOCK = 774_201_901; // pg_try_advisory_lock: один синк на кластер
+
+/** Состав каждой активной очереди = активные участники её проекта Битрикса (sonet_group.user.get, только чтение).
+ *  Проект, который вебхук не прочитал, или пустой ответ — состав не трогаем, ошибку пишем в members_sync_error. */
+export async function syncQueueMembersFromBitrix(by: string): Promise<SyncMembersResponse> {
+  const lock = await systemDb().connect();
+  try {
+    const got = await lock.query<{ ok: boolean }>('SELECT pg_try_advisory_lock($1) AS ok', [SYNC_LOCK]);
+    if (!got.rows[0]?.ok) return { queues: 0, synced: 0, failed: [], members: 0, inactiveSkipped: 0, skipped: true };
+    try {
+      return await doSync(by);
+    } finally {
+      await lock.query('SELECT pg_advisory_unlock($1)', [SYNC_LOCK]).catch(() => {});
+    }
+  } finally {
+    lock.release();
+  }
+}
+
+async function doSync(by: string): Promise<SyncMembersResponse> {
+  const queues = await loadQueues({ activeOnly: true });
+  const res: SyncMembersResponse = { queues: queues.length, synced: 0, failed: [], members: 0, inactiveSkipped: 0 };
+  const rows = new Map<number, BxGroupMember[]>();
+  for (const q of queues) {
+    try {
+      const r = await bxAll<BxGroupMember>('sonet_group.user.get', { ID: q.groupId });
+      if (!r.length) throw new Error('в проекте нет участников (или нет прав на проект)');
+      rows.set(q.id, r);
+    } catch (e) {
+      res.failed.push({ queueId: q.id, groupId: q.groupId, name: q.name, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  // карточки сотрудников одним проходом: ACTIVE и должность
+  const ids = [...new Set([...rows.values()].flat().map(r => String(r.USER_ID)))].filter(x => /^\d+$/.test(x));
+  const users = new Map<string, BxUser>();
+  let usersError: string | null = null;
+  try {
+    for (let i = 0; i < ids.length; i += 50) {
+      // ACTIVE в фильтр не ставим: уволенного исключит membersFromBitrix (не найден = не активен)
+      const page = await bxAll<BxUser>('user.get', { FILTER: { ID: ids.slice(i, i + 50) } });
+      for (const u of page) users.set(String(u.ID), u);
+    }
+  } catch (e) {
+    usersError = `user.get: ${e instanceof Error ? e.message : String(e)}`;
+  }
+  for (const q of queues) {
+    const r = rows.get(q.id);
+    const failed = res.failed.find(f => f.queueId === q.id);
+    if (!r || usersError) {
+      const error = failed?.error ?? usersError ?? 'неизвестная ошибка';
+      if (!failed) res.failed.push({ queueId: q.id, groupId: q.groupId, name: q.name, error });
+      await systemDb().query('UPDATE logist_queues SET members_sync_error = $2 WHERE id = $1', [q.id, error.slice(0, 500)]);
+      continue;
+    }
+    const { members, inactive } = membersFromBitrix(r, users);
+    res.inactiveSkipped += inactive;
+    const client = await systemDb().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM logist_queue_members WHERE queue_id = $1 AND NOT (user_bitrix_id = ANY($2::text[]))', [q.id, members.map(m => m.bitrixId)]);
+      for (const m of members) {
+        await client.query(
+          `INSERT INTO logist_queue_members (queue_id, user_bitrix_id, user_name, role, source, synced_at, bx_role, work_position, added_by)
+           VALUES ($1,$2,$3,'logist','bitrix',now(),$4,$5,$6)
+           ON CONFLICT (queue_id, user_bitrix_id) DO UPDATE SET user_name = EXCLUDED.user_name, role = 'logist', source = 'bitrix',
+             synced_at = now(), bx_role = EXCLUDED.bx_role, work_position = EXCLUDED.work_position`,
+          [q.id, m.bitrixId, m.name, m.bxRole, m.workPosition, by]);
+      }
+      await client.query('UPDATE logist_queues SET members_synced_at = now(), members_sync_error = NULL WHERE id = $1', [q.id]);
+      await client.query('COMMIT');
+      res.synced++;
+      res.members += members.length;
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      res.failed.push({ queueId: q.id, groupId: q.groupId, name: q.name, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      client.release();
+    }
+  }
+  return res;
 }

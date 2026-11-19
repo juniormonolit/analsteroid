@@ -66,6 +66,7 @@ export async function register() {
     if (allow.has('callControl')) scheduleCallControl();
     if (allow.has('weeklyWeather')) scheduleWeeklyWeather();
     if (allow.has('supplyPanelSync')) scheduleSupplyPanelSync();
+    if (allow.has('logistQueueMembers')) scheduleLogistQueueMembers();
     if (allow.has('dailyReport')) scheduleMoscowReport();
     if (allow.has('repeatKanbanSnapshot')) scheduleRepeatKanbanSnapshot();
     if (allow.has('repeatQueueIssue')) scheduleRepeatQueueIssue();
@@ -99,6 +100,7 @@ export async function register() {
   scheduleRopAdviceFeedback();
   scheduleWeeklyWeather();
   scheduleSupplyPanelSync();
+  scheduleLogistQueueMembers();
   scheduleRepeatQueueIssue();
   scheduleRepeatMorning();
   scheduleRepeatAutoBrak();
@@ -881,6 +883,33 @@ function scheduleRepeatMorning() {
     } finally { running = false; }
   };
   setInterval(() => { void tick(); }, 60 * 1000);
+}
+
+// Состав очередей канбана запросов логистам = участники проектов Битрикса (решение владельца 19.11, миграция 268):
+// раз в 6 часов sonet_group.user.get по каждой активной очереди (только чтение Битрикса). Один синк на кластер —
+// pg_try_advisory_lock внутри. На проде — через BACKGROUND_JOBS_ALLOW=…,logistQueueMembers (включает отдельно владелец/оркестратор).
+function scheduleLogistQueueMembers() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const { syncQueueMembersFromBitrix } = await import('./features/logist-kanban/engine/requests/queues');
+      const r = await syncQueueMembersFromBitrix('job:logistQueueMembers');
+      if (r.skipped) return;
+      console.log(`[logistQueueMembers] очередей ${r.queues}, обновлено ${r.synced}, участников ${r.members}, уволенных пропущено ${r.inactiveSkipped}`
+        + (r.failed.length ? `, не прочитано ${r.failed.length}: ${r.failed.map(f => `${f.groupId} (${f.error})`).join('; ')}` : ''));
+    } catch (err) {
+      // до миграций 267/268 таблиц нет — молча ждём
+      if ((err as { code?: string }).code !== '42P01' && (err as { code?: string }).code !== '42703') {
+        console.error('[logistQueueMembers] не удалось:', err instanceof Error ? err.message : err);
+      }
+    } finally {
+      running = false;
+    }
+  };
+  setTimeout(() => { void tick(); }, 5 * 60 * 1000);
+  setInterval(() => { void tick(); }, 6 * 60 * 60 * 1000);
 }
 
 function scheduleSupplyPanelSync() {

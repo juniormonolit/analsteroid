@@ -62,7 +62,15 @@ export interface PersonRef { bitrixId: string; name: string | null }
 
 export interface QueueRef { id: number; groupId: number; name: string; region: string | null; dept: string | null }
 
-export interface QueueMember extends PersonRef { role: 'logist' | 'lead' }
+export interface QueueMember extends PersonRef {
+  role: 'logist' | 'lead';
+  /** bitrix — из участников проекта (синк), manual — заведён до синка */
+  source: 'bitrix' | 'manual';
+  /** роль в проекте Битрикса: A владелец, E модератор, K участник */
+  bxRole: string | null;
+  workPosition: string | null;
+  syncedAt: string | null;
+}
 
 export interface LogistQueue extends QueueRef {
   productGroups: string[];
@@ -71,7 +79,11 @@ export interface LogistQueue extends QueueRef {
   active: boolean;
   source: 'supply_panel' | 'manual';
   sort: number;
+  /** состав = участники проекта Битрикса (решение владельца 19.11), синк — POST /queues/sync-members и фоновая задача */
   members: QueueMember[];
+  membersSyncedAt: string | null;
+  /** последняя ошибка синка (состав при ошибке не меняется) */
+  membersSyncError: string | null;
 }
 
 export interface FileRef { id: number; name: string; size: number | null; mime: string | null; url: string | null }
@@ -384,6 +396,9 @@ export interface CreateDraftBody {
   header?: DraftHeaderInput;
   /** если задано — заменяет товары сделки */
   items?: ItemInput[];
+  /** true — без черновика: сразу отправить (статус new; проверки как у action send, при ошибке ничего не создаётся).
+   *  Черновик — опционален (решение по черновикам ещё у владельца). */
+  send?: boolean;
 }
 export interface CreateDraftResponse { request: RequestDetails; created: boolean }
 
@@ -442,15 +457,23 @@ export interface DealRequestsResponse {
 
 /** GET /api/logist-kanban/queues → { queues, settings, canManage }
  *  PUT /api/logist-kanban/queues  body QueueUpsertBody (canManage) → { queue }
- *  POST /api/logist-kanban/queues/seed (canManage) → SeedQueuesResponse — посев из Панели снабжения */
+ *  POST /api/logist-kanban/queues/seed (canManage) → SeedQueuesResponse — посев очередей из Панели снабжения
+ *  POST /api/logist-kanban/queues/sync-members (canManage) → SyncMembersResponse — состав из участников проектов Битрикса */
 export interface QueuesResponse { queues: LogistQueue[]; settings: LogistSettings; canManage: boolean }
 export interface QueueUpsertBody {
   id?: number; groupId: number; name: string; region?: string | null; dept?: string | null;
   productGroups?: string[]; slaHours?: number | null; active?: boolean; sort?: number;
-  /** полный состав участников (заменяет) */
-  members?: QueueMember[];
+  // состава здесь нет: он только из Битрикса (sync-members)
 }
 export interface SeedQueuesResponse { inserted: number; updated: number; total: number; source: string }
+export interface SyncMembersResponse {
+  queues: number; synced: number;
+  /** проекты, которые вебхук не прочитал (права и т.п.) — их состав не тронут */
+  failed: { queueId: number; groupId: number; name: string; error: string }[];
+  members: number; inactiveSkipped: number;
+  /** true — другой синк уже идёт, этот пропущен */
+  skipped?: boolean;
+}
 
 /** GET/PUT /api/logist-kanban/settings — PUT принимает частичный LogistSettings (canManage). */
 export type SettingsResponse = LogistSettings;

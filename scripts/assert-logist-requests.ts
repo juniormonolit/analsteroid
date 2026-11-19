@@ -15,7 +15,7 @@ import { buildCycles } from '../features/logist-kanban/engine/requests/cycles.ts
 import { DEFAULT_SETTINGS, computePriority, computeSla, mergeSettings } from '../features/logist-kanban/engine/requests/priority.ts';
 import { filtersToSearchParams, matchFilters, parseFilters, sortComparator } from '../features/logist-kanban/engine/requests/filters.ts';
 import { offerTotals, parseAction, parseOffer, sendProblems, InputError } from '../features/logist-kanban/engine/requests/validate.ts';
-import { pickDefaultQueue, queuesFromSupplyFacts, regionFromName } from '../features/logist-kanban/engine/requests/routing.ts';
+import { membersFromBitrix, pickDefaultQueue, queuesFromSupplyFacts, regionFromName } from '../features/logist-kanban/engine/requests/routing.ts';
 import { computeTiles } from '../features/logist-kanban/engine/requests/tiles.ts';
 import type { LogistQueue, RequestCard } from '../features/logist-kanban/engine/requests/contract.ts';
 
@@ -176,17 +176,19 @@ check(pickDefaultQueue(queues, 'МСК', ['Нерудные материалы']
 check(pickDefaultQueue(queues, 'МСК', ['Металлопрокат']) === null, 'выключенная очередь не подбирается; один регион — не угадываем');
 check(regionFromName('крд_Общестрой') === 'КРД' && regionFromName('Общестрой') === null, 'регион из названия проекта');
 const seeds = queuesFromSupplyFacts({
-  projects: { '13': { name: 'мск_Газобетон', region: 'МСК', dept: 'ОС' }, '99': { name: 'спб_Нерудка', region: null, dept: 'НЦ' } },
-  users: { '200': 'Иванов' }, non_suppliers: [300],
-  tasks: [
-    ...Array.from({ length: 4 }, () => ({ g: 13, cycles: [{ done: '2026-11-10 10:00:00', by: 200 }] })),
-    ...Array.from({ length: 5 }, () => ({ g: 13, cycles: [{ done: '2026-11-10 10:00:00', by: 300 }] })),
-    { g: 13, cycles: [{ done: '2026-01-10 10:00:00', by: 201 }] },
-  ],
-}, now);
-check(seeds.length === 2 && seeds.find(s => s.groupId === 99)?.region === 'СПБ', 'посев: все проекты, регион из названия');
-const s13 = seeds.find(s => s.groupId === 13)!;
-check(s13.members.length === 1 && s13.members[0]!.bitrixId === '200' && s13.members[0]!.name === 'Иванов', 'участники — отвечавшие за 60 дней, без не-снабженцев', s13.members);
+  projects: { '13': { name: 'мск_Газобетон', region: 'МСК', dept: 'ОС' }, '99': { name: 'спб_Нерудка', region: null, dept: 'НЦ' }, '0': { name: 'x', region: null, dept: null } },
+});
+check(seeds.length === 2 && seeds.find(s => s.groupId === 99)?.region === 'СПБ', 'посев: проекты → очереди, регион из названия');
+const mb = membersFromBitrix(
+  [{ USER_ID: '2007', ROLE: 'K' }, { USER_ID: 5, ROLE: 'A' }, { USER_ID: '2007', ROLE: 'K' }, { USER_ID: '3000', ROLE: 'K' }, { USER_ID: '4000', ROLE: 'E' }, { USER_ID: 'bad' }],
+  new Map([
+    ['2007', { ID: '2007', NAME: 'Иван', LAST_NAME: 'Б', ACTIVE: true, WORK_POSITION: ' Логист ОС ' }],
+    ['5', { ID: 5, NAME: 'Админ', ACTIVE: true }],
+    ['3000', { ID: '3000', NAME: 'Уволен', ACTIVE: false }],
+  ]),
+);
+check(mb.members.map(m => m.bitrixId).join() === '2007,5' && mb.inactive === 2, 'состав из проекта: без дублей, уволенные и не найденные — мимо', mb);
+check(mb.members[0]!.name === 'Иван Б' && mb.members[0]!.workPosition === 'Логист ОС' && mb.members[1]!.bxRole === 'A', 'имя, должность, роль в проекте');
 
 const tiles = computeTiles([
   { card: card({ id: 1, dealOutcome: 'sold' }), events: [

@@ -6,7 +6,7 @@
  * Подготовка (один раз):
  *   initdb -D /tmp/lr-pg -U postgres -A trust -E UTF8 && pg_ctl -D /tmp/lr-pg -o "-p 55432 -k /tmp" start
  *   psql -h /tmp -p 55432 -U postgres -c "CREATE ROLE app LOGIN; CREATE TABLE repeat_kanban_events(id int); GRANT INSERT, SELECT ON repeat_kanban_events TO app"
- *   psql -h /tmp -p 55432 -U postgres -f migrations/267_logist_requests.sql
+ *   psql -h /tmp -p 55432 -U postgres -f migrations/267_logist_requests.sql -f migrations/268_logist_queue_members_bitrix.sql
  * Запуск (очистка — суперюзером, сам прогон — ролью приложения, чтобы проверить гранты):
  *   psql -h /tmp -p 55432 -U postgres -c "ALTER TABLE logist_request_events DISABLE TRIGGER USER; TRUNCATE logist_queues, logist_requests, logist_request_events RESTART IDENTITY CASCADE; ALTER TABLE logist_request_events ENABLE TRIGGER USER"
  *   SYS_PG_HOST=/tmp SYS_PG_PORT=55432 SYS_PG_USER=app SYS_PG_PASSWORD=x YC_SYSTEM_DB=postgres \
@@ -29,9 +29,10 @@ const ok = (c: boolean, l: string, x?: unknown) => { console.log(c ? '  ok  ' : 
 const expectErr = async (p: Promise<unknown>, code: string, l: string) => { try { await p; ok(false, l, 'no error'); } catch (e) { ok((e as { code?: string }).code === code, l, (e as Error).message); } };
 
 const admin = mk({ bitrixId: '1', login: 'adm', canManage: true, name: 'Админ' });
-const q1 = await upsertQueue({ groupId: 13, name: 'мск_Газобетон, кирпич', region: 'МСК', dept: 'ОС', productGroups: ['Газобетон'], members: [{ bitrixId: '200', name: 'Логист', role: 'logist' }] }, 'adm');
+const q1 = await upsertQueue({ groupId: 13, name: 'мск_Газобетон, кирпич', region: 'МСК', dept: 'ОС', productGroups: ['Газобетон'] }, 'adm');
+await systemDb().query(`INSERT INTO logist_queue_members (queue_id, user_bitrix_id, user_name, source) VALUES ($1, '200', 'Логист', 'bitrix')`, [q1.id]);
 const q2 = await upsertQueue({ groupId: 14, name: 'мск_Нерудка', region: 'МСК', dept: 'НЦ' }, 'adm');
-ok((await loadQueues()).length === 2 && q1.members.length === 1, 'очереди и участники');
+ok((await loadQueues()).length === 2 && (await loadQueues()).find(q => q.id === q1.id)!.members[0]!.source === 'bitrix', 'очереди и участники');
 const mgr = mk({ bitrixId: '100', login: 'mgr', name: 'Менеджер' });
 const lg = mk({ bitrixId: '200', login: 'lg', name: 'Логист', queueIds: new Set([q1.id]) });
 const lg2 = mk({ bitrixId: '201', login: 'lg2', name: 'Логист2', queueIds: new Set([q2.id]) });
@@ -89,6 +90,11 @@ const b = await loadBoard(lg, { view: 'board', filters: {} });
 ok(b.columns.find(c => c.key === 'accepted')!.total === 1 && b.columns.find(c => c.key === 'new')!.total === 0, 'доска логиста', b.columns.map(c => [c.key, c.total]));
 const bm = await loadBoard(mgr, { view: 'board', filters: { types: ['cheaper'] } });
 ok(bm.columns.reduce((s, c) => s + c.total, 0) === 1 && bm.tiles.newCount === 1 && bm.tiles.reopenedCount === 1, 'доска менеджера + плитки', bm.tiles);
+// без черновика: сразу в «Новые»
+const direct = await createDraft(mgr, { type: 'supply', source: 'button', manager: { bitrixId: '100', name: 'М' }, managerRegion: 'МСК', createdByLogin: 'mgr', deal: null, header: { queueId: q1.id }, items: [{ name: 'Болт', quantity: 1 }], productGroups: [], sendNow: true });
+ok(direct.request.status === 'new' && direct.request.cycle === 1 && direct.request.events.map(e => e.kind).join() === 'created,sent', 'сразу отправленный (без черновика)', direct.request.events.map(e => e.kind));
+await expectErr(createDraft(mgr, { type: 'cheaper', source: 'button', manager: { bitrixId: '100', name: 'М' }, managerRegion: null, createdByLogin: 'mgr', deal: null, header: { queueId: q1.id }, items: [{ name: 'Болт' }], productGroups: [], sendNow: true }), 'invalid', 'сразу отправить cheaper без цены — ошибка, ничего не создано');
+await applyAction(mgr, direct.request.id, { action: 'cancel' });
 const { request: d3 } = await createDraft(mgr, { type: 'supply', source: 'button', manager: { bitrixId: '100', name: 'М' }, managerRegion: null, createdByLogin: 'mgr', deal: null, header: {}, items: [], productGroups: [] });
 const bm2 = await loadBoard(mgr, { view: 'board', filters: {} });
 ok(bm2.drafts.length === 1 && bm2.drafts[0]!.id === d3.id, 'черновики отдельно');

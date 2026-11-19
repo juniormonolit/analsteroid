@@ -41,48 +41,44 @@ export function pickDefaultQueue(queues: readonly LogistQueue[], region: string 
 
 // ── посев очередей из Панели снабжения ─────────────────────────────────────────────────
 
-/** Минимум из facts Панели снабжения (lib/supplyPanel/calc.ts Facts), чтобы не тянуть весь тип. */
+/** Минимум из facts Панели снабжения (lib/supplyPanel/calc.ts Facts). */
 export interface SupplyFactsLite {
   projects: Record<string, { name: string | null; region: string | null; dept: string | null }>;
-  users: Record<string, string | null>;
-  non_suppliers: number[];
-  tasks: { g: number | null; cycles: { done: string | null; by: number | null; who?: string }[] }[];
 }
 
-export interface SeedQueue {
-  groupId: number; name: string; region: string | null; dept: string | null;
-  /** кто отвечал в проекте за последние sinceDays дней (≥ minAnswers ответов) — кандидаты в участники */
-  members: { bitrixId: string; name: string | null; answers: number }[];
-}
+export interface SeedQueue { groupId: number; name: string; region: string | null; dept: string | null }
 
-/** Проекты Панели снабжения → очереди. Участники — по фактическим ответам (не «снабженцы-не-снабженцы»). */
-export function queuesFromSupplyFacts(f: SupplyFactsLite, now: Date, opts: { sinceDays?: number; minAnswers?: number } = {}): SeedQueue[] {
-  const since = new Date(now.getTime() - (opts.sinceDays ?? 60) * 86_400_000).toISOString().slice(0, 10);
-  const minAnswers = opts.minAnswers ?? 3;
-  const non = new Set(f.non_suppliers.map(String));
-  const answers = new Map<number, Map<string, { n: number; who: string | null }>>();
-  for (const t of f.tasks) {
-    if (t.g === null) continue;
-    for (const c of t.cycles) {
-      if (!c.by || !c.done || c.done.slice(0, 10) < since) continue;
-      const uid = String(c.by);
-      if (non.has(uid)) continue;
-      let m = answers.get(t.g);
-      if (!m) answers.set(t.g, m = new Map());
-      const cur = m.get(uid) ?? { n: 0, who: null };
-      cur.n++; cur.who = c.who ?? cur.who;
-      m.set(uid, cur);
-    }
-  }
+/** Проекты Панели снабжения → очереди. Состав очереди — не отсюда, а из участников проекта Битрикса (membersFromBitrix). */
+export function queuesFromSupplyFacts(f: SupplyFactsLite): SeedQueue[] {
   const out: SeedQueue[] = [];
   for (const [gid, p] of Object.entries(f.projects)) {
     const groupId = Number(gid);
     if (!Number.isInteger(groupId) || groupId <= 0 || !p.name) continue;
-    const members = [...(answers.get(groupId) ?? new Map()).entries()]
-      .filter(([, v]) => v.n >= minAnswers)
-      .map(([bitrixId, v]) => ({ bitrixId, name: v.who ?? f.users[bitrixId] ?? null, answers: v.n }))
-      .sort((a, b) => b.answers - a.answers);
-    out.push({ groupId, name: p.name, region: p.region ?? regionFromName(p.name), dept: p.dept, members });
+    out.push({ groupId, name: p.name, region: p.region ?? regionFromName(p.name), dept: p.dept });
   }
   return out.sort((a, b) => (a.region ?? '').localeCompare(b.region ?? '', 'ru') || a.name.localeCompare(b.name, 'ru'));
+}
+
+// ── состав очереди = участники проекта Битрикса (решение владельца 19.11) ──────────────
+
+export interface BxGroupMember { USER_ID: string | number; ROLE?: string | null }
+export interface BxUser { ID: string | number; NAME?: string | null; LAST_NAME?: string | null; ACTIVE?: boolean | string | null; WORK_POSITION?: string | null }
+export interface SyncedMember { bitrixId: string; name: string | null; bxRole: string | null; workPosition: string | null }
+
+/** Участники проекта → состав очереди: только активные сотрудники (уволенные — мимо), без дублей.
+ *  Роль в очереди у всех 'logist': владелец/модераторы проекта (A/E) — обычно админы портала, а не руководители
+ *  логистов (разведка 19.11: в проекте 13 владелец и модераторы — служебные аккаунты), поэтому в 'lead' не идут. */
+export function membersFromBitrix(rows: readonly BxGroupMember[], users: ReadonlyMap<string, BxUser>): { members: SyncedMember[]; inactive: number } {
+  const seen = new Map<string, SyncedMember>();
+  let inactive = 0;
+  for (const r of rows) {
+    const id = String(r.USER_ID ?? '').trim();
+    if (!/^\d{1,10}$/.test(id) || seen.has(id)) continue;
+    const u = users.get(id);
+    const active = u ? u.ACTIVE === true || u.ACTIVE === 'Y' || u.ACTIVE === '1' : false;
+    if (!active) { inactive++; continue; }
+    const name = [u!.NAME, u!.LAST_NAME].filter(x => x && String(x).trim()).join(' ').trim() || null;
+    seen.set(id, { bitrixId: id, name, bxRole: r.ROLE ?? null, workPosition: u!.WORK_POSITION?.trim() || null });
+  }
+  return { members: [...seen.values()], inactive };
 }

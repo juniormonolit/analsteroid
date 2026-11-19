@@ -49,7 +49,9 @@
 Очередь = проект Битрикса (`group_id`) «регион × товарная группа» (пример: «мск_Газобетон, кирпич и прочие
 стеновые»). Справочник проектов и регионов — как у Панели снабжения (`lib/supplyPanel`, таблица `projects`,
 `refs/departments.json`: ОС/НЦ). Своя таблица `logist_queues` (group_id, название, регион, департамент,
-товарные группы, активна) + участники `logist_queue_members` (логисты). Очередь по умолчанию — регион
+товарные группы, активна) + участники `logist_queue_members` (логисты). **Состав очереди = участники проекта
+Битрикса** (решение владельца 19.11: «так понятно, кто за какую группу товаров отвечает»): синк `sonet_group.user.get`
+раз в 6 ч (фоновая задача `logistQueueMembers`) + кнопка «обновить»; ручных правок нет, источник правды — Битрикс. Очередь по умолчанию — регион
 менеджера × товарная группа первой позиции. Запрос видят все логисты очереди, берёт один («Взять»).
 
 ## Жизненный цикл
@@ -158,7 +160,7 @@
 | Метод и путь | Тело → ответ | Кто |
 |---|---|---|
 | `GET /api/logist-kanban/board?view=board\|deals&<фильтры>&limit=100` | → `BoardResponse` (колонки, свои черновики, плитки, варианты фильтров, `me`) | все вошедшие; данные режутся видимостью |
-| `POST /api/logist-kanban/drafts` | `CreateDraftBody` → `CreateDraftResponse` (201 создан / 200 уже был) | менеджер; от чужого имени — `canManage` |
+| `POST /api/logist-kanban/drafts` | `CreateDraftBody` → `CreateDraftResponse` (201 создан / 200 уже был); `send: true` — без черновика, сразу `new` | менеджер; от чужого имени — `canManage` |
 | `GET /api/logist-kanban/request/:id[?peek=1]` | → `RequestDetails` (позиции, варианты, чат, журнал, циклы, `can`, `roles`); без `peek` — чат прочитан | кто видит |
 | `PATCH /api/logist-kanban/request/:id` | `UpdateDraftBody` → `RequestDetails` (= `update_draft`) | автор черновика |
 | `POST /api/logist-kanban/request/:id/action` | `ActionBody` → `ActionResponse` | по `can` |
@@ -166,8 +168,9 @@
 | `POST /api/logist-kanban/request/:id/messages` | `PostMessageBody` → `PostMessageResponse` (201) | кто видит |
 | `GET /api/logist-kanban/deal/:dealId` | → `DealRequestsResponse` (запросы по сделке, открытый по типу) | кто видит |
 | `GET /api/logist-kanban/queues` | → `QueuesResponse` (очереди, настройки, `canManage`) | все вошедшие |
-| `PUT /api/logist-kanban/queues` | `QueueUpsertBody` → `{ queue }` (участники — полной заменой) | `canManage` |
-| `POST /api/logist-kanban/queues/seed` | → `SeedQueuesResponse` — посев из снимка Панели снабжения | `canManage` |
+| `PUT /api/logist-kanban/queues` | `QueueUpsertBody` → `{ queue }` (без состава — он только из Битрикса) | `canManage` |
+| `POST /api/logist-kanban/queues/seed` | → `SeedQueuesResponse` — посев очередей из снимка Панели снабжения | `canManage` |
+| `POST /api/logist-kanban/queues/sync-members` | → `SyncMembersResponse` — состав из участников проектов Битрикса (кнопка «обновить») | `canManage` |
 | `GET` / `PUT /api/logist-kanban/settings` | `SettingsBody` (частично) → `LogistSettings` | чтение — все; запись — `canManage` |
 
 Действия (`ActionBody.action`), допустимые статусы → новый статус, кто (админ = `canManage` — всё допустимое):
@@ -200,8 +203,10 @@
 Точки расширения (`engine/requests/hooks.ts`, вызываются после коммита, ошибка не откатывает действие):
 `afterLogistChange(ctx)` — S4 (дубль-задача, статусы, комментарии) и S5 (уведомления);
 `writeDealRowsForAcceptedOffer(...)` — S4, сейчас заглушка → `deal_rows_status='skipped'`.
-Триггер S2 зовёт движок напрямую: `createDraft(actor, { source: 'robot', … })` из `repo.ts` + `readDeal()` /
+Триггер S2 зовёт движок напрямую: `createDraft(actor, { source: 'robot', sendNow?, … })` из `repo.ts` + `readDeal()` /
 `managerRegion()` из `dealSource.ts` (повторная стадия при открытом запросе того же типа вернёт его же, `created=false`).
+**Черновик опционален** (решение по черновикам ещё у владельца): `sendNow` / `send: true` создаёт запрос сразу в `new`
+с теми же проверками, что `send` (не прошли — ничего не создано), в журнале `created` + `sent`, хук — с `action: 'send'`.
 
 Модули движка `features/logist-kanban/engine/requests/`: `contract` (типы), `status` (переходы/права), `worktime`
 (9–18 МСК поверх `lib/supplyPanel/calc.ts`), `cycles` (циклы по журналу), `priority` (SLA, огонёк, настройки по
@@ -209,6 +214,9 @@
 Панели снабжения), `mapper`, `repo` (БД), `queues`, `actor`, `dealSource` (чтение Битрикса), `hooks`, `http`.
 Проверки: `npm run test:logist-requests` (чистые функции), `scripts/smoke-logist-requests.ts` (полный путь на
 одноразовом локальном Postgres, инструкция в шапке файла).
+
+Миграция **268** (`268_logist_queue_members_bitrix.sql`): у участников `source` (bitrix|manual), `synced_at`, `bx_role`
+(A владелец / E модератор / K участник проекта), `work_position`; у очереди `members_synced_at`, `members_sync_error`.
 
 Миграция **267** (`migrations/267_logist_requests.sql`): 12 таблиц — очереди и участники, запросы (поля дубль-задачи
 `bx_task_id`/`bx_sync_status`/`bx_sync_error`, записи товаров `deal_rows_*`, `version` для оптимистичной блокировки),
@@ -223,8 +231,14 @@
 - **Исход сделки** — `syncDealOutcomes()` в `repo.ts` (sa.deals sold_at/lost_at → `deal_outcome` + событие) написан,
   фоновая задача не подключена (прод: `BACKGROUND_JOBS_ALLOW`).
 - **Наблюдатели** — таблица есть, действий добавить/убрать нет (нужны S3 — решить при вёрстке карточки).
-- Посев очередей ставит участниками тех, кто ответил в проекте ≥ 3 раз за 60 дней (открытый вопрос 3 владельцу);
-  ручной состав не перетирается.
+- **Состав очередей из Битрикса — что внутри проектов (разведка 19.11, к владельцу).** Вебхук читает все 29 проектов
+  Панели снабжения (`sonet_group.user.get`, 376 участий, 73 человека, все активны). Но в проектах не только логисты:
+  владелец и модераторы — служебные/админские аккаунты, плюс CEO, COO, разработчики (4), РОПы, директора по продажам,
+  менеджер по продажам, у 25 человек должность пустая. По решению «участники = логисты» они все становятся участниками
+  очередей: видят запросы очереди и могут «Взять». Руководителей очереди (`lead`) синк не назначает — роли A/E в
+  проектах не означают руководителя логистов. Варианты: почистить проекты в Битриксе, или фильтр по должности/список
+  исключений (сейчас нет — «ручных правок не нужно»). Уведомлениям S5 стоит учитывать `work_position`.
+- Включение фоновой задачи на проде — `BACKGROUND_JOBS_ALLOW=…,logistQueueMembers` (не в S1).
 
 ## Подсессии
 
@@ -240,5 +254,7 @@
 
 1. Робот на стадиях: кто ставит в 4 воронках и когда выключаем старый бизнес-процесс.
 2. Черновик, который менеджер не отправил: напоминать или через N минут отправлять как есть?
-3. Справочник очередей: состав логистов по проектам — берём из участников проектов Битрикса или ведём руками.
+3. ~~Справочник очередей: состав логистов~~ — решено: участники проекта Битрикса.
 4. Веса приоритета и SLA по умолчанию — подтвердить после первых недель.
+
+Решено 19.11: (3) состав очереди = участники проекта Битрикса (см. «Очереди»).

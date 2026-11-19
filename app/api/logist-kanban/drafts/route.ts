@@ -6,7 +6,7 @@ import { NO_STORE, jsonBody, withActor } from '@/features/logist-kanban/engine/r
 import { LogistError, createDraft } from '@/features/logist-kanban/engine/requests/repo';
 import { InputError, id, parseHeader, parseItems, parseType } from '@/features/logist-kanban/engine/requests/validate';
 
-// POST /api/logist-kanban/drafts — создать черновик (CreateDraftBody → CreateDraftResponse).
+// POST /api/logist-kanban/drafts — создать черновик (CreateDraftBody → CreateDraftResponse); send: true — сразу в «Новые».
 // С dealId — шапка и товары из Битрикса (только чтение). От чужого имени (managerBitrixId) — только руководитель
 // логистики/админ (триггер S2 зовёт движок напрямую, а не этот роут).
 export const dynamic = 'force-dynamic';
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       type, source: 'button',
       manager: { bitrixId: managerId, name: managerName }, managerRegion: region, createdByLogin: a.login,
       deal: deal ? { id: deal.dealId, title: deal.title, amount: deal.amount, categoryId: deal.categoryId, stageId: deal.stageId, clientRef: deal.clientRef, clientName: deal.clientName, address: deal.address } : null,
-      header, items: finalItems,
+      header, items: finalItems, sendNow: b.send === true,
       productGroups: [...new Set([...finalItems.map(i => i.productGroup).filter((g): g is string => !!g), ...(deal?.productGroups ?? [])])],
     });
     return NextResponse.json(res, { status: res.created ? 201 : 200, headers: NO_STORE });

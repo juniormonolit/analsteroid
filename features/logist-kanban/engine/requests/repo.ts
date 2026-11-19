@@ -330,9 +330,12 @@ export interface DraftSeed {
   manager: PersonRef; managerRegion: string | null; createdByLogin: string | null;
   deal: { id: number; title: string | null; amount: number | null; categoryId: number | null; stageId: string | null; clientRef: string | null; clientName: string | null; address: string | null } | null;
   header: DraftHeaderInput; items: ItemInput[]; productGroups: string[];
+  /** сразу отправить, без черновика (проверки как у send; не прошли — ничего не создаётся) */
+  sendNow?: boolean;
 }
 
-/** Создать черновик. source='robot' — при открытом запросе того же типа по сделке возвращает его (created=false). */
+/** Создать черновик (или сразу отправленный запрос, sendNow). source='robot' — при открытом запросе того же типа
+ *  по сделке возвращает его (created=false). */
 export async function createDraft(a: LogistActor, s: DraftSeed): Promise<{ request: RequestDetails; created: boolean }> {
   const queues = await loadQueues({ activeOnly: true });
   const auto = s.header.queueId === undefined ? pickDefaultQueue(queues, s.managerRegion, s.productGroups) : null;
@@ -349,6 +352,11 @@ export async function createDraft(a: LogistActor, s: DraftSeed): Promise<{ reque
     }
     const queueId = s.header.queueId ?? auto?.id ?? null;
     if (queueId) await checkQueue(q, queueId);
+    if (s.sendNow) {
+      const problems = sendProblems({ type: s.header.type ?? s.type, queueId, competitorTotal: s.header.competitorTotal ?? null,
+        items: s.items.map(i => ({ name: i.name, competitorPrice: i.competitorPrice ?? null })) });
+      if (problems.length) throw new LogistError(problems.join('; '), 400, 'invalid');
+    }
     const r = await q.query<{ id: string }>(
       `INSERT INTO logist_requests (type, status, source, deal_id, deal_title, deal_category_id, deal_stage_id, deal_amount, client_ref, client_name,
                                     manager_bitrix_id, manager_name, manager_region, created_by_login, queue_id, address)
@@ -362,10 +370,16 @@ export async function createDraft(a: LogistActor, s: DraftSeed): Promise<{ reque
     await updateHeader(q, id, rest);
     await insertItems(q, id, s.items, 0, 0);
     const eventIds = await addEvents(q, { id, cycle: 0, queueId }, a, [{ kind: 'created', to: 'draft', data: { source: s.source, dealId: s.deal?.id ?? null, autoQueue: auto?.id ?? null } }]);
+    if (s.sendNow) {
+      await q.query(`UPDATE logist_requests SET status = 'new', cycle = 1, sent_at = now(), cycle_started_at = now(), last_event_at = now(),
+                            version = version + 1 WHERE id = $1`, [id]);
+      eventIds.push(...await addEvents(q, { id, cycle: 1, queueId }, a, [{ kind: 'sent', from: 'draft', to: 'new', data: { direct: true } }]));
+    }
     return { id, created: true, eventIds };
   });
   const request = await loadDetails(a, res.id, { afterAction: true });
-  if (res.created) await runHook({ action: 'create', request, actor: a, eventIds: res.eventIds });
+  // сразу отправленный — хук как у send (S4 создаёт дубль-задачу по send)
+  if (res.created) await runHook({ action: s.sendNow ? 'send' : 'create', request, actor: a, eventIds: res.eventIds });
   return { request, created: res.created };
 }
 
