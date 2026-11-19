@@ -4,7 +4,7 @@
 // сохранённый пустой массив — «удалил всё», стартовый набор не возвращаем.
 import { systemDb } from '@/lib/db/clients';
 
-import { DEFAULT_TEMPLATES, LEGACY_DEFAULT_IDS, MAX_QUESTIONS, MAX_TEMPLATES, type BigQuestionTemplate } from './templateDefaults';
+import { DEFAULT_TEMPLATES, LEGACY_DEFAULT_IDS, MAX_QUESTIONS, MAX_TEMPLATES, TEMPLATES_REV, upgradeTemplates, type BigQuestionTemplate } from './templateDefaults';
 
 export { DEFAULT_TEMPLATES, MAX_QUESTIONS, MAX_TEMPLATES, type BigQuestionTemplate };
 
@@ -33,14 +33,18 @@ export function cleanTemplates(raw: unknown): BigQuestionTemplate[] {
 
 export async function listTemplates(userId: string): Promise<BigQuestionTemplate[]> {
   try {
-    const r = await systemDb().query<{ t: unknown }>(`SELECT ui_prefs->'bigDealsTemplates' AS t FROM users WHERE id = $1`, [userId]);
+    const r = await systemDb().query<{ t: unknown; rev: unknown }>(
+      `SELECT ui_prefs->'bigDealsTemplates' AS t, ui_prefs->'bigDealsTemplatesRev' AS rev FROM users WHERE id = $1`, [userId]);
     const v = r.rows[0]?.t;
+    const rev = typeof r.rows[0]?.rev === 'number' ? r.rows[0].rev as number : 1;
     if (v === null || v === undefined) return DEFAULT_TEMPLATES;
     try {
       const list = cleanTemplates(v);
       // Сохранён прежний стартовый набор без своих шаблонов — отдаём новый (лист РОПа 18.11); свои шаблоны не трогаем.
       if (list.length && list.every(t => LEGACY_DEFAULT_IDS.has(t.id))) return DEFAULT_TEMPLATES;
-      return list;
+      // Сохранён до новых добавок РОПа (19.11: «Из подтверждённой брони», «Скинь КП/счёт») — догоняем, свои правки целы.
+      // Пустой список («удалил всё») не трогаем.
+      return list.length && rev < TEMPLATES_REV ? upgradeTemplates(list, rev) : list;
     } catch { return DEFAULT_TEMPLATES; }
   } catch (e) {
     console.warn('[big-deals templates]', e instanceof Error ? e.message : e);
@@ -51,7 +55,7 @@ export async function listTemplates(userId: string): Promise<BigQuestionTemplate
 export async function saveTemplates(userId: string, raw: unknown): Promise<BigQuestionTemplate[]> {
   const list = cleanTemplates(raw);
   await systemDb().query(
-    `UPDATE users SET ui_prefs = jsonb_set(COALESCE(ui_prefs, '{}'::jsonb), '{bigDealsTemplates}', $2::jsonb) WHERE id = $1`,
-    [userId, JSON.stringify(list)]);
+    `UPDATE users SET ui_prefs = jsonb_set(jsonb_set(COALESCE(ui_prefs, '{}'::jsonb), '{bigDealsTemplates}', $2::jsonb), '{bigDealsTemplatesRev}', $3::jsonb) WHERE id = $1`,
+    [userId, JSON.stringify(list), JSON.stringify(TEMPLATES_REV)]);
   return list;
 }

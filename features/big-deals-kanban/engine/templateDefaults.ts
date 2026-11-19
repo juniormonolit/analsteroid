@@ -10,12 +10,45 @@ export const MAX_QUESTIONS = 15;
 export const DEFAULT_TEMPLATES: BigQuestionTemplate[] = [
   { id: 'pcalled', name: 'Частные · Созвонился и озвучил', questions: ['Сделана бронь? Если нет — причина?', 'Есть ли цена дешевле / наша цена лучшая?', 'Запросил коммерческое с более дешёвой ценой? Какая цена у заказчика (товар и доставка)?', 'Скинул аналог?', 'Какая чёткая договорённость о следующем шаге?'] },
   { id: 'pconfirm', name: 'Частные · Надо подтвердить', questions: ['Подтвердил бронь? Если нет — причина?', 'Есть ли цена дешевле / наша цена лучшая?', 'Запросил коммерческое с более дешёвой ценой? Какая цена у заказчика (товар и доставка)?', 'Какая чёткая договорённость о следующем шаге?'] },
-  { id: 'pcheaper', name: 'Частные · Есть дешевле', questions: ['Предлагал аналог?', 'Проговорил общую выгоду аналога (сумму)?', 'Если сделаем дешевле — возьмёт у нас?', 'Когда собирается закупать материал?'] },
+  // РОП 19.11: стадия «Подтверждённая бронь (ЧЛ)» — довести до продажи.
+  { id: 'pbooked', name: 'Из подтверждённой брони в продажу', questions: ['Поставил в продажу?', 'Если нет — причина?', 'Если нет — спросил, есть ли цена дешевле?'] },
+  { id: 'pcheaper', name: 'Частные · Есть дешевле', questions: ['Предлагал аналог?', 'Проговорил общую выгоду аналога (сумму)?', 'Если сделаем дешевле — возьмёт у нас?', 'Когда собирается закупать материал?', 'Скинь КП/счёт сюда.'] },
   { id: 'ckp', name: 'Юрлица · Отправлено КП', questions: ['Когда закупка?', 'Отправлен счёт? Если нет — почему?', 'Когда оплата?', 'Есть ли цена дешевле?', 'Есть встречное предложение?'] },
   { id: 'cinvoice', name: 'Юрлица · Счёт отправлен', questions: ['Созвонился после выставления счёта?', 'Когда собирается закупать материал?', 'Будет покупать у нас?', 'Есть цена дешевле?', 'Запросил коммерческое с более дешёвой ценой?'] },
   { id: 'cpay', name: 'Юрлица · Ждёт оплату', questions: ['Когда оплата?', 'Наша цена лучшая, ждём оплату счёта?', 'Когда собирается закупать материал?'] },
-  { id: 'ccheaper', name: 'Юрлица · Есть дешевле', questions: ['Звонок по скрипту «Юрлица»: отработка цены дешевле и встречного предложения. О результате отпиши!', 'Предлагал аналог?', 'Проговорил общую выгоду аналога (сумму)?', 'Если сделаем дешевле — возьмёт у нас?'] },
+  { id: 'ccheaper', name: 'Юрлица · Есть дешевле', questions: ['Звонок по скрипту «Юрлица»: отработка цены дешевле и встречного предложения. О результате отпиши!', 'Предлагал аналог?', 'Проговорил общую выгоду аналога (сумму)?', 'Если сделаем дешевле — возьмёт у нас?', 'Скинь КП/счёт сюда.'] },
 ];
+
+/** Версия стартового набора. Сохранённый набор старше — получает добавки (TEMPLATE_ADDITIONS), ничего не удаляется. */
+export const TEMPLATES_REV = 2;
+/** Что добавилось в ревизии: новые шаблоны (вставляются, если их id нет) и вопросы в существующие (по id, если нет). */
+export const TEMPLATE_ADDITIONS: { rev: number; templates: string[]; questions: Record<string, string[]> }[] = [
+  { rev: 2, templates: ['pbooked'], questions: { pcheaper: ['Скинь КП/счёт сюда.'], ccheaper: ['Скинь КП/счёт сюда.'] } },
+];
+
+/** Догнать сохранённый набор до TEMPLATES_REV: свои правки РОПа сохраняются, добавляется только новое. */
+export function upgradeTemplates(list: BigQuestionTemplate[], rev: number): BigQuestionTemplate[] {
+  let out = list.map(t => ({ ...t, questions: [...t.questions] }));
+  for (const a of TEMPLATE_ADDITIONS) {
+    if (a.rev <= rev) continue;
+    for (const id of a.templates) {
+      if (out.some(t => t.id === id)) continue;
+      const def = DEFAULT_TEMPLATES.find(t => t.id === id);
+      if (!def || out.length >= MAX_TEMPLATES) continue;
+      const at = DEFAULT_TEMPLATES.indexOf(def);
+      // Ставим перед тем, перед кем он стоит в стартовом наборе (если тот есть), иначе в конец.
+      const nextId = DEFAULT_TEMPLATES.slice(at + 1).find(d => out.some(t => t.id === d.id))?.id;
+      const pos = nextId ? out.findIndex(t => t.id === nextId) : out.length;
+      out = [...out.slice(0, pos), { ...def, questions: [...def.questions] }, ...out.slice(pos)];
+    }
+    for (const [id, qs] of Object.entries(a.questions)) {
+      const t = out.find(x => x.id === id);
+      if (!t) continue;
+      for (const q of qs) if (!t.questions.includes(q) && t.questions.length < MAX_QUESTIONS) t.questions.push(q);
+    }
+  }
+  return out;
+}
 
 /** Прежний стартовый набор (до 18.11): сохранённый без правок список из этих id считаем «не трогал» и отдаём новый. */
 export const LEGACY_DEFAULT_IDS = new Set(['first', 'five', 'price', 'progress', 'goods']);
@@ -35,7 +68,8 @@ export function suggestTemplate(list: BigQuestionTemplate[], deal: { stageName: 
     else if (/сч[её]т/.test(st)) want = /сч[её]т/i;
     else if (/кп|созвонился|запрос|в работу|дозвонился|обработать/.test(st)) want = /кп/i;
   } else {
-    if (/забронировано/.test(st)) want = /подтверд/i;
+    if (/подтвержденн/.test(st)) want = /в продажу/i;
+    else if (/забронировано/.test(st)) want = /подтверд/i;
     else if (/озвучил|созвонился|запрос|в работу|дозвонился|обработать|материал/.test(st)) want = /озвучил|созвонил/i;
   }
   if (!want) return null;
