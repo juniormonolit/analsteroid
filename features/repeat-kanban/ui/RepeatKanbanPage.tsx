@@ -37,6 +37,7 @@ import { TaskCheckModal, useTaskChecks, VERDICT, type TaskCheckState } from './T
 import { ParticipantsPicker, initialParticipants, participantsPayload, usePeople } from './ParticipantsPicker';
 import { AttachmentsRow, useAttachments } from './Attachments';
 import { PostponePicker } from './PostponePicker';
+import { TimePicker } from './TimePicker';
 import { AddColumnTile, CustomColumnModal, CustomHeader, type ColumnDraft } from './CustomColumns';
 import { AutoBrakButton, AutoBrakModal } from './AutoBrak';
 /** Встроенные секции «Сегодня» с автобраком — как TODAY_BRAK_KEYS в engine/autoBrak.ts (там — проверка на сервере). */
@@ -1577,8 +1578,8 @@ function RescheduleModal({ card, onClose, onSaved }: { card: KanbanCard; onClose
         </div>
         <div className="flex flex-wrap gap-2">
           <input type="date" value={date} min={mskYmd(Date.now())} onChange={e => setDate(e.target.value)} aria-label="Новая дата" className={`${fieldCls} min-h-11 min-w-0 flex-1`} />
-          <input type="time" value={time} onChange={e => setTime(e.target.value)} aria-label="Время" className={`${fieldCls} min-h-11 w-32`} />
         </div>
+        <TimePicker value={time} onChange={setTime} />
         <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
           Комментарий в задачу (необязательно)
           <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="Прозвони ещё раз сегодня" className={fieldCls} />
@@ -1614,10 +1615,8 @@ function DeadlinePicker({ card, value, onChange, time, onTime }: {
           </button>
         ))}
       </div>
-      <div className="grid grid-cols-[minmax(0,1fr)_120px] gap-2">
-        <input type="date" value={value} min={mskYmd(Date.now())} onChange={e => e.target.value && onChange(e.target.value)} aria-label="Дата срока" className={`${fieldCls} min-h-11`} />
-        <input type="time" value={time} step={900} onChange={e => e.target.value && onTime(e.target.value)} aria-label="Время срока (МСК)" className={`${fieldCls} min-h-11`} />
-      </div>
+      <input type="date" value={value} min={mskYmd(Date.now())} onChange={e => e.target.value && onChange(e.target.value)} aria-label="Дата срока" className={`${fieldCls} min-h-11`} />
+      <TimePicker value={time} onChange={onTime} />
     </div>
   );
 }
@@ -1714,10 +1713,7 @@ function QueueRuleFields({ rule, onRule, time, onTime }: { rule: 'today' | 'wind
           <button key={v} type="button" onClick={() => onRule(v)} className={rule === v ? BTN_ACTIVE : BTN_IDLE}>{l}</button>
         ))}
       </div>
-      <label className="flex items-center gap-2 text-[var(--color-text-secondary)]">
-        Время
-        <input type="time" value={time} step={900} onChange={e => e.target.value && onTime(e.target.value)} aria-label="Время срока (МСК)" className={`${fieldCls} min-h-11 w-32`} />
-      </label>
+      <TimePicker value={time} onChange={onTime} />
     </div>
   );
 }
@@ -1959,10 +1955,7 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
               {mode === 'queue' && customDate > mskYmd(Date.now()) && <span className="text-xs text-[var(--color-text-muted)]">В очереди: задачи выдадутся не раньше этой даты, срок — в день выдачи.</span>}
             </label>
           )}
-          <label className="flex items-center gap-2 text-[var(--color-text-secondary)]">
-            Время
-            <input type="time" value={deadlineTime} step={900} onChange={e => e.target.value && setDeadlineTime(e.target.value)} aria-label="Время срока (МСК)" className={`${fieldCls} min-h-11 w-32`} />
-          </label>
+          <TimePicker value={deadlineTime} onChange={setDeadlineTime} />
         </div>
         {reassign && <ReassignPicker opts={reassign} currentId={null} value={newManager} onChange={setNewManager} />}
         <ParticipantsPicker value={parts} onChange={setParts} managerIds={newManager ? [newManager] : [...new Set(cards.map(c => c.managerId))]} />

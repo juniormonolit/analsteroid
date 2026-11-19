@@ -11,6 +11,7 @@ import { Modal } from '@/components/ui/Modal';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { BRAK_REASONS, LOST_STAGES, WON_STAGES, guessPostpone, postponePresets, taskUrl } from '../engine/config';
 import { PostponePicker } from './PostponePicker';
+import { TimePicker, dateForTime } from './TimePicker';
 import type { KanbanCard } from '../engine/board';
 import type { TaskChatMessage, TaskNote } from '../engine/taskNotes';
 import { TaskCheckPanel, type TaskCheckState } from './TaskCheck';
@@ -174,10 +175,18 @@ export function AcceptTaskModal({ card, name, note, checkState, renderReassign, 
         {returning && (
           <div className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
             {mode === 'rollback' ? 'Срок новой задачи (не задан — через 5 дней)' : `Новый срок ${overdue ? '(старый уже прошёл)' : '(необязательно)'}`}
-            <div className="flex flex-wrap gap-2">
-              <input type="date" value={deadline} min={mskYmd(0)} onChange={e => setDeadline(e.target.value)} aria-label="Новая дата срока" className={`${field} min-h-11 min-w-0 flex-1`} />
-              <input type="time" value={time} onChange={e => setTime(e.target.value)} disabled={!deadline} aria-label="Время срока" className={`${field} min-h-11 w-32`} />
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {([['Сегодня', 0], ['Завтра', 1], ['+3 дня', 3], ['+7 дней', 7]] as const).map(([l, n]) => {
+                const v = mskYmd(n);
+                return <button key={l} type="button" aria-pressed={deadline === v} onClick={() => setDeadline(v)}
+                  className={`min-h-11 rounded-lg border px-2 text-sm ${deadline === v ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white' : 'border-[var(--color-border)] bg-[var(--color-bg-surface)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
+                  {l} <span className="opacity-75">· {v.slice(8, 10)}.{v.slice(5, 7)}</span></button>;
+              })}
             </div>
+            <input type="date" value={deadline} min={mskYmd(0)} onChange={e => setDeadline(e.target.value)} aria-label="Новая дата срока" className={`${field} min-h-11 min-w-0`} />
+            {/* Время без даты раньше молча терялось (поле было выключено) — теперь выбор времени сам ставит ближайшую дату. */}
+            <TimePicker value={time} onChange={t => { setTime(t); if (!deadline) setDeadline(dateForTime(t)); }} />
+            {deadline && <p className="text-xs text-[var(--color-text-muted)]">Новый срок: {deadline.slice(8, 10)}.{deadline.slice(5, 7)} в {time} МСК</p>}
           </div>
         )}
         {mode === 'postpone' && <PostponePicker value={until} onChange={setUntil} />}
