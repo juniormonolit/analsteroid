@@ -12,7 +12,7 @@ import type { BigAction } from '@/features/big-deals-kanban/engine/types';
 // ?dry=1 — сухой прогон (только админу/полной зоне): ничего не пишет, отдаёт список REST-вызовов.
 export const dynamic = 'force-dynamic';
 
-const TYPES = new Set(['move', 'reassign', 'comment', 'accept', 'return', 'complete', 'participants', 'renew', 'deadline']);
+const TYPES = new Set(['move', 'reassign', 'comment', 'accept', 'approve', 'return', 'complete', 'participants', 'renew', 'deadline']);
 
 export async function POST(req: NextRequest) {
   const session = await getSession();

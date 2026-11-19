@@ -29,6 +29,8 @@ import { stageIdForColumn } from './stages';
 import { cardFromSnapshot, refreshTask } from './load';
 import { canManageTask, canSeeTask, type TaskPeople } from './visibility';
 import { markColumn } from './stageSince';
+import { bx } from '@/lib/bitrix/notify';
+import { crmReadWebhook } from './rest';
 import { DealCreateError, postToTaskChat, read, ropOfManager, taskWebhook, writeOnce } from '@/features/repeat-kanban/engine/createDeal';
 import { callAsUser, UserCallUnsure } from '@/lib/bitrix/userTokens';
 
@@ -258,6 +260,20 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
       if (deadline) await run.task('tasks.task.update', { taskId, fields: { DEADLINE: deadline.toISOString() } }).catch(e => { run.warnings.push(`Срок не изменился: ${e instanceof Error ? e.message : e}`); });
       const text = String(action.comment ?? '').trim();
       await run.comment(taskId, `РОП посмотрел ответ, работаем дальше (Монолитика${who}).${deadline ? `\nНовый срок: ${fmtDeadline(deadline)}.` : ''}${text ? `\n${text.slice(0, 4000)}` : ''}`, uploadedFiles);
+      break;
+    }
+    case 'approve': {
+      // Просто «Принять» (РОП Осипов 19.11: «хотел просто принять задачу, а там только „работаем дальше“, а там продажа»):
+      // работа принята — задача закрывается (ждёт контроля → approve; в работе → complete + approve).
+      // Сделка выиграна — задача заодно встаёт в «Продано», если такая колонка есть у проекта.
+      if (status === '5') throw new BigActionError('Задача уже завершена');
+      const dealId = Number((t.ufCrmTask ?? []).map(String).find(x => /^D_\d+$/.test(x))?.slice(2)) || 0;
+      const won = dealId > 0 && await (bx(crmReadWebhook(), 'crm.deal.get', { id: dealId }) as Promise<{ result?: { STAGE_SEMANTIC_ID?: string } }>)
+        .then(r => r.result?.STAGE_SEMANTIC_ID === 'S').catch(() => false);
+      if (won && Number(await stageIdForColumn(groupId, 'sold')) > 0) await moveTo('sold').catch(e => { run.warnings.push(e instanceof Error ? e.message : String(e)); });
+      await run.close(taskId, status, control);
+      const text = String(action.comment ?? '').trim();
+      await run.comment(taskId, `Работа принята, задача закрыта из канбана больших чеков (Монолитика${who}).${text ? `\n${text.slice(0, 4000)}` : ''}`);
       break;
     }
     case 'participants': {

@@ -198,6 +198,7 @@ export type BigAction =
   | { type: 'comment'; taskId: number; text: string; attachments?: string[] }
   /** «Ответ увидел, работаем дальше» (владелец 18.11): НЕ закрывает задачу — возвращает в работу с комментарием, срок по желанию. */
   | { type: 'accept'; taskId: number; comment?: string; deadline?: string }
+  | { type: 'approve'; taskId: number; comment?: string }
   /** Наблюдатели/соисполнители (встреча: «подключаем РОПа в наблюдатели»). */
   | { type: 'participants'; taskId: number; auditors: string[]; accomplices?: string[] }
   | { type: 'return'; taskId: number; comment: string; deadline?: string }

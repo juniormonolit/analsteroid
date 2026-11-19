@@ -1,6 +1,6 @@
 'use client';
 // Действия РОПа в карточке задачи: назначить менеджера с ТЗ, перенести в колонку (для тача, где нет drag),
-// «Принял, работаем дальше» (владелец 18.11: ответ увидел — задача возвращается в работу, НЕ закрывается) /
+// «Принять» (РОП 19.11: работа принята, задача закрывается) / «Принял, работаем дальше» (владелец 18.11: ответ увидел — задача возвращается в работу, НЕ закрывается) /
 // вернуть на доработку (задача ждёт контроля), «Не продано → завершить». POST /api/big-deals-kanban/action.
 // Закрытие задачи (перенос в AUTO_COMPLETE_COLUMNS, «Не продано → завершить») — только через ConfirmCloseModal.
 import { useState } from 'react';
@@ -13,7 +13,7 @@ import { Section, postBigAction } from './TaskDrawerShared';
 import { ConfirmCloseModal } from './MassCloseModal';
 import { DeadlineField } from './DeadlineField';
 
-type Mode = null | 'reassign' | 'return' | 'accept' | 'renew' | 'deadline';
+type Mode = null | 'reassign' | 'return' | 'accept' | 'approve' | 'renew' | 'deadline';
 /** Ждёт подтверждения закрытия: перенос в закрывающую колонку или «Не продано → завершить». */
 type PendingClose = null | { type: 'move'; column: BigColumnKey } | { type: 'complete' };
 
@@ -38,6 +38,8 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
   const [pending, setPending] = useState<PendingClose>(null);
   const [sure, setSure] = useState(false);
   const closed = card.state === 'done';
+  // Просто «Принять» (РОП 19.11): работа принята — задача закрывается. Ждёт контроля или сделка уже выиграна.
+  const canApprove = !closed && (card.state === 'control' || card.deal?.closed === 'won');
 
   const run = async (body: Record<string, unknown>) => {
     setBusy(true); setErr(null); setWarn(null);
@@ -74,7 +76,8 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
               if (AUTO_COMPLETE_COLUMNS.has(column) && !closed) setPending({ type: 'move', column });
               else void run({ type: 'move', column });
             }} />
-          {card.state === 'control' && <button type="button" className={primary} disabled={busy} onClick={() => toggle('accept')} title="Ответ увидел — задача вернётся менеджеру в работу, не закроется">Принял, работаем дальше</button>}
+          {canApprove && <button type="button" className={primary} disabled={busy} onClick={() => toggle('approve')} title="Работа принята — задача закроется">Принять</button>}
+          {card.state === 'control' && <button type="button" className={btn} disabled={busy} onClick={() => toggle('accept')} title="Ответ увидел — задача вернётся менеджеру в работу, не закроется">Принял, работаем дальше</button>}
           {card.state === 'control' && <button type="button" className={btn} disabled={busy} onClick={() => toggle('return')}>Вернуть на доработку</button>}
           {!closed && <button type="button" className={btn} disabled={busy} onClick={() => toggle('deadline')} title={card.deadlineAt ? `Сейчас: ${fmtDT(card.deadlineAt)}` : 'Срок не задан'}>Изменить срок</button>}
           {closed && <button type="button" className={primary} disabled={busy} onClick={() => toggle('renew')}>Возобновить</button>}
@@ -99,6 +102,17 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
             <button type="button" className={`${primary} self-end`} disabled={busy || comment.trim().length < 3}
               onClick={() => run({ type: 'return', comment: comment.trim(), deadline: deadline ? new Date(deadline).toISOString() : undefined })}>
               {busy ? 'Возвращаю…' : 'Вернуть'}
+            </button>
+          </div>
+        )}
+
+        {mode === 'approve' && (
+          <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
+            <p className="text-[12px] text-[var(--color-text-muted)]">Работа принята — задача закроется в Битриксе{card.deal?.closed === 'won' ? ' и встанет в «Продано»' : ''}. Вернуть — кнопкой «Возобновить».</p>
+            <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} placeholder="Комментарий менеджеру (необязательно)" className={input} />
+            <button type="button" className={`${primary} self-end`} disabled={busy}
+              onClick={() => run({ type: 'approve', comment: comment.trim() || undefined })}>
+              {busy ? 'Принимаю…' : 'Принять и закрыть'}
             </button>
           </div>
         )}
