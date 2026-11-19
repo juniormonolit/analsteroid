@@ -28,7 +28,13 @@
 Сбой фазы не откатывает оргструктуру: в ответе роута `employeesSynced/employeesDeactivated/employeesError`,
 ошибка показывается и в сообщении кнопки «Синхронизировать» (/settings/org-structure).
 Права: по дампу у `JanCloude` полный набор прав на обе таблицы. Миграций нет. `scripts/org-sync.mjs`
-(ручной, уже отстающий от lib) не трогал. Не выкачено, синк вручную не запускался — ждёт владельца.
+(ручной, уже отстающий от lib) не трогал.
+
+**Выкачено 19.11** (санкция владельца), BUILD `sVXYJ11BrzzDTBZgNV_7F` (заодно уехал 0a04fb23 — стаж в отчёте по
+менеджерам). Синк прогнан `systemctl start monolitika-org-sync.service`: `employeesSynced:431, employeesDeactivated:1,
+employeesError:null` — права JanCloude на запись хватило. В первом прогоне упал соседний `hrCards` («timeout exceeded
+when trying to connect», пул analyticsDb, не systemDb; в те же минуты так же падал tv/feed — холодный старт после
+рестарта); второй прогон чистый: employees 431/0, hrCards ok (746 карточек, 174 сопоставлено).
 
 ---
 ## 2026-11-19 — Канбан повторных: время срока кнопками вместо нативного поля
