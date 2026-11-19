@@ -226,50 +226,25 @@ async function startReassign(dealId: number, newResponsibleId: string): Promise<
   return String(res);
 }
 
-/** Прошлые сделки заказчика при смене менеджера (16.11). Владелец: «а нельзя ли старые продажи за старым менеджером
- *  сохранять?» — Монолитика считает продажи по ТЕКУЩЕМУ ответственному сделки (sa.deals.current_manager_id, истории нет),
- *  поэтому:
- *   • БП 171 «Сменить ответственного» — только по прошлым НЕпроданным сделкам (открытые и проигранные: sold_at и
- *     delivered_at пусты) — продажи и отгрузки остаются за прежним менеджером;
- *   • чтобы новый менеджер видел, что заказчик брал (Будковский: «в новой сделке на стене товары предыдущие не
- *     отображаются»), — в ленту новой сделки комментарий: последние отгрузки с товарами (crm.deal.productrows.get).
- *  В фоне; сбой по отдельной сделке — в лог. Не больше PREV_REASSIGN_CAP сделок, пауза — Битрикс вежливо. */
-const PREV_REASSIGN_CAP = 40;
+/** Смена менеджера (16.11, Будковский: «в новой сделке на стене товары предыдущие не отображаются»): в ленту новой
+ *  сделки — комментарий с последними отгрузками и их товарами (crm.deal.productrows.get). Прошлые сделки НЕ
+ *  переназначаются (16–19.11 переназначались БП 171 — отменено владельцем 19.11, история). В фоне; пауза — Битрикс вежливо. */
 const PREV_SHIPPED_IN_FEED = 5;
-async function reassignPreviousDeals(clientKey: string, newDealId: number, newResponsibleId: string): Promise<number> {
+async function postPreviousShipments(clientKey: string, newDealId: number, _newResponsibleId: string): Promise<number> {
   const members = await memberKeysOf(clientKey);
   const companies = members.filter(k => k.startsWith('k')).map(k => Number(k.slice(1)));
   const contacts = members.filter(k => !k.startsWith('k')).map(k => Number(k.slice(1)));
-  const db = analyticsDb();
-  // Заморозка продавца (миграция 266): триггер не даёт смене ответственного в проданной сделке попасть в sa.deals —
-  // отчёты оставляют продажу за продавцом. Есть триггер — БП по ВСЕМ прошлым сделкам (новый менеджер видит в Битриксе
-  // и историю, и товары); нет (миграция не накатана) — только по непроданным, как было.
-  const frozen = await db.query(`SELECT 1 FROM pg_trigger WHERE tgname = 'trg_deals_freeze_seller' AND NOT tgisinternal LIMIT 1`)
-    .then(r => (r.rowCount ?? 0) > 0).catch(() => false);
-  const [open, shipped] = await Promise.all([
-    db.query<{ deal_id: string }>(
-      `SELECT deal_id::text FROM sa.deals
-        WHERE funnel_id IN (0,1,2,3) AND deal_id <> $3 ${frozen ? '' : 'AND sold_at IS NULL AND delivered_at IS NULL'}
-          AND (company_id = ANY($1::bigint[]) OR contact_id = ANY($2::bigint[]))
-          AND coalesce(current_manager_id::text, '') <> $4
-        ORDER BY created_at DESC LIMIT ${PREV_REASSIGN_CAP}`,
-      [companies, contacts, newDealId, newResponsibleId],
-    ),
-    db.query<{ deal_id: string; delivered_at: Date; amount: string | null; deal_name: string | null }>(
-      `SELECT deal_id::text, delivered_at, amount::text, deal_name FROM sa.deals
-        WHERE funnel_id IN (0,1,2,3) AND delivered_at IS NOT NULL
-          AND (company_id = ANY($1::bigint[]) OR contact_id = ANY($2::bigint[]))
-        ORDER BY delivered_at DESC LIMIT ${PREV_SHIPPED_IN_FEED}`,
-      [companies, contacts],
-    ),
-  ]);
-  let started = 0;
-  for (const { deal_id } of open.rows) {
-    try { await startReassign(Number(deal_id), newResponsibleId); started++; }
-    catch (e) { console.warn(`[repeat-kanban] БП смены ответственного, сделка ${deal_id}:`, e instanceof Error ? e.message : e); }
-    await new Promise(res => setTimeout(res, 400));
-  }
-  if (open.rows.length) console.log(`[repeat-kanban] прошлые сделки ${clientKey} → ${newResponsibleId}${frozen ? ' (все, продавец заморожен)' : ' (непроданные)'}: запущено ${started} из ${open.rows.length}`);
+  // 19.11 владелец: «откатываем, исторические данные идут по пизде, старые сделки на нового менеджера не переводим» —
+  // БП по прошлым сделкам больше НЕ запускается (было 16–19.11). Остаётся только список товаров прошлых отгрузок
+  // в ленте новой сделки, чтобы новый менеджер видел, что заказчик брал.
+  const shipped = await analyticsDb().query<{ deal_id: string; delivered_at: Date; amount: string | null; deal_name: string | null }>(
+    `SELECT deal_id::text, delivered_at, amount::text, deal_name FROM sa.deals
+      WHERE funnel_id IN (0,1,2,3) AND delivered_at IS NOT NULL
+        AND (company_id = ANY($1::bigint[]) OR contact_id = ANY($2::bigint[]))
+      ORDER BY delivered_at DESC LIMIT ${PREV_SHIPPED_IN_FEED}`,
+    [companies, contacts],
+  );
+  const started = 0;
   if (shipped.rows.length) {
     const blocks: string[] = [];
     for (const d of shipped.rows) {
@@ -387,10 +362,8 @@ export async function createRepeatTask(input: {
       throw new DealCreateError(`Сделка #${dealId} готова, но смена менеджера не запустилась: ${e instanceof Error ? e.message : e}. Задачу не ставили.`);
     }
     responsibleId = input.newResponsibleId;
-    // Прошлые сделки заказчика — тем же БП (16.11, Будковский: «новый менеджер не видит предыдущие сделки, и в новой
-    // сделке на стене даже товары предыдущие не отображаются»; владелец: «есть БП специальный — запускаем, когда
-    // „и сменить менеджера на“»). В фоне: задача не ждёт; сбой по отдельной сделке — в лог, не роняет постановку.
-    void reassignPreviousDeals(input.clientKey, dealId, input.newResponsibleId)
+    // Товары прошлых отгрузок — в ленту новой сделки (прошлые сделки НЕ переназначаем: 19.11 владелец). В фоне.
+    void postPreviousShipments(input.clientKey, dealId, input.newResponsibleId)
       .catch(e => console.warn(`[repeat-kanban] смена ответственного в прошлых сделках ${input.clientKey}:`, e instanceof Error ? e.message : e));
   }
 
