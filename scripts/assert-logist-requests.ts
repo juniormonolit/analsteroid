@@ -18,7 +18,7 @@ import { offerTotals, parseAction, parseOffer, sendProblems, InputError } from '
 import { membersFromBitrix, pickDefaultQueue, queuesFromSupplyFacts, regionFromName } from '../features/logist-kanban/engine/requests/routing.ts';
 import { computeTiles } from '../features/logist-kanban/engine/requests/tiles.ts';
 import type { LogistQueue, QueueMember, RequestCard } from '../features/logist-kanban/engine/requests/contract.ts';
-import { queueRecipients, recipientVerdict } from '../features/logist-kanban/engine/requests/recipients.ts';
+import { isQueueLogist, queueRecipients, recipientVerdict } from '../features/logist-kanban/engine/requests/recipients.ts';
 import { attentionOf, buildAnalytics } from '../features/logist-kanban/engine/requests/my.ts';
 
 let failures = 0, passed = 0;
@@ -215,6 +215,9 @@ const custom = { ...notify, includeBitrixIds: ['3'], excludeBitrixIds: ['4'] };
 check(queueRecipients(members, custom, '1').join() === '3', 'ручное включение/исключение, автор действия — мимо');
 check(recipientVerdict(members[1]!, notify) === 'other_position' && recipientVerdict(members[2]!, notify) === 'no_position', 'почему не получает');
 check(queueRecipients(members, { ...notify, positionPatterns: [] }).length === 5, 'пустой список слов — всем');
+check(queueRecipients([mem('6', 'Старший ЛОГИСТ'), mem('7', 'Снабженец'), mem('8', 'Начальник отдела снабжёния')], mergeSettings({ notify: { positionPatterns: ['снабжён'] } }).notify).join() === '7,8'
+  && queueRecipients([mem('6', 'Старший ЛОГИСТ')], notify).join() === '6', 'регистр и ё = е');
+check(isQueueLogist({ ...mem('9', 'Генеральный директор'), role: 'lead' }, notify) && !isQueueLogist(mem('9', 'Генеральный директор'), notify), 'руководитель очереди — логист всегда, CEO — нет');
 check(attentionOf({ status: 'answered', unread: 0 }) === 'answered' && attentionOf({ status: 'in_work', unread: 2 }) === 'chat'
   && attentionOf({ status: 'draft', unread: 0 }) === 'draft' && attentionOf({ status: 'new', unread: 0 }) === null
   && attentionOf({ status: 'cancelled', unread: 3 }) === null, '«ждёт меня»: ответ, чат, черновик');

@@ -11,7 +11,7 @@ export const DEFAULT_WEIGHTS: PriorityWeights = {
   perReturn: 15,
   cheaper: 15,
 };
-/** S5: по умолчанию уведомления «новый запрос / горит SLA» — тем, у кого в должности «логист» или «снабж». */
+/** Логист очереди (права и рассылка, recipients.ts) — должность содержит «логист» или «снабж» (решение владельца 19.11). */
 export const DEFAULT_NOTIFY: NotifyRecipientsSettings = { positionPatterns: ['логист', 'снабж'], includeBitrixIds: [], excludeBitrixIds: [] };
 export const DEFAULT_SETTINGS: LogistSettings = { slaHours: 3, slaHotHours: 1, hotScore: 60, weights: DEFAULT_WEIGHTS, robotMode: 'send', notify: DEFAULT_NOTIFY };
 
@@ -25,7 +25,7 @@ const strList = (v: unknown, max: number, re?: RegExp): string[] | null => {
 export function mergeNotify(raw: unknown): NotifyRecipientsSettings {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   return {
-    positionPatterns: (strList(r.positionPatterns, 30) ?? DEFAULT_NOTIFY.positionPatterns).map(x => x.toLowerCase()),
+    positionPatterns: (strList(r.positionPatterns, 30) ?? DEFAULT_NOTIFY.positionPatterns).map(x => x.toLowerCase().replace(/ё/g, 'е')),
     includeBitrixIds: strList(r.includeBitrixIds, 500, /^\d+$/) ?? [],
     excludeBitrixIds: strList(r.excludeBitrixIds, 500, /^\d+$/) ?? [],
   };

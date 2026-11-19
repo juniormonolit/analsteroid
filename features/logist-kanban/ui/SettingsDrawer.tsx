@@ -14,7 +14,7 @@ import type {
 import { lkFetch, postJson, putJson } from './api';
 import { fmtDT } from './format';
 import { INPUT } from './Offers';
-import { VERDICT_LABEL, isRecipient, recipientVerdict } from '../engine/requests/recipients';
+import { VERDICT_LABEL, isQueueLogist, isRecipient, recipientVerdict } from '../engine/requests/recipients';
 
 const WEIGHT_FIELDS: { key: keyof PriorityWeights; label: string; hint: string }[] = [
   { key: 'slaOverdue', label: 'SLA просрочен — разово', hint: 'очков сразу при просрочке' },
@@ -178,7 +178,7 @@ function NotifyForm({ notify, queues, onSaved }: { notify: NotifyRecipientsSetti
     for (const q of queues) if (q.active) for (const x of q.members) m.set(x.bitrixId, x);
     return [...m.values()];
   }, [queues]);
-  const on = people.filter(p => isRecipient(recipientVerdict(p, notify))).length;
+  const on = people.filter(p => isQueueLogist(p, notify)).length;
   const dirty = text !== notify.positionPatterns.join(', ');
   const save = async () => {
     setBusy(true); setMsg(null);
@@ -190,15 +190,16 @@ function NotifyForm({ notify, queues, onSaved }: { notify: NotifyRecipientsSetti
   };
   return (
     <section className="flex min-w-0 flex-col gap-2">
-      <h3 className="text-sm font-semibold">Уведомления логистам (бот «Аналитик»)</h3>
+      <h3 className="text-sm font-semibold">Кто логист очереди</h3>
       <p className="text-[12px] text-[var(--color-text-muted)]">
-        В проектах Битрикса кроме логистов есть руководители, РОПы, разработчики. «Новый запрос» и «горит SLA» получают только те участники
-        очереди, у кого должность содержит одно из слов ниже, плюс включённые вручную (в списке участников очереди — кнопка у человека).
-        Видеть запросы и брать их это не мешает. Сейчас получают {on} из {people.length} участников активных очередей.
+        В проектах Битрикса кроме логистов есть руководители, РОПы, разработчики, служебные аккаунты. Логист очереди — участник проекта,
+        у которого в должности есть одно из слов ниже (без учёта регистра, ё = е), плюс включённые вручную (кнопка у человека в списке
+        участников очереди — для пустой или нестандартной должности). Только логисты видят запросы очереди, берут их и получают от бота
+        «новый запрос» и «горит SLA». Сейчас логистов {on} из {people.length} участников активных очередей.
       </p>
       <div className="flex min-w-0 flex-wrap items-end gap-2">
         <label className="flex min-w-0 flex-1 basis-64 flex-col gap-1 text-[12px] text-[var(--color-text-muted)]">
-          Слова в должности (через запятую; пусто — всем, кроме исключённых)
+          Слова в должности (через запятую; пусто — логисты все участники, кроме исключённых)
           <input value={text} onChange={e => setText(e.target.value)} placeholder="логист, снабж" className={INPUT} />
         </label>
         {dirty && <button type="button" disabled={busy} onClick={save} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-medium text-white disabled:opacity-50">{busy ? 'Сохраняю…' : 'Сохранить'}</button>}
@@ -224,7 +225,7 @@ function QueueRow({ queue: q, defaultSla, notify, onSaved }: { queue: LogistQueu
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setSla(q.slaHours != null ? String(q.slaHours) : ''); }, [q.slaHours]);
-  const logists = useMemo(() => q.members.filter(m => m.role === 'logist' || m.role === 'lead'), [q.members]);
+  const logists = useMemo(() => q.members.filter(m => isQueueLogist(m, notify)), [q.members, notify]);
   const save = async (patch: Partial<QueueUpsertBody>) => {
     setBusy(true); setErr(null);
     try {
@@ -270,9 +271,9 @@ function QueueRow({ queue: q, defaultSla, notify, onSaved }: { queue: LogistQueu
                         <span className="text-[var(--color-text-muted)]">{m.workPosition ? ` · ${m.workPosition}` : ' · должность не указана'}{m.role === 'lead' ? ' · руководитель' : ''}</span>
                       </span>
                       <button type="button" disabled={toggling === m.bitrixId} onClick={() => void toggleNotify(m)}
-                        title={`${recv ? 'Получает' : 'Не получает'} уведомления: ${VERDICT_LABEL[v]}. Нажмите, чтобы ${recv ? 'исключить' : 'включить'}.`}
+                        title={`${VERDICT_LABEL[v]}. Нажмите, чтобы ${recv ? 'исключить из логистов очереди' : 'сделать логистом очереди'}.`}
                         className={`tap-target min-h-9 shrink-0 rounded-md border px-2 text-[11.5px] disabled:opacity-50 ${recv ? 'border-[var(--color-positive)] text-[var(--color-positive)]' : 'border-[var(--color-border)] text-[var(--color-text-muted)]'}`}>
-                        {recv ? '🔔 получает' : '🔕 без уведомл.'}
+                        {recv ? '✓ логист' : 'не логист'}
                       </button>
                     </li>
                   );

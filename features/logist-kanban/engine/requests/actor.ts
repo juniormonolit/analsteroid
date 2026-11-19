@@ -5,6 +5,8 @@ import { systemDb } from '@/lib/db/clients';
 import { ropScope } from '@/features/tv/engine/access';
 import { scopeManagers } from '@/features/rop-kanban/engine/kanban';
 import type { ActorInfo } from './contract';
+import { mergeSettings } from './priority';
+import { isQueueLogist } from './recipients';
 import type { ActorCtx } from './status';
 
 /** Настройки очередей и весов, видит всё, переназначает: супер-админ, «Администратор»,
@@ -22,10 +24,20 @@ export async function buildActor(session: SessionUser, opts: { zone?: boolean } 
   const me = session.bitrixUserId;
   const queueIds = new Set<number>(), leadQueueIds = new Set<number>();
   if (me) {
-    const r = await systemDb().query<{ queue_id: number; role: string }>(
-      `SELECT m.queue_id, m.role FROM logist_queue_members m JOIN logist_queues q ON q.id = m.queue_id
-        WHERE m.user_bitrix_id = $1 AND q.active`, [me]);
-    for (const x of r.rows) { queueIds.add(Number(x.queue_id)); if (x.role === 'lead') leadQueueIds.add(Number(x.queue_id)); }
+    // Логист очереди = участник проекта, прошедший правило по должности (recipients.ts, решение владельца 19.11):
+    // CEO/COO/РОПы/разработчики/админ-аккаунты из проекта очередь как логисты не видят и запросы не берут.
+    const [r, st] = await Promise.all([
+      systemDb().query<{ queue_id: number; role: 'logist' | 'lead'; work_position: string | null }>(
+        `SELECT m.queue_id, m.role, m.work_position FROM logist_queue_members m JOIN logist_queues q ON q.id = m.queue_id
+          WHERE m.user_bitrix_id = $1 AND q.active`, [me]),
+      systemDb().query<{ value: unknown }>(`SELECT value FROM logist_request_settings WHERE key = 'main'`),
+    ]);
+    const rule = mergeSettings(st.rows[0]?.value).notify;
+    for (const x of r.rows) {
+      if (!isQueueLogist({ bitrixId: me, workPosition: x.work_position, role: x.role }, rule)) continue;
+      queueIds.add(Number(x.queue_id));
+      if (x.role === 'lead') leadQueueIds.add(Number(x.queue_id));
+    }
   }
   let zone: Set<string> | 'all' = new Set();
   if (opts.zone !== false && !canManage) {

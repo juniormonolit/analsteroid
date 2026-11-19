@@ -22,6 +22,7 @@ import { eventText } from './events';
 import { INPUT, OfferCard, OfferForm } from './Offers';
 import { RequestChat } from './RequestChat';
 import { AcceptOfferDialog, PreviewBody, usePreview } from './AcceptOffer';
+import { isQueueLogist } from '../engine/requests/recipients';
 import { SLA_CLS, STATUS_CLS, TYPE_META, cardTitle, fmtDT, fmtDate, hours, money, qty, slaText } from './format';
 
 type Pane = 'request' | 'offers' | 'chat' | 'history';
@@ -434,10 +435,13 @@ function ReassignDialog({ d, busy, onClose, run }: {
   const [text, setText] = useState('');
   const queues = useQuery<QueuesResponse>({ queryKey: ['logist-queues'], queryFn: () => lkFetch<QueuesResponse>('/api/logist-kanban/queues'), staleTime: 60_000 });
   const options = useMemo(() => {
-    const own = queues.data?.queues.find(x => x.id === d.queue?.id)?.members ?? [];
+    // только логисты очереди (правило по должности, recipients.ts) — не CEO/РОПы/разработчики из проекта
+    const rule = queues.data?.settings.notify;
+    const isLogist = (m: QueuesResponse['queues'][number]['members'][number]) => !rule || isQueueLogist(m, rule);
+    const own = (queues.data?.queues.find(x => x.id === d.queue?.id)?.members ?? []).filter(isLogist);
     const all = new Map<string, { value: string; label: string; hint: string | null }>();
     for (const m of own) all.set(m.bitrixId, { value: m.bitrixId, label: m.name ?? `id ${m.bitrixId}`, hint: `эта очередь${m.workPosition ? ` · ${m.workPosition}` : ''}` });
-    for (const q of queues.data?.queues ?? []) for (const m of q.members) if (!all.has(m.bitrixId)) all.set(m.bitrixId, { value: m.bitrixId, label: m.name ?? `id ${m.bitrixId}`, hint: q.name });
+    for (const q of queues.data?.queues ?? []) for (const m of q.members.filter(isLogist)) if (!all.has(m.bitrixId)) all.set(m.bitrixId, { value: m.bitrixId, label: m.name ?? `id ${m.bitrixId}`, hint: q.name });
     return [...all.values()].filter(o => o.value !== d.logist?.bitrixId);
   }, [queues.data, d.queue?.id, d.logist?.bitrixId]);
   const name = options.find(o => o.value === pick)?.label ?? null;
