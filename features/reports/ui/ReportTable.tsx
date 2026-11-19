@@ -98,6 +98,8 @@ export interface RowDeltas {
   dimensionSubtitle?: string;
   /** Полный битрикс-логин — текстовая псевдо-метрика manager_login («Логин»). */
   managerLogin?: string;
+  /** Стаж рядом с #логином (by-managers), см. ReportRow.tenure. */
+  tenure?: string;
   /** «По клиентам»: ответственный менеджер клиента — вторая колонка (#11255). */
   responsibleName?: string | null;
   teamName: string | null;
@@ -1309,6 +1311,13 @@ export function ReportTable({
                     >
                       {row.dimensionSubtitle}
                     </span>
+                    {/* Стаж (правка владельца 19.11) — отдельным спаном, НЕ в dimensionSubtitle:
+                        тот работает как логин (поиск, клик в карточку, джойн планов). */}
+                    {row.tenure && (
+                      <span className="text-[10px] leading-tight md:text-[11px] md:leading-normal text-[var(--color-text-muted)] font-normal whitespace-nowrap" title="Стаж — по дате начала из раздела «Сотрудники»">
+                        · {row.tenure}
+                      </span>
+                    )}
                     {/* Иконка «открыть карточку менеджера» — третья, ВИДИМАЯ цель клика в
                         дополнение к имени (дрилл-даун) и #id (карточка, обработчик тот же
                         onSubtitleClick). Только там, где сам onSubtitleClick передан

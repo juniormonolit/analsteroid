@@ -84,6 +84,9 @@ export interface ReportRow {
   /** Полный битрикс-логин (Manager2015) — значение текстовой псевдо-метрики
    *  manager_login («Логин», правка владельца 31.08). Только by-managers. */
   managerLogin?: string;
+  /** Стаж «2 года 3 мес» (features/employees/engine/tenure.ts) — подпись рядом с
+   *  #логином, правка владельца 19.11. Только by-managers; нет даты начала — нет поля. */
+  tenure?: string;
   /** «По клиентам»: ответственный менеджер клиента (ФИО), #11255. */
   responsibleName?: string | null;
   teamId: string | null;

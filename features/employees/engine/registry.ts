@@ -154,3 +154,27 @@ export async function upsertRegistry(
     ],
   );
 }
+
+// Дата начала стажа по bitrix id для отчётов (правка владельца 19.11: «рядом с „Иван
+// Пупкин #1123“ писать стаж»). То же правило, что startDate в getEmployeesList выше:
+// открытый период на логине → ручная дата → дата найма из кадровой карточки. Без
+// истории имён и ролей — отчёт по менеджерам дёргает это на каждый прогон, поэтому
+// кэш 10 минут (даты меняются раз в сутки ночным синком или руками в «Сотрудниках»).
+let _startDates: { at: number; map: Map<string, string> } | null = null;
+export async function getEmployeeStartDates(): Promise<Map<string, string>> {
+  if (_startDates && Date.now() - _startDates.at < 10 * 60_000) return _startDates.map;
+  const [manual, hrCards, tenures] = await Promise.all([
+    analyticsDb().query<{ bitrix_id: number; d: string }>(
+      `SELECT bitrix_id, to_char(manual_start_date, 'YYYY-MM-DD') AS d
+         FROM sa.employee_registry WHERE manual_start_date IS NOT NULL`,
+    ),
+    getHrCardsByBitrixId(),
+    listTenures(),
+  ]);
+  const map = new Map<string, string>();
+  for (const [id, hr] of hrCards) if (hr.hiredDate) map.set(String(id), hr.hiredDate);
+  for (const r of manual.rows) map.set(String(r.bitrix_id), r.d);
+  for (const t of tenures) if (t.endDate === null && t.startDate) map.set(String(t.bitrixId), t.startDate);
+  _startDates = { at: Date.now(), map };
+  return map;
+}

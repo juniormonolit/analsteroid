@@ -13,6 +13,8 @@ import type { DealScope, ClientType, ReportRow, AccountType, CreatedTimeFilter, 
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
 import { buildDealFilterWhere, type DealFilter } from '@/lib/metrics/dealFilters';
 import { addDays, startOfDay } from 'date-fns';
+import { getEmployeeStartDates } from '@/features/employees/engine/registry';
+import { tenureLabel } from '@/features/employees/engine/tenure';
 
 // ── Funnel metadata ───────────────────────────────────────────────────────
 interface FunnelMeta { id: number; isRepeat: boolean }
@@ -190,7 +192,7 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   // отчёте показывал 6 человек по устаревшей YC-копии против 3 актуальных).
   // Тот же переезд, что deals/route.ts и marketing/sources.ts сделали 13.07 —
   // этот движок тогда пропустили. employees остаётся в system (не переезжал).
-  const [orgRes, deptRes, loginRes] = await Promise.all([
+  const [orgRes, deptRes, loginRes, startDates] = await Promise.all([
     analyticsDb().query<{
       bitrix_user_id: string; manager_name: string;
       department_id: string | null; department_name: string | null;
@@ -218,6 +220,12 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
     sysDb.query<{ bitrix_user_id: string; bitrix_login: string | null }>(
       `SELECT bitrix_user_id::text AS bitrix_user_id, bitrix_login FROM employees WHERE is_active = true`,
     ),
+    // Стаж рядом с #логином (правка владельца 19.11). Сбой источника дат — не повод
+    // ронять отчёт: без стажа строки рисуются как раньше.
+    getEmployeeStartDates().catch(err => {
+      console.warn('[byManagers] даты начала стажа недоступны:', err instanceof Error ? err.message : err);
+      return new Map<string, string>();
+    }),
   ]);
 
   const orgMap         = new Map(orgRes.rows.map(r => [r.bitrix_user_id, r]));
@@ -369,6 +377,7 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
         // Полный битрикс-логин — для псевдо-метрики «Логин» (manager_login):
         // рендерится текстом, в metrics её нет (там только числа).
         managerLogin:      loginByBitrix.get(id) || undefined,
+        tenure:            tenureLabel(startDates.get(id) ?? null) ?? undefined,
         teamId:            org?.department_id   ?? null,
         teamName:          org?.department_name ?? null,
         // Правило заказчика: всё, что не Москва и не Краснодар, — СПб. branch в
