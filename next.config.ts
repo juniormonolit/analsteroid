@@ -118,6 +118,19 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        // «Канбан логиста» (запросы логистам, 19.11) — внутри портала: /api/bitrix/app/logist-kanban → /bx/logist-kanban.
+        source: '/logist-kanban',
+        headers: [
+          { key: 'Content-Security-Policy', value: `frame-ancestors 'self' ${portalOrigin}` },
+        ],
+      },
+      {
+        source: '/logist-kanban/:path*',
+        headers: [
+          { key: 'Content-Security-Policy', value: `frame-ancestors 'self' ${portalOrigin}` },
+        ],
+      },
+      {
         // Вкладка «Карточка клиента» в карточке контакта/компании (13.10) — тот же
         // вход приложения, только с привязкой к клиенту (/api/bitrix/app/client-card).
         source: '/api/bitrix/app/:path*',
@@ -136,7 +149,7 @@ const nextConfig: NextConfig = {
       {
         // Всё остальное фреймить нельзя — до сих пор заголовка не было вообще,
         // то есть встроить приложение в свой сайт мог любой (кликджекинг).
-        source: '/((?!bx/|profile|api/bitrix/app|repeat-kanban|big-deals-kanban).*)',
+        source: '/((?!bx/|profile|api/bitrix/app|repeat-kanban|big-deals-kanban|logist-kanban).*)',
         headers: [
           { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
           { key: 'X-Frame-Options', value: 'SAMEORIGIN' },

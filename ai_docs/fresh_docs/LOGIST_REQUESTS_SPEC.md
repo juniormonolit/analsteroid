@@ -292,6 +292,20 @@ dry-run менеджерских пушей, сообщения только п�
 **Режим робота** — `PUT /api/logist-kanban/settings {"robotMode":"draft"}` (руководитель логистики/админ) переключает
 на «сначала форма»; `"send"` — обратно. Экран настройки — у S3 (настройки очередей и весов).
 
+## UI (S3, 19.11)
+
+`features/logist-kanban/ui/`: `LogistKanbanPage` (доска / «Сделки», плитки, черновики, колонки сеткой на lg+, на телефоне — одна
+колонка, переключатель чипами), `useLogistFilters` (фильтры в URL через `parseFilters`/`filtersToSearchParams`, повторные ключи),
+`FiltersPanel` (панель + чипы активных фильтров), `RequestDrawer` (шапка, «Запрос / Варианты / История», чат справа; на телефоне —
+вкладка «Чат»; кнопки строго по `can`, `version` в каждом действии, 409 → перечитать), `Offers` (карточка варианта со сравнением
+«наша / конкурент / вариант», форма варианта с автоитогом), `AcceptOffer` (предпросмотр S4 «было/станет» → `dealRows.confirm`;
+предпросмотр не прочитался — принять без записи), `SettingsDrawer` (робот на стадиях, SLA, веса, очереди: посев, «обновить
+состав», SLA очереди, вкл/выкл). Адрес: `?view=deals`, `?req=<id>` (открытая карточка), `?modal=settings`, `?col=` (колонка на
+телефоне). Страница — за `section.logist_kanban` или `canManageLogistKanban`; внутри Битрикса — с меню ЛК (`LkNavInBitrix`).
+Вход из Битрикса: `/api/bitrix/app/logist-kanban` → `/bx/logist-kanban` → `/logist-kanban` (CSP `frame-ancestors` — портал).
+Гид: `/logist-kanban/guide`, текст — `features/logist-kanban/guide/content.ts` (правило «инструкция не отстаёт»).
+Прототип на `sd` удалён (`engine/board.ts`, корневой `route.ts`, `requests/[id]`, `guard.ts`); таблица — миграция 269, не применять до выкатки.
+
 ## Подсессии
 
 | # | Что | Зависит от |

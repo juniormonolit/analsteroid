@@ -182,9 +182,12 @@ export function GuidePage({ guide, backHref = '/repeat-kanban' }: { guide: Guide
           <div className="flex items-center gap-2 text-sm opacity-90"><BookOpen size={16} /> Инструкция</div>
           <h1 className="text-2xl font-bold leading-tight sm:text-3xl">{guide.title}</h1>
           <p className="max-w-3xl text-[15px] leading-relaxed opacity-95"><Rich text={guide.intro} /></p>
-          <div className="mt-1 flex flex-wrap gap-1 self-start rounded-xl bg-white/95 p-1" role="group" aria-label="Для кого">
-            {whoBtn('all', 'Всё')}{whoBtn('rop', 'Я РОП')}{whoBtn('manager', 'Я менеджер')}
-          </div>
+          {/* Переключатель «для кого» — только если в гиде есть разделы с audience (у гида канбана логиста их нет). */}
+          {guide.sections.some(s => s.audience) && (
+            <div className="mt-1 flex flex-wrap gap-1 self-start rounded-xl bg-white/95 p-1" role="group" aria-label="Для кого">
+              {whoBtn('all', 'Всё')}{whoBtn('rop', 'Я РОП')}{whoBtn('manager', 'Я менеджер')}
+            </div>
+          )}
         </div>
 
         <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
