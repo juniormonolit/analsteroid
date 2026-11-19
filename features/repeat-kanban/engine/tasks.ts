@@ -91,6 +91,15 @@ async function linkedTasks(dealIds: number[]): Promise<Map<number, LinkedTask>> 
 }
 
 /** Последняя задача проекта по каждой сделке: по привязке в копии Битрикса И по нашим записям. */
+/** Какую задачу сделки показывать на карточке (одна на сделку): открытая (в т.ч. «ждёт приёмки») важнее закрытой,
+ *  дальше — свежая. 19.11, Коваленко, сделка #276350: две задачи, свежая закрыта, старая ждёт приёмки — карточка
+ *  показывала закрытую, и принять висящую было негде. */
+function betterTask(a: RepeatTask, b: RepeatTask): boolean {
+  const open = (t: RepeatTask) => t.state !== 'done' && t.state !== 'deferred';
+  if (open(a) !== open(b)) return open(a);
+  return a.createdAt > b.createdAt;
+}
+
 export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number, RepeatTask>> {
   if (!dealIds.length) return new Map();
   try {
@@ -131,7 +140,7 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
         participants: idsOf(x.accomplices, x.auditors, links.get(Number(x.task_id))?.participants),
       };
       const cur = out.get(dealId);
-      if (!cur || task.createdAt > cur.createdAt) out.set(dealId, task);
+      if (!cur || betterTask(task, cur)) out.set(dealId, task);
     }
     // Задачи, поставленные из Монолитики, которых в копии нет вовсе (09.11: копия задач стоит с 08.10 —
     // с 05.11 из 62 наших задач в ней 1). Собираем по своему журналу; статус — из кэша Битрикса (taskReview.ts).
@@ -152,7 +161,7 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
           participants: l.participants,
         };
         const cur = out.get(l.dealId);
-        if (!cur || task.createdAt > cur.createdAt) out.set(l.dealId, task);
+        if (!cur || betterTask(task, cur)) out.set(l.dealId, task);
       }
     }
     return out;
