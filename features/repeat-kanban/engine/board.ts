@@ -597,6 +597,8 @@ export async function buildRepeatBoard(opts: {
     }
     return out;
   };
+  /** Открытая сделка в первичной воронке → колонка доски по типу её стадии. */
+  const WRONG_FUNNEL_COLUMN: Record<string, ColumnKey> = { created: 'touch_0', called: 'st_called', reserved: 'st_reserved', confirmed: 'st_reserved' };
   const isOpen = (d: RepeatDealInfo) => !WON_STAGES.has(d.stageId) && !LOST_STAGES.has(d.stageId);
   const MARK_RANK: Record<string, number> = { no_call: 3, snooze: 2, wake: 1 };
 
@@ -784,6 +786,11 @@ export async function buildRepeatBoard(opts: {
     else col = poolColumn(r.purchasesDelivered, freshDays);
 
     if (returned && col.startsWith('pool')) col = 'pool_hot';
+    // Сделка заказчика открыта, но в первичной воронке (19.11, тестер: «активно в работе сделка, а в монолитике
+    // она в открытом окне»): заказчика уже ведут — не пул и не «Скрытые», а рабочая колонка по типу стадии.
+    // Плашка «Сделка в … — не в повторной» остаётся: перенести в «Повторные» всё равно нужно.
+    const wrongDeal = hasOpenDeal ? null : membersOf(r).map(k => wrongFunnel.get(refOfKey(k))).find(Boolean) ?? null;
+    if (wrongDeal && (col.startsWith('pool') || col === 'hidden')) col = WRONG_FUNNEL_COLUMN[wrongDeal.eventType ?? ''] ?? 'touch_0';
     const inPool = col.startsWith('pool') || col === 'brak' || col === 'hidden';
     const typeKey = profileType ?? 'none';
     typeCounts[typeKey] = (typeCounts[typeKey] ?? 0) + 1;
@@ -893,7 +900,7 @@ export async function buildRepeatBoard(opts: {
       tags: [...cardTags].sort((a, b) => (tagRank.get(a) ?? 99) - (tagRank.get(b) ?? 99)),
       queued: (() => { const q = queuedMap.get(r.clientKey); return q ? { id: q.id, managerId: q.managerId, by: q.queuedByName, at: q.createdAt } : null; })(),
       // Только если в повторной воронке открытой сделки нет — иначе это история, не ошибка сейчас.
-      wrongFunnel: hasOpenDeal ? null : membersOf(r).map(k => wrongFunnel.get(k.startsWith('k') ? k : `p${k.slice(1)}`)).find(Boolean) ?? null,
+      wrongFunnel: wrongDeal,
     });
   }
 

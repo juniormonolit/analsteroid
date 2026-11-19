@@ -109,13 +109,15 @@ export function rememberDealClient(dealId: number, clientKey: string): void {
   ).catch(() => {});
 }
 
-export interface WrongFunnelDeal { dealId: number; funnelId: number; funnelName: string | null; stageName: string | null; createdAt: string }
+export interface WrongFunnelDeal { dealId: number; funnelId: number; funnelName: string | null; stageName: string | null; createdAt: string;
+  /** Тип стадии (sa.stages.event_type): created / called / reserved / confirmed — по нему карточка встаёт в рабочую колонку. */
+  eventType: string | null }
 
 /** Открытые сделки НЕ первые у заказчика, но в первичной воронке (0/1). Ключ — ref доски:
  *  k<компания> для юр-сделки с компанией, иначе p<контакт>. Самая свежая на заказчика. */
 export async function fetchWrongFunnelDeals(refs: string[]): Promise<Map<string, WrongFunnelDeal>> {
   if (!refs.length) return new Map();
-  const r = await analyticsDb().query<{ ref: string; deal_id: string; funnel_id: number; funnel_name: string | null; stage_name: string | null; created_at: Date }>(
+  const r = await analyticsDb().query<{ ref: string; deal_id: string; funnel_id: number; funnel_name: string | null; stage_name: string | null; event_type: string | null; created_at: Date }>(
     `WITH d AS (
        SELECT CASE WHEN d.funnel_id IN (1, 3) AND coalesce(d.company_id, 0) <> 0 THEN 'k' || d.company_id
                    WHEN coalesce(d.contact_id, 0) <> 0 THEN 'p' || d.contact_id END AS ref,
@@ -124,7 +126,7 @@ export async function fetchWrongFunnelDeals(refs: string[]): Promise<Map<string,
      ), firsts AS (
        SELECT ref, min(created_at) AS first_at FROM d WHERE ref = ANY($1::text[]) GROUP BY 1
      )
-     SELECT DISTINCT ON (d.ref) d.ref, d.deal_id::text AS deal_id, d.funnel_id, f.name AS funnel_name, s.name AS stage_name, d.created_at
+     SELECT DISTINCT ON (d.ref) d.ref, d.deal_id::text AS deal_id, d.funnel_id, f.name AS funnel_name, s.name AS stage_name, s.event_type, d.created_at
        FROM d JOIN firsts USING (ref)
        JOIN sa.stages s ON s.id = d.stage_id
        LEFT JOIN sa.funnels f ON f.id = d.funnel_id
@@ -134,7 +136,7 @@ export async function fetchWrongFunnelDeals(refs: string[]): Promise<Map<string,
     [refs],
   ).catch(e => { console.warn('[repeat-kanban] сделки не в той воронке:', e instanceof Error ? e.message : e); return { rows: [] }; });
   return new Map(r.rows.map(x => [x.ref, {
-    dealId: Number(x.deal_id), funnelId: x.funnel_id, funnelName: x.funnel_name, stageName: x.stage_name,
+    dealId: Number(x.deal_id), funnelId: x.funnel_id, funnelName: x.funnel_name, stageName: x.stage_name, eventType: x.event_type,
     createdAt: new Date(x.created_at).toISOString(),
   }]));
 }
