@@ -1,6 +1,7 @@
 import { ProfileSettingsPage } from '@/features/profile/ui/ProfileSettingsPage';
 import { BitrixLeftMenuBlock } from '@/features/profile/ui/BitrixLeftMenuBlock';
 import { BitrixTabBlock } from '@/features/client-module/ui/BitrixTabBlock';
+import { LogistDealTabBlock } from '@/features/logist-kanban/ui/LogistDealTabBlock';
 import { getSession } from '@/lib/auth/session';
 
 // Личные настройки — «настройки себя» (задача 3045, §1). Правами не гейтятся: доступны
@@ -14,10 +15,11 @@ export default async function Page() {
     <>
       <ProfileSettingsPage />
       {/* Блоки супер-админа: «Монолитика» в левом меню Битрикса для всех (17.09) и
-          вкладка «Карточка клиента» в карточках контакта/компании (13.10). Здесь, а не
+          вкладка «Карточка клиента» в карточках контакта/компании (13.10), вкладка «Запросы логисту»
+          в карточке сделки (19.11). Здесь, а не
           только в «Ещё → Модули»: внутри Битрикса приложение показывает лишь кабинет,
           а placement.* работают только токеном, полученным при открытии внутри Битрикса. */}
-      {session?.isSuperadmin && <div className="px-4 sm:px-6 pb-6 max-w-3xl"><BitrixLeftMenuBlock /><BitrixTabBlock /></div>}
+      {session?.isSuperadmin && <div className="px-4 sm:px-6 pb-6 max-w-3xl"><BitrixLeftMenuBlock /><BitrixTabBlock /><LogistDealTabBlock /></div>}
     </>
   );
 }

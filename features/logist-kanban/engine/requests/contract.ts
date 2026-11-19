@@ -475,6 +475,9 @@ export interface DealRequestsResponse {
   requests: RequestCard[];
   /** открытый запрос каждого типа (если есть) */
   openByType: Partial<Record<RequestType, number>>;
+  /** кто смотрит и активные очереди — для RequestDrawer на вкладке сделки в Битриксе (/bx/deal-requests) */
+  me?: ActorInfo;
+  queues?: QueueRef[];
 }
 
 /** GET /api/logist-kanban/queues → { queues, settings, canManage }

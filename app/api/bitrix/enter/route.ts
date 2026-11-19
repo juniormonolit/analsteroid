@@ -26,7 +26,11 @@ export async function GET(req: NextRequest) {
   const session = await createSession(userId);
   // Куда вести после входа — только из белого списка (никаких произвольных адресов из URL).
   const TARGETS: Record<string, string> = { 'repeat-kanban': '/repeat-kanban', 'big-deals-kanban': '/big-deals-kanban', 'logist-kanban': '/logist-kanban' };
-  const res = NextResponse.redirect(new URL(TARGETS[req.nextUrl.searchParams.get('to') ?? ''] ?? '/profile', origin));
+  // Вкладка сделки «Запросы логисту» — та же встроенная страница, но в обычной вкладке; id сделки — только цифры.
+  const to = req.nextUrl.searchParams.get('to') ?? '';
+  const deal = req.nextUrl.searchParams.get('deal') ?? '';
+  const dest = to === 'deal-requests' && /^\d{1,12}$/.test(deal) ? `/bx/deal-requests?deal=${deal}` : TARGETS[to] ?? '/profile';
+  const res = NextResponse.redirect(new URL(dest, origin));
   res.cookies.set(SESSION_COOKIE, session, {
     httpOnly: true,
     secure: true,

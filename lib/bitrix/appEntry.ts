@@ -25,8 +25,13 @@ function html(body: string, status = 200): NextResponse {
   );
 }
 
-/** page — встроенная страница входа (/bx/…), loading — текст «Загружаем …». */
-export async function bitrixAppEntry(req: NextRequest, page: string, loading: string): Promise<NextResponse> {
+/** Встройка-вкладка (CRM_*_DETAIL_TAB): после подтверждения сотрудника — проверка контекста и параметры страницы.
+ *  Вернуть `{ params }` — пойдут в адрес page (рядом с `t`), `{ error, status }` — показать человеку и не входить. */
+export type BitrixEntryPrepare = (p: { authId: string; placement: string; options: Record<string, unknown> })
+  => Promise<{ params: Record<string, string> } | { error: string; status: number }>;
+
+/** page — встроенная страница входа (/bx/…), loading — текст «Загружаем …», prepare — для вкладок с PLACEMENT_OPTIONS. */
+export async function bitrixAppEntry(req: NextRequest, page: string, loading: string, prepare?: BitrixEntryPrepare): Promise<NextResponse> {
   const portal = bitrixPortalOrigin();
   if (!portal) {
     console.error('[bitrix/app] не задан BITRIX_PORTAL_URL / BITRIX_WEBHOOK_URL');
@@ -38,6 +43,7 @@ export async function bitrixAppEntry(req: NextRequest, page: string, loading: st
   let refreshId = '';
   let authExpires = 3600;
   let placement = '';
+  let optionsRaw: unknown = '';
   const ctype = req.headers.get('content-type') ?? '';
   try {
     if (ctype.includes('application/json')) {
@@ -46,12 +52,14 @@ export async function bitrixAppEntry(req: NextRequest, page: string, loading: st
       refreshId = String(j.REFRESH_ID ?? '');
       authExpires = Number(j.AUTH_EXPIRES) || 3600;
       placement = String(j.PLACEMENT ?? '');
+      optionsRaw = j.PLACEMENT_OPTIONS ?? '';
     } else {
       const form = await req.formData();
       authId = String(form.get('AUTH_ID') ?? '');
       refreshId = String(form.get('REFRESH_ID') ?? '');
       authExpires = Number(form.get('AUTH_EXPIRES')) || 3600;
       placement = String(form.get('PLACEMENT') ?? '');
+      optionsRaw = String(form.get('PLACEMENT_OPTIONS') ?? '');
     }
   } catch {
     return html('<p>Не удалось прочитать запрос от Битрикса.</p>', 400);
@@ -65,6 +73,18 @@ export async function bitrixAppEntry(req: NextRequest, page: string, loading: st
   if (!identity) {
     console.warn('[bitrix/app] AUTH_ID не подтверждён порталом', { placement });
     return html('<p>Не удалось подтвердить вашу учётную запись на портале. Обновите страницу.</p>', 403);
+  }
+
+  let params: Record<string, string> = {};
+  if (prepare) {
+    let options: Record<string, unknown> = {};
+    try {
+      const o = typeof optionsRaw === 'string' ? JSON.parse(optionsRaw || '{}') : optionsRaw;
+      if (o && typeof o === 'object') options = o as Record<string, unknown>;
+    } catch { /* пустые опции — prepare сам скажет, чего не хватает */ }
+    const p = await prepare({ authId, placement, options });
+    if ('error' in p) return html(`<p>${p.error}</p>`, p.status);
+    params = p.params;
   }
 
   const resolved = await resolveOrCreateAppUser(identity);
@@ -91,7 +111,9 @@ export async function bitrixAppEntry(req: NextRequest, page: string, loading: st
   // /bx/manager по нему предложит открыть кабинет в обычной вкладке, где
   // cookie первосторонняя и работает везде.
   const handoff = await mintHandoff(resolved.userId);
-  const target = handoff ? `${page}?t=${encodeURIComponent(handoff)}` : page;
+  const qs = new URLSearchParams(params);
+  if (handoff) qs.set('t', handoff);
+  const target = qs.size ? `${page}?${qs}` : page;
 
   const res = html(
     `<p>${loading}</p>`
