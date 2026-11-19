@@ -78,6 +78,9 @@ export async function fetchArchivedRawTasks(createdSinceIso: string, groupIds: r
 let setters = new Set<string>();
 /** Постановщики, которые не рядовые менеджеры по оргструктуре. */
 let ropSetters = new Set<string>();
+/** Кто «паркует» у себя задачи в «Новых» (≥ PARK_MIN открытых, поставленных самому себе) — РОП, не менеджер. */
+let parkers = new Set<string>();
+const PARK_MIN = 3;
 
 export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
   const groupIds = [...new Set(raw.map(t => Number(t.groupId)))];
@@ -112,6 +115,14 @@ export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
     if (!c.column) continue; // мусорная стадия («Название»)
     pre.push({ t, column: c.column, stageId: c.stageId, stageTitle: c.title });
   }
+  // В «Новых» нераспределённой считаем задачу на постановщике, только если он держит у себя пачку таких
+  // (Авдейчик — 49), а не одну, поставленную себе менеджером (Девришев — владелец 19.11: «убери»).
+  if (raw.length > 5) {
+    const n = new Map<string, number>();
+    for (const p of pre) if (p.column === 'new' && String(p.t.status) !== '5' && String(p.t.responsibleId) === String(p.t.createdBy))
+      n.set(String(p.t.createdBy), (n.get(String(p.t.createdBy)) ?? 0) + 1);
+    parkers = new Set([...n].filter(([, k]) => k >= PARK_MIN).map(([id]) => id));
+  }
   const since = await resolveSince(pre.map(p => ({ id: Number(p.t.id), column: p.column, firstSeen: iso(p.t.changedDate) ?? iso(p.t.createdDate)! })));
   const now = Date.now();
   const short = new Map<number, string>(BIG_DEALS_GROUPS.map(g => [g.id, g.short]));
@@ -134,7 +145,7 @@ export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
       // постановщик: Авдейчик в оргструктуре рядовой (есть РОП), а 49 «Новых» висят на нём (прод 19.11). Только по оргструктуре нельзя: Авдейчик в ней не РОП,
       // а руководители групп (Андреева, Скворцов) сами ведут сделки.
       unassigned: String(t.responsibleId) === String(t.createdBy)
-        && (ropSetters.has(String(t.createdBy)) || (column === 'new' && setters.has(String(t.createdBy)))),
+        && (ropSetters.has(String(t.createdBy)) || (column === 'new' && setters.has(String(t.createdBy)) && parkers.has(String(t.createdBy)))),
       // Товарная группа — из сделки в БД (владелец 18.11: название задачи — свободный текст, фильтр шумел).
       // Без БД (локально) — часть названия задачи до «|».
       ...(() => {
