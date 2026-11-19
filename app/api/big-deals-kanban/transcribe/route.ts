@@ -2,19 +2,22 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { hasPerm } from '@/lib/auth/perms';
 import { parseClientRef } from '@/features/client-module/engine/clientModule';
+import { BigActionError } from '@/features/big-deals-kanban/engine/actions';
+import { taskClientRef } from '@/features/big-deals-kanban/engine/taskClient';
 import { requestTranscription, transcribeCandidates, transcribeEnabled, transcriptionState } from '@/features/ai-analysis/engine/transcribe';
 
 // Вкладка «Звонки» карточки задачи канбана больших чеков (собрание РОПов 18.11): «кнопка отправить на
 // транскрибацию звонков, где текста нет». Отправляет звонки заказчика без текста в общую очередь
 // расшифровки (сервер транскрибации, n8n transcribe-on-demand — engine/transcribe.ts), готовность —
-// опросом GET ?ids=. Право то же, что у звонков заказчика: action.ai_call_analysis (РОПы).
+// опросом GET ?ids=. Доступ (Осипов 19.11): по задаче — как к самой задаче, заказчик из её сделки (POST {taskId});
+// по заказчику напрямую (contactId/companyId) — только с правом action.ai_call_analysis.
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function guard() {
   const session = await getSession().catch(() => null);
   if (!session) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
-  if (!hasPerm(session, 'action.ai_call_analysis')) return { error: NextResponse.json({ error: 'Звонки видят только РОПы' }, { status: 403 }) };
+  if (!hasPerm(session, 'action.ai_call_analysis') && !hasPerm(session, 'section.repeat_kanban')) return { error: NextResponse.json({ error: 'Нет доступа' }, { status: 403 }) };
   return { session };
 }
 
@@ -22,10 +25,20 @@ export async function POST(req: NextRequest) {
   const g = await guard();
   if ('error' in g) return g.error;
   if (!transcribeEnabled()) return NextResponse.json({ error: 'Расшифровка по кнопке не настроена' }, { status: 503 });
-  const body = await req.json().catch(() => ({})) as { contactId?: unknown; companyId?: unknown };
+  const body = await req.json().catch(() => ({})) as { taskId?: unknown; contactId?: unknown; companyId?: unknown };
   const str = (v: unknown) => (v === null || v === undefined || v === '' ? null : String(v));
-  const ref = parseClientRef(str(body.contactId), str(body.companyId));
-  if (!ref) return NextResponse.json({ error: 'Укажите ID контакта или компании' }, { status: 400 });
+  let ref;
+  if (body.taskId !== undefined) {
+    try { ref = await taskClientRef(g.session, Number(body.taskId)); } catch (e) {
+      if (e instanceof BigActionError) return NextResponse.json({ error: e.message }, { status: e.status });
+      throw e;
+    }
+    if (!ref) return NextResponse.json({ error: 'У сделки задачи нет заказчика' }, { status: 400 });
+  } else {
+    if (!hasPerm(g.session, 'action.ai_call_analysis')) return NextResponse.json({ error: 'Нет доступа' }, { status: 403 });
+    ref = parseClientRef(str(body.contactId), str(body.companyId));
+    if (!ref) return NextResponse.json({ error: 'Укажите ID контакта или компании' }, { status: 400 });
+  }
   try {
     const c = await transcribeCandidates(ref);
     if (!c.send.length) return NextResponse.json({ sent: 0, inWork: c.inWork.length, ids: c.inWork });

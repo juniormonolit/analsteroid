@@ -2,7 +2,8 @@
 // Вкладка «Звонки» открытой карточки задачи канбана больших чеков (собрание РОПов 18.11): «просто звонки,
 // как в карточке клиента; все друг за другом, с датой; большим текстом во всю ширину; разговор — пузыри
 // чата слева/справа; "Спикер 1/2" → "Менеджер/Клиент"; кнопка отправить на транскрибацию звонков без текста».
-// Данные — GET /api/ai-analysis/client?…&texts=1 (право action.ai_call_analysis, без него 403).
+// Данные — GET /api/big-deals-kanban/task/{id}/calls: доступ как к самой задаче, заказчик — из её сделки
+// (Осипов 19.11: директор по продажам видел «Звонки видят только РОПы» — раньше шло через ИИ-анализ с правом action.ai_call_analysis).
 // Расшифровка — POST /api/big-deals-kanban/transcribe (общая очередь сервера транскрибации), готовность —
 // опрос раз в 10 с, не дольше 10 минут.
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -117,12 +118,12 @@ function Dialogue({ call }: { call: CallListItem }) {
 interface TrJob { ids: string[]; startedAt: number; sent: number }
 type TrState = { ready: string[]; failed: string[]; pending: string[] };
 
-export function CallsTab({ contactId, companyId, mock }: { contactId: number | null; companyId: number | null; mock?: boolean }) {
+export function CallsTab({ taskId, contactId, companyId, mock }: { taskId: number; contactId: number | null; companyId: number | null; mock?: boolean }) {
   const qc = useQueryClient();
   // Один параметр: компания, если есть, иначе контакт (как ClientSummaryPanel).
   const qs = companyId ? `companyId=${companyId}` : contactId ? `contactId=${contactId}` : '';
-  const body = companyId ? { companyId } : { contactId };
-  const listKey = ['big-deals-calls', qs, !!mock];
+  const body = { taskId };
+  const listKey = ['big-deals-calls', taskId, !!mock];
 
   const [mockTranscribed, setMockTranscribed] = useState(false);
   const list = useQuery<{ calls: CallListItem[] }>({
@@ -130,7 +131,7 @@ export function CallsTab({ contactId, companyId, mock }: { contactId: number | n
     enabled: !!mock || !!qs,
     retry: false,
     staleTime: 60_000,
-    queryFn: () => (mock ? Promise.resolve({ calls: mockCalls(mockTranscribed) }) : getJson(`/api/ai-analysis/client?${qs}&texts=1`)),
+    queryFn: () => (mock ? Promise.resolve({ calls: mockCalls(mockTranscribed) }) : getJson(`/api/big-deals-kanban/task/${taskId}/calls`)),
   });
   const calls = useMemo(() => list.data?.calls ?? [], [list.data]);
 
@@ -211,7 +212,7 @@ export function CallsTab({ contactId, companyId, mock }: { contactId: number | n
   if (list.isLoading) return <div className="flex items-center gap-2 p-4 text-[14px] text-[var(--color-text-muted)]"><Loader2 size={16} className="animate-spin" /> Загружаем звонки…</div>;
   if (list.isError) {
     const status = (list.error as { status?: number }).status;
-    return <div className="p-4 text-[14px] text-[var(--color-text-muted)]">{status === 403 ? 'Звонки видят только РОПы' : (list.error as Error).message}</div>;
+    return <div className="p-4 text-[14px] text-[var(--color-text-muted)]">{(list.error as Error).message}</div>;
   }
   if (!calls.length) return <div className="p-4 text-[14px] text-[var(--color-text-muted)]">Звонков по заказчику нет.</div>;
 

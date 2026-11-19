@@ -183,7 +183,7 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
           </div>
 
           {pane === 'calls' && (hasClient
-            ? <CallsTab contactId={ref.contactId} companyId={ref.companyId} mock={mock} />
+            ? <CallsTab taskId={card.id} contactId={ref.contactId} companyId={ref.companyId} mock={mock} />
             : <p className="text-[var(--color-text-muted)]">У задачи нет сделки с клиентом — звонков не найти.</p>)}
 
           {pane === 'tasks' && <RelatedTasks card={card} mock={mock} />}
