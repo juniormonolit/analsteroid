@@ -11,7 +11,7 @@ import { QuestionsBlock } from './QuestionsBlock';
 import { fmtDT } from './format';
 import { Section, postBigAction } from './TaskDrawerShared';
 import { ConfirmCloseModal } from './MassCloseModal';
-import { DeadlineField } from './DeadlineField';
+import { DeadlineField, mskInputToIso } from './DeadlineField';
 
 type Mode = null | 'reassign' | 'return' | 'accept' | 'approve' | 'renew' | 'deadline';
 /** Ждёт подтверждения закрытия: перенос в закрывающую колонку или «Не продано → завершить». */
@@ -60,7 +60,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
     ...managers.filter(m => m.id !== dealOwner?.id).map(m => ({ value: m.id, label: m.name })),
   ];
   const toggle = (m: Mode) => { setMode(mode === m ? null : m); setSure(false); setErr(null); if (m === 'reassign' && mode !== 'reassign' && !manager && dealOwner && dealOwner.id !== card.responsible.id) setManager(dealOwner.id); };
-  const deadlineIso = deadline ? new Date(deadline).toISOString() : undefined;
+  const deadlineIso = mskInputToIso(deadline);
   const columnOptions = BIG_COLUMNS.filter(c => c.key !== card.column).map(c => ({ value: c.key, label: c.title, hint: c.hint ?? null }));
   const addTz = (t: string) => setTz(prev => (prev.trim() ? `${prev.trimEnd()}\n${t}` : t));
 
@@ -100,7 +100,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
             <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="Что доделать" className={input} />
             <DeadlineField label="Новый срок (необязательно)" value={deadline} onChange={setDeadline} />
             <button type="button" className={`${primary} self-end`} disabled={busy || comment.trim().length < 3}
-              onClick={() => run({ type: 'return', comment: comment.trim(), deadline: deadline ? new Date(deadline).toISOString() : undefined })}>
+              onClick={() => run({ type: 'return', comment: comment.trim(), deadline: deadlineIso })}>
               {busy ? 'Возвращаю…' : 'Вернуть'}
             </button>
           </div>
@@ -123,7 +123,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
             <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} placeholder="Комментарий менеджеру (необязательно)" className={input} />
             <DeadlineField label="Новый срок (необязательно)" value={deadline} onChange={setDeadline} />
             <button type="button" className={`${primary} self-end`} disabled={busy}
-              onClick={() => run({ type: 'accept', comment: comment.trim() || undefined, deadline: deadline ? new Date(deadline).toISOString() : undefined })}>
+              onClick={() => run({ type: 'accept', comment: comment.trim() || undefined, deadline: deadlineIso })}>
               {busy ? 'Отправляю…' : 'Принял, работаем дальше'}
             </button>
           </div>
@@ -147,7 +147,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
               <button type="button" className={`${primary} self-end`} disabled={busy || !deadline} onClick={() => setSure(true)}>Возобновить…</button>
             ) : (
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <span className="text-[12.5px]">Возобновить до {deadline ? fmtDT(new Date(deadline).toISOString()) : ''}?</span>
+                <span className="text-[12.5px]">Возобновить до {deadline ? fmtDT(deadlineIso ?? null) : ''}?</span>
                 <button type="button" className={btn} disabled={busy} onClick={() => setSure(false)}>Нет</button>
                 <button type="button" className={primary} disabled={busy} onClick={() => run({ type: 'renew', deadline: deadlineIso, comment: comment.trim() || undefined })}>
                   {busy ? 'Возобновляю…' : 'Да, возобновить'}
