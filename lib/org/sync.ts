@@ -26,9 +26,18 @@
 // валит весь синк — телефоны этого батча логируются как ошибка и остаются
 // как были; полный отказ Битрикса на этой фазе не должен уронить
 // departments/org_resolved_hierarchy — вся фаза телефонов в try/catch.
+//
+// 19.11: public.employees (bitrix_login для фильтра «Менеджеры/Логисты» и колонки
+// «Логин» отчёта по менеджерам, org-tree ботов) тоже держим здесь. Раньше её
+// наполнял внешний ночной синк на YC-кластере system — умер 08.10, таблица застыла
+// на 06.10 (новые сотрудники не попадали под «Менеджеры», имена устарели).
+// employees.department_id — FK на public.departments(id) (НЕ sa.departments),
+// поэтому public.departments тоже апсертим по bitrix_department_id. Пишем через
+// systemDb() отдельной транзакцией ПОСЛЕ коммита sa: сбой этой фазы не откатывает
+// оргструктуру, а возвращается в результате (employeesError).
 
 import type { PoolClient } from 'pg';
-import { analyticsDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 
 const OWNER_UID = '6';          // владелец — не РОП
 const DIRECTORATE_DEPT = '1';   // Дирекция — выше неё rop не поднимаем
@@ -42,7 +51,63 @@ interface BxManager {
 export interface OrgSyncResult {
   ok: true; departments: number; managers: number; backfilledHeads: number; renamed: number;
   phonesSynced: number; phonesSkipped: number; phonesErrors: number; phoneBatches: number;
+  employeesSynced: number; employeesDeactivated: number; employeesError: string | null;
   ms: number;
+}
+
+interface EmployeeRow { uid: string; login: string | null; name: string; bxDept: string | null; ropId: string | null; isActive: boolean }
+
+/**
+ * public.employees + public.departments (схема public БД monolitika, пул systemDb).
+ * Upsert по bitrix_user_id / bitrix_department_id; строки не удаляем
+ * (на employees.bitrix_user_id ссылается FK users). Пропавшие из выгрузки
+ * сотрудники → is_active=false. Отделы только апсертим, не деактивируем.
+ * Директорские колонки employees (department_/company_director_…) не трогаем.
+ */
+async function syncPublicEmployees(bxdep: BxDept[], rows: EmployeeRow[]): Promise<{ synced: number; deactivated: number }> {
+  const client = await systemDb().connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO public.departments(bitrix_department_id,name,parent_bitrix_department_id,head_bitrix_user_id,is_active,updated_at)
+       SELECT d.id, d.name, d.parent, d.head, true, now()
+         FROM unnest($1::text[],$2::text[],$3::text[],$4::text[]) AS d(id,name,parent,head)
+       ON CONFLICT (bitrix_department_id) DO UPDATE SET name=EXCLUDED.name,
+         parent_bitrix_department_id=EXCLUDED.parent_bitrix_department_id,
+         head_bitrix_user_id=EXCLUDED.head_bitrix_user_id, is_active=true, updated_at=now()`,
+      [
+        bxdep.map(d => String(d.ID)), bxdep.map(d => d.NAME),
+        bxdep.map(d => (d.PARENT ? String(d.PARENT) : null)),
+        bxdep.map(d => (d.UF_HEAD && String(d.UF_HEAD) !== '0' ? String(d.UF_HEAD) : null)),
+      ],
+    );
+    // Пустой LOGIN из Битрикса не затирает сохранённый логин.
+    const up = await client.query(
+      `INSERT INTO public.employees(bitrix_user_id,bitrix_login,name,department_id,rop_bitrix_user_id,is_active,updated_at)
+       SELECT r.uid, r.login, r.name, d.id, r.rop, r.active, now()
+         FROM unnest($1::text[],$2::text[],$3::text[],$4::text[],$5::text[],$6::boolean[]) AS r(uid,login,name,dept,rop,active)
+         LEFT JOIN public.departments d ON d.bitrix_department_id = r.dept
+       ON CONFLICT (bitrix_user_id) DO UPDATE SET
+         bitrix_login=COALESCE(EXCLUDED.bitrix_login, public.employees.bitrix_login),
+         name=EXCLUDED.name, department_id=EXCLUDED.department_id,
+         rop_bitrix_user_id=EXCLUDED.rop_bitrix_user_id, is_active=EXCLUDED.is_active, updated_at=now()`,
+      [
+        rows.map(r => r.uid), rows.map(r => r.login), rows.map(r => r.name),
+        rows.map(r => r.bxDept), rows.map(r => r.ropId), rows.map(r => r.isActive),
+      ],
+    );
+    const off = await client.query(
+      'UPDATE public.employees SET is_active=false, updated_at=now() WHERE is_active AND NOT (bitrix_user_id = ANY($1::text[]))',
+      [rows.map(r => r.uid)],
+    );
+    await client.query('COMMIT');
+    return { synced: up.rowCount ?? 0, deactivated: off.rowCount ?? 0 };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
@@ -330,6 +395,7 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
     let renamed = 0;
     let phonesSynced = 0; // сколько строк sa.employees реально обновлено (значение отличалось)
     const seen: string[] = [];
+    const employeeRows: EmployeeRow[] = [];
     for (const m of mgr) {
       const uid = String(m.ID);
       const name = managerName(m);
@@ -385,14 +451,35 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
       }
 
       seen.push(uid);
+      employeeRows.push({ uid, login: (m.LOGIN ?? '').trim() || null, name, bxDept: ufDept, ropId, isActive });
     }
     // менеджеры, пропавшие из выгрузки → is_active=false
     await client.query('UPDATE sa.org_resolved_hierarchy SET is_active=false WHERE NOT (manager_bitrix_user_id = ANY($1))', [seen]);
 
     await client.query('COMMIT');
+
+    // 4. public.employees (+public.departments) — после коммита sa, отдельной
+    // транзакцией в systemDb. Пустая выгрузка не должна погасить всех.
+    let employeesSynced = 0;
+    let employeesDeactivated = 0;
+    let employeesError: string | null = null;
+    if (employeeRows.length === 0) {
+      employeesError = 'mlt.managers.list пуст — public.employees не тронута';
+    } else {
+      try {
+        const r = await syncPublicEmployees(bxdep, employeeRows);
+        employeesSynced = r.synced;
+        employeesDeactivated = r.deactivated;
+      } catch (e) {
+        employeesError = e instanceof Error ? e.message : String(e);
+        console.error('[org-sync] public.employees не обновлена:', employeesError);
+      }
+    }
+
     return {
       ok: true, departments: bxdep.length, managers: mgr.length, backfilledHeads, renamed,
-      phonesSynced, phonesSkipped, phonesErrors, phoneBatches, ms: Date.now() - t0,
+      phonesSynced, phonesSkipped, phonesErrors, phoneBatches,
+      employeesSynced, employeesDeactivated, employeesError, ms: Date.now() - t0,
     };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

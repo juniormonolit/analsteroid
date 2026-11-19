@@ -92,7 +92,8 @@ export default function OrgStructurePage() {
             (d.renamed ? `, переименований ${d.renamed}` : '') + `, за ${(d.ms / 1000).toFixed(1)} с` +
             (d.hrCards?.ok
               ? `. Кадровые карточки: ${d.hrCards.employed} работающих, сопоставлено ${d.hrCards.matched}, с датой найма ${d.hrCards.withHireDate}`
-              : d.hrCards ? `. Кадровые карточки не загружены: ${d.hrCards.error}` : ''),
+              : d.hrCards ? `. Кадровые карточки не загружены: ${d.hrCards.error}` : '') +
+            (d.employeesError ? `. Логины (employees) не обновлены: ${d.employeesError}` : ''),
         });
         load();
       }
