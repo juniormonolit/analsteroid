@@ -67,6 +67,7 @@ export async function register() {
     if (allow.has('weeklyWeather')) scheduleWeeklyWeather();
     if (allow.has('supplyPanelSync')) scheduleSupplyPanelSync();
     if (allow.has('logistQueueMembers')) scheduleLogistQueueMembers();
+    if (allow.has('logistBxSync')) scheduleLogistBxSync();
     if (allow.has('dailyReport')) scheduleMoscowReport();
     if (allow.has('repeatKanbanSnapshot')) scheduleRepeatKanbanSnapshot();
     if (allow.has('repeatQueueIssue')) scheduleRepeatQueueIssue();
@@ -101,6 +102,7 @@ export async function register() {
   scheduleWeeklyWeather();
   scheduleSupplyPanelSync();
   scheduleLogistQueueMembers();
+  scheduleLogistBxSync();
   scheduleRepeatQueueIssue();
   scheduleRepeatMorning();
   scheduleRepeatAutoBrak();
@@ -910,6 +912,26 @@ function scheduleLogistQueueMembers() {
   };
   setTimeout(() => { void tick(); }, 5 * 60 * 1000);
   setInterval(() => { void tick(); }, 6 * 60 * 60 * 1000);
+}
+
+// Канбан запросов логистам, S4: повтор записи в дубль-задачи Битрикса (очередь logist_bx_outbox, бэкофф 1…60 мин).
+// Сама запись за флагом LOGIST_BX_WRITE (по умолчанию выключена) — без него тик ничего не делает.
+function scheduleLogistBxSync() {
+  let running = false;
+  const tick = async () => {
+    if (running || !['1', 'true', 'on'].includes(process.env.LOGIST_BX_WRITE ?? '')) return;
+    running = true;
+    try {
+      const { drainAll } = await import('./features/logist-kanban/engine/bitrix/sync');
+      const r = await drainAll();
+      if (r.requests) console.log(`[logistBxSync] запросов ${r.requests}, выполнено шагов ${r.done}, с ошибкой ${r.errors}`);
+    } catch (err) {
+      if ((err as { code?: string }).code !== '42P01') console.error('[logistBxSync] не удалось:', err instanceof Error ? err.message : err);
+    } finally {
+      running = false;
+    }
+  };
+  setInterval(() => { void tick(); }, 60 * 1000);
 }
 
 function scheduleSupplyPanelSync() {

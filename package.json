@@ -22,6 +22,7 @@
     "test:geo-parse": "node --experimental-strip-types --import ./scripts/ts-resolve-register.mjs scripts/assert-geo-parse.ts",
     "test:pool": "node --experimental-strip-types --import ./scripts/ts-resolve-register.mjs scripts/assert-pool-singleton-8968.ts",
     "test:logist-requests": "node --experimental-strip-types --import ./scripts/ts-resolve-register.mjs scripts/assert-logist-requests.ts",
+    "test:logist-bx": "node --experimental-strip-types --import ./scripts/ts-resolve-register.mjs scripts/assert-logist-bx.ts",
     "test:security": "node --import ./scripts/test-stubs/register.mjs scripts/assert-security-8256.ts"
   },
   "dependencies": {

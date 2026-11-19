@@ -144,8 +144,12 @@ export function parseAction(raw: unknown): ActionBody {
       if (!comment) throw new InputError('Напишите, что доработать');
       return { ...v, action, comment };
     }
-    case 'accept':
-      return { ...v, action, offerId: id(r.offerId, 'id варианта') };
+    case 'accept': {
+      const dr = r.dealRows && typeof r.dealRows === 'object' ? r.dealRows as Record<string, unknown> : null;
+      const dealRows = dr && dr.confirm === true && typeof dr.hash === 'string' && dr.hash.length <= 64
+        ? { confirm: true as const, hash: dr.hash } : undefined;
+      return { ...v, action, offerId: id(r.offerId, 'id варианта'), ...(dealRows ? { dealRows } : {}) };
+    }
     case 'cancel':
       return { ...v, action, reason: str(r.reason, 2000) ?? undefined };
     case 'add_items': {

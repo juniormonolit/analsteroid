@@ -386,6 +386,7 @@ export async function createDraft(a: LogistActor, s: DraftSeed): Promise<{ reque
 /** Одно действие над запросом. */
 export async function applyAction(a: LogistActor, id: number, body: ActionBody): Promise<RequestDetails & { dealRows?: { status: string; error?: string | null } }> {
   let acceptedOfferId: number | null = null;
+  const dealRowsConfirm = body.action === 'accept' ? body.dealRows ?? null : null;
   const res = await tx(async q => {
     const row = await loadRow(q, id, a.bitrixId, true);
     if (!row) throw new LogistError('Запрос не найден', 404, 'not_found');
@@ -509,7 +510,7 @@ export async function applyAction(a: LogistActor, id: number, body: ActionBody):
   if (acceptedOfferId !== null) {
     const offer = details.offers.find(o => o.id === acceptedOfferId)!;
     try {
-      const w = await writeDealRowsForAcceptedOffer({ request: details, offer, actor: a });
+      const w = await writeDealRowsForAcceptedOffer({ request: details, offer, actor: a, confirm: dealRowsConfirm });
       dealRows = w;
       await db().query(`UPDATE logist_requests SET deal_rows_status = $2, deal_rows_error = $3, deal_rows_written_at = CASE WHEN $2 = 'ok' THEN now() END WHERE id = $1`,
         [id, w.status, w.error ?? null]);

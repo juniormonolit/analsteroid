@@ -423,7 +423,9 @@ export type ActionBody = { version?: number } & (
   | { action: 'answer'; offer: OfferInput }
   | { action: 'withdraw_offer'; offerId: number }
   | { action: 'return'; comment: string }
-  | { action: 'accept'; offerId: number }
+  /** dealRows — подтверждение предпросмотра «было/станет» (GET /request/:id/deal-rows?offerId=, S4): { confirm: true, hash }.
+   *  Без него товары сделки не переписываются (deal_rows_status='skipped'). */
+  | { action: 'accept'; offerId: number; dealRows?: { confirm: true; hash: string } }
   | { action: 'cancel'; reason?: string }
   | { action: 'add_items'; items: ItemInput[] }
 );

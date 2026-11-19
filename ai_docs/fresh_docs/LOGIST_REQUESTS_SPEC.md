@@ -129,6 +129,15 @@
 - Обратно из Битрикса (логист ответил в задаче) — НЕ синхронизируем в первой версии; работают в Монолитике.
 - **При запуске выключить существующий бизнес-процесс, создающий задачи на этих стадиях**, иначе задач две.
   Делает владелец/админ портала, в день переключения.
+- **Реализация (S4, 19.11)** — `features/logist-kanban/engine/bitrix/` (подробно — шапка `sync.ts`, `dealRows.ts`):
+  очередь `logist_bx_outbox` (миграция 270), шаги по порядку, сбой → `bx_sync_status='error'`/`bx_sync_error`, повтор —
+  фоновая `logistBxSync` и `POST /api/logist-kanban/request/:id/bx-sync` → `{ done, error }`. Флаги (по умолчанию выкл.):
+  `LOGIST_BX_WRITE`, `LOGIST_BX_DEAL_ROWS`, `LOGIST_BX_ONLY_GROUPS`, `LOGIST_BX_ONLY_DEALS`. Исполнитель задачи до взятия —
+  менеджер (Битрикс требует исполнителя). Отправлен при выключенной записи — задачи не будет и позже.
+- **«Принять вариант» для UI (S3):** перед кнопкой — `GET /api/logist-kanban/request/:id/deal-rows?offerId=` →
+  `DealRowsPreview` (`engine/bitrix/types.ts`: before/after/changes/warnings/hash, `writeEnabled`), подтверждение →
+  action `accept` с `dealRows: { confirm: true, hash }`. Без `dealRows` принять можно, товары не меняются (`skipped`).
+  Ошибка записи — `dealRowsStatus='error'` + `dealRowsError`, повтор — `POST …/deal-rows { confirm: true, hash }`.
 
 ## Уведомления (бот «Аналитик», новый канал `logist_requests`)
 
