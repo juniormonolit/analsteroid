@@ -76,6 +76,8 @@ export async function fetchArchivedRawTasks(createdSinceIso: string, groupIds: r
 /** Сырые задачи → карточки (сделки, звонки, связанные, время в колонке). */
 /** Кто ставит задачи другим (по последней полной пересборке) — для признака «Нераспределённые». */
 let setters = new Set<string>();
+/** Постановщики, которые не рядовые менеджеры по оргструктуре. */
+let ropSetters = new Set<string>();
 
 export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
   const groupIds = [...new Set(raw.map(t => Number(t.groupId)))];
@@ -97,9 +99,10 @@ export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
   // обновление одной задачи берёт множество с прошлой пересборки.
   if (raw.length > 5) {
     const s = new Set<string>();
-    for (const t of raw) if (String(t.responsibleId) !== String(t.createdBy) && !plain?.has(String(t.createdBy))) s.add(String(t.createdBy));
+    for (const t of raw) if (String(t.responsibleId) !== String(t.createdBy)) s.add(String(t.createdBy));
     setters = s;
-    console.log(`[big-deals] постановщики для «Нераспределённых»: ${[...s].join(',')}`);
+    ropSetters = new Set([...s].filter(id => !plain?.has(id)));
+    console.log(`[big-deals] постановщики для «Нераспределённых»: РОПы ${[...ropSetters].join(',')}; все ${[...s].join(',')}`);
   }
   await loadNames(raw.flatMap(t => [t.responsibleId, t.createdBy]).map(String));
 
@@ -127,9 +130,11 @@ export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
       createdAt, changedAt: iso(t.changedDate), closedAt: iso(t.closedDate), deadlineAt: iso(t.deadline),
       inColumnSince, daysInColumn: 0, stuck: false,
       // Менеджер не назначен (РОП 19.11, «Нераспределённые»): задача висит на самом постановщике, а он из тех,
-      // кто раздаёт задачи другим и не рядовой менеджер (РОП). Только по оргструктуре нельзя: Авдейчик в ней не РОП,
+      // кто раздаёт задачи другим и не рядовой менеджер (РОП). В «Новых» («на РОПе, не разобраны») — любой
+      // постановщик: Авдейчик в оргструктуре рядовой (есть РОП), а 49 «Новых» висят на нём (прод 19.11). Только по оргструктуре нельзя: Авдейчик в ней не РОП,
       // а руководители групп (Андреева, Скворцов) сами ведут сделки.
-      unassigned: String(t.responsibleId) === String(t.createdBy) && setters.has(String(t.createdBy)),
+      unassigned: String(t.responsibleId) === String(t.createdBy)
+        && (ropSetters.has(String(t.createdBy)) || (column === 'new' && setters.has(String(t.createdBy)))),
       // Товарная группа — из сделки в БД (владелец 18.11: название задачи — свободный текст, фильтр шумел).
       // Без БД (локально) — часть названия задачи до «|».
       ...(() => {
