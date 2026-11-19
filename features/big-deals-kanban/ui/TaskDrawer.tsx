@@ -11,6 +11,7 @@ import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronDown, Clock, Copy, ExternalLink, Link2, Phone } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
+import { LogistRequestButton } from '@/features/logist-kanban/form/LogistRequestForm';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
 import { ClientSummaryPanel } from '@/features/client-module/ui/ClientSummaryPanel';
 import { TabsRibbon } from '@/features/client-module/ui/CardHeader';
@@ -207,8 +208,12 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
 /** Задачи по той же сделке (логист, снабжение…): статус, по клику — их чат (только чтение). */
 function RelatedTasks({ card, mock }: { card: BigTaskCard; mock: boolean }) {
   const [open, setOpen] = useState<number | null>(card.related.length === 1 ? card.related[0].id : null);
-  if (!card.related.length) return <p className="text-[var(--color-text-muted)]">Других задач по этой сделке (логист, снабжение) нет.</p>;
+  // «Запрос логисту» (канбан запросов логистам, S2): та же форма, что в карточке сделки
+  const ask = card.deal ? <LogistRequestButton dealId={card.deal.id} mock={mock} className="inline-flex min-h-11 items-center gap-1.5 self-start rounded-md border border-[var(--color-border)] px-3 text-[12.5px] font-medium hover:bg-[var(--color-bg-hover)]" /> : null;
+  if (!card.related.length) return <div className="flex min-w-0 flex-col gap-2">{ask}<p className="text-[var(--color-text-muted)]">Других задач по этой сделке (логист, снабжение) нет.</p></div>;
   return (
+    <div className="flex min-w-0 flex-col gap-2">
+    {ask}
     <ul className="flex min-w-0 flex-col gap-2">
       {card.related.map(r => (
         <li key={r.id} className="min-w-0 rounded-lg border border-[var(--color-border)]">
@@ -223,6 +228,7 @@ function RelatedTasks({ card, mock }: { card: BigTaskCard; mock: boolean }) {
         </li>
       ))}
     </ul>
+    </div>
   );
 }
 

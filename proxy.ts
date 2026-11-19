@@ -40,6 +40,9 @@ const PUBLIC = [
   // /oauth/authorize проверяет сессию сам и отправляет на /login?next=… — голый редирект
   // гейта потерял бы параметры запроса и вход в коннектор оборвался бы.
   '/.well-known', '/oauth',
+  // Робот Битрикса «Исходящий вебхук» на стадиях запроса логисту (S2, 19.11): сессии нет, доступ — секретом
+  // в URL, fail-closed (app/api/logist-requests/trigger). API и так проходит гейт, строка — явная пометка.
+  '/api/logist-requests/trigger',
 ];
 
 function isPublic(pathname: string): boolean {

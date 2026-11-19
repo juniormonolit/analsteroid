@@ -222,7 +222,13 @@ export interface LogistSettings {
   /** огонёк на карточке при score ≥ hotScore */
   hotScore: number;
   weights: PriorityWeights;
+  /** S2: что делает робот Битрикса на стадиях «Сделал запрос снабженцу» / «Есть цена дешевле».
+   *  send — сразу в «Новые» (как бизнес-процесс сейчас; не прошли проверки отправки, например у cheaper нет
+   *  цены конкурента, — черновик); draft — всегда черновик, менеджер дополняет и отправляет сам.
+   *  По умолчанию send (решение владельца ещё не принято — переключатель). */
+  robotMode: RobotMode;
 }
+export type RobotMode = 'send' | 'draft';
 
 // ── карточка доски и карточка запроса ───────────────────────────────────────────────────
 
@@ -478,3 +484,36 @@ export interface SyncMembersResponse {
 /** GET/PUT /api/logist-kanban/settings — PUT принимает частичный LogistSettings (canManage). */
 export type SettingsResponse = LogistSettings;
 export type SettingsBody = Partial<Omit<LogistSettings, 'weights'>> & { weights?: Partial<PriorityWeights> };
+
+// ── S2: триггер робота и форма менеджера ───────────────────────────────────────────────
+
+/** Стадии сделки, на которых робот создаёт запрос (все 4 воронки). Спека, «Типы запроса». */
+export const TRIGGER_STAGES: Record<RequestType, readonly string[]> = {
+  supply: ['EXECUTING', 'C1:EXECUTING', 'C2:PREPARATION', 'C3:PREPARATION'],
+  cheaper: ['UC_PU4HM2', 'C1:11', 'C2:4', 'C3:4'],
+};
+
+/** POST /api/logist-requests/trigger?key=<секрет>&deal=<id> — ответ роботу (ему он не нужен; для отладки). */
+export interface TriggerResponse {
+  ok: boolean;
+  /** created — создан новый; exists — уже есть открытый того же типа; skipped — стадия не наша */
+  result: 'created' | 'exists' | 'skipped';
+  requestId?: number; status?: RequestStatus; type?: RequestType;
+  /** почему создан черновик, а не сразу в «Новые» */
+  draftReason?: string;
+}
+
+/** GET /api/logist-requests/deal/:dealId — шапка и товары сделки для формы (Битрикс, только чтение),
+ *  очередь по умолчанию, открытые запросы по сделке. Ничего не создаёт. */
+export interface DealSnapshotResponse {
+  deal: DealRef;
+  client: ClientRef;
+  manager: PersonRef | null;
+  address: string | null;
+  items: ItemInput[];
+  productGroups: string[];
+  /** тип по текущей стадии сделки (если она «наша») */
+  stageType: RequestType | null;
+  defaultQueueId: number | null;
+  openByType: Partial<Record<RequestType, number>>;
+}

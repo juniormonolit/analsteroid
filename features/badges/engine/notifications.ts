@@ -207,6 +207,7 @@ function functionKeyForMsgType(msgType: string): BotChannel {
   if (msgType.startsWith('rop_digest')) return 'rop_digest';
   if (msgType.startsWith('scenario')) return 'scenarios';
   if (msgType.includes('advice')) return 'advice_feedback';
+  if (msgType.startsWith('logist_request')) return 'logist_requests';
   return 'gamification';
 }
 

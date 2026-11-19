@@ -18,6 +18,7 @@ export function Modal({
   desktopWidth = 'sm:max-w-md',
   contentClassName,
   bodyClassName,
+  overlayClassName,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -33,11 +34,14 @@ export function Modal({
    * вместе с содержимым (см. MetricBreakdownModal: карточка сделки в разборе).
    */
   bodyClassName?: string;
+  /** Классы подложки — например слой z-[75], когда модалка открывается поверх
+   *  панели z-[70] (DealCard): иначе подложка z-50 оказывается ПОД панелью. */
+  overlayClassName?: string;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
+        <Dialog.Overlay className={twMerge('fixed inset-0 z-50 bg-black/40', overlayClassName)} />
         <Dialog.Content
           className={twMerge(
             // мобильный: bottom-sheet во всю ширину, с отступом под home-индикатор

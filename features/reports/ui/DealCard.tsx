@@ -11,6 +11,7 @@ import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 import { branchLabel } from '@/lib/org/branchLabel';
 import dynamic from 'next/dynamic';
+import { LogistRequestButton } from '@/features/logist-kanban/form/LogistRequestForm';
 
 // Карточка заказчика — динамически: карточки ссылаются друг на друга (сделка →
 // заказчик → сделка, задача 17.08), статический импорт в обе стороны — цикл модулей.
@@ -307,7 +308,7 @@ export function DealCard({ dealId, onClose, stackZ }: {
                 </a>
               )}
               {deal && (
-                <div className="flex items-baseline gap-3 mt-2">
+                <div className="flex flex-wrap items-baseline gap-3 mt-2">
                   <span className="text-2xl font-bold tabular-nums text-[var(--color-text)]">{fmtMoney(deal.amount)}</span>
                   {deal.stage_name && (
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${isLostDeal
@@ -316,6 +317,8 @@ export function DealCard({ dealId, onClose, stackZ }: {
                       {deal.stage_name}
                     </span>
                   )}
+                  {/* S2 канбана запросов логистам: форма поверх панели (z-[75]) */}
+                  <LogistRequestButton dealId={deal.deal_id} overPanel />
                 </div>
               )}
             </div>

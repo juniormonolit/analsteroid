@@ -11,7 +11,7 @@ export const DEFAULT_WEIGHTS: PriorityWeights = {
   perReturn: 15,
   cheaper: 15,
 };
-export const DEFAULT_SETTINGS: LogistSettings = { slaHours: 3, slaHotHours: 1, hotScore: 60, weights: DEFAULT_WEIGHTS };
+export const DEFAULT_SETTINGS: LogistSettings = { slaHours: 3, slaHotHours: 1, hotScore: 60, weights: DEFAULT_WEIGHTS, robotMode: 'send' };
 
 const num = (v: unknown, min: number, max: number): number | null =>
   typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : null;
@@ -30,6 +30,7 @@ export function mergeSettings(raw: unknown): LogistSettings {
     slaHotHours: num(r.slaHotHours, 0, 100) ?? DEFAULT_SETTINGS.slaHotHours,
     hotScore: num(r.hotScore, 0, 100_000) ?? DEFAULT_SETTINGS.hotScore,
     weights,
+    robotMode: r.robotMode === 'draft' ? 'draft' : 'send',
   };
 }
 
