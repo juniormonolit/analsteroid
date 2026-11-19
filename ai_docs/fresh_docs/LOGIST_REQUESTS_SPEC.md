@@ -242,8 +242,7 @@
 - **Загрузка файлов** — таблица `logist_request_files` и `fileIds` в телах есть, эндпоинта загрузки нет: файлы живут
   на Диске Битрикса (`features/repeat-kanban/engine/attachments.ts`), это запись в Битрикс → S4. Контракт под него:
   `POST /api/logist-kanban/files` (multipart `files`) → `{ files: FileRef[] }` со строкой в `logist_request_files` (request_id NULL до привязки).
-- **Исход сделки** — `syncDealOutcomes()` в `repo.ts` (sa.deals sold_at/lost_at → `deal_outcome` + событие) написан,
-  фоновая задача не подключена (прод: `BACKGROUND_JOBS_ALLOW`).
+- ~~**Исход сделки**~~ — S5: `syncDealOutcomes()` раз в час в фоновой задаче `logistRequests` (прод: `BACKGROUND_JOBS_ALLOW`).
 - **Наблюдатели** — таблица есть, действий добавить/убрать нет (нужны S3 — решить при вёрстке карточки).
 - **Состав очередей из Битрикса — что внутри проектов (разведка 19.11, к владельцу).** Вебхук читает все 29 проектов
   Панели снабжения (`sonet_group.user.get`, 376 участий, 73 человека, все активны). Но в проектах не только логисты:
@@ -305,6 +304,30 @@ dry-run менеджерских пушей, сообщения только п�
 Вход из Битрикса: `/api/bitrix/app/logist-kanban` → `/bx/logist-kanban` → `/logist-kanban` (CSP `frame-ancestors` — портал).
 Гид: `/logist-kanban/guide`, текст — `features/logist-kanban/guide/content.ts` (правило «инструкция не отстаёт»).
 Прототип на `sd` удалён (`engine/board.ts`, корневой `route.ts`, `requests/[id]`, `guard.ts`); таблица — миграция 269, не применять до выкатки.
+
+## S5 (19.11): «Запросы логистам» в ЛК, аналитика, уведомления
+
+- **«Запросы логистам» в ЛК** — `/profile/logist-requests` (пункт меню `useProfileNav` = рельса и мобильная шторка ЛК, у всех с
+  карточкой менеджера/отдела, счётчик «ждут меня»). `features/logist-kanban/ui/MyRequestsPage.tsx`: группы «Ждут меня» (ответ
+  пришёл / новое в чате) · «У логиста» · «Черновики» · «Закрытые» (90 дн.) · «Все»; карточка — `RequestCardView`, открытый
+  запрос — `RequestDrawer` S3 по `?req=<id>` (сюда ведут ссылки бота менеджеру), черновик и «Новый запрос» (номер/ссылка сделки)
+  — форма S2. API `GET /api/logist-kanban/my` → `MyRequestsResponse`, `?count=1` → `{ attention }`. Гид без гейта раздела —
+  `/profile/logist-requests/guide` (тот же `content.ts`).
+- **Аналитика** — вкладка там же (РОП: менеджеры зоны `ropScope`; руководитель логистики/админ: всё) + кнопка над доской.
+  `GET /api/logist-kanban/analytics?from&to&<фильтры доски>` → `AnalyticsResponse`: итоговые плитки (`computeTiles`) и строки
+  регион → департамент → очередь → логист (`my.ts buildAnalytics`; логист узла — текущий держатель, «Не взят»), плюс снимок
+  «сейчас на логисте / просрочено». В выборку — запросы с событиями в периоде или открытые.
+- **Уведомления** — `engine/requests/notify.ts`, из `afterLogistChange` (в фоне) и фоновой проверки SLA. Логистам очереди: новый
+  (send / transfer / return без держателя), «горит SLA» по не взятому; держателю: возврат, чат, назначение, «горит», принят /
+  отменён; менеджеру: ответ, чат; РОПу менеджера (`sa.org_resolved_hierarchy`): просрочка. Робот S2 («запрос ушёл / дополни») —
+  не дублируется. Всё через `sendManagerBotMessage` (dry-run, журнал). Функции бота: менеджеру — `logist_requests` (271,
+  msgType `logist_request_*`), логистам/РОПам — `logist_requests_staff` (**миграция 272**, msgType `logist_staff_*`).
+  Повторы — `logist_request_notifications` (272): «горит»/«просрочка» раз на цикл и получателя, чат — не чаще 15 мин.
+- **Фильтр получателей** (в проектах не только логисты): `LogistSettings.notify` = `{ positionPatterns, includeBitrixIds,
+  excludeBitrixIds }`, по умолчанию `['логист','снабж']` (`recipients.ts`). Экран — «Настройки» канбана: слова должности +
+  у каждого участника очереди кнопка «🔔 получает / 🔕 без уведомл.». Видимость и «Взять» не режет. **Владелец подтвердит.**
+- **Фоновая задача `logistRequests`** (instrumentation.ts): каждые 10 мин `sweepSla()` (только будни 9–18 МСК), раз в час
+  `syncDealOutcomes()`; advisory-lock на кластер. Прод: `BACKGROUND_JOBS_ALLOW=…,logistRequests`.
 
 ## Подсессии
 

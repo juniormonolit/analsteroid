@@ -227,8 +227,20 @@ export interface LogistSettings {
    *  цены конкурента, — черновик); draft — всегда черновик, менеджер дополняет и отправляет сам.
    *  По умолчанию send (решение владельца ещё не принято — переключатель). */
   robotMode: RobotMode;
+  /** S5: кому из участников очереди слать «новый запрос» / «горит SLA» (в проектах Битрикса есть не-логисты). */
+  notify: NotifyRecipientsSettings;
 }
 export type RobotMode = 'send' | 'draft';
+
+/** S5: фильтр получателей уведомлений логистам очереди. Участник получает, если он в includeBitrixIds,
+ *  либо (не в excludeBitrixIds И должность содержит одну из positionPatterns, без учёта регистра).
+ *  Пустой positionPatterns — фильтра по должности нет (все, кроме исключённых). Видимость и «Взять» не режет —
+ *  только рассылку. По умолчанию — «логист», «снабж» (владелец подтвердит). */
+export interface NotifyRecipientsSettings {
+  positionPatterns: string[];
+  includeBitrixIds: string[];
+  excludeBitrixIds: string[];
+}
 
 // ── карточка доски и карточка запроса ───────────────────────────────────────────────────
 
@@ -518,4 +530,50 @@ export interface DealSnapshotResponse {
   stageType: RequestType | null;
   defaultQueueId: number | null;
   openByType: Partial<Record<RequestType, number>>;
+}
+
+// ── S5: «Мои запросы» менеджера и аналитика руководителей ──────────────────────────────
+
+/** Что ждёт от менеджера: answered — пришёл ответ (принять / вернуть); chat — непрочитанное в чате;
+ *  draft — черновик не отправлен. null — ход не за ним. */
+export type MyAttention = 'answered' | 'chat' | 'draft' | null;
+
+/** GET /api/logist-kanban/my[?days=90] — свои запросы менеджера (автор или менеджер запроса), без фильтров доски.
+ *  Закрытые (accepted/cancelled) — за `days` дней по последнему событию. */
+export interface MyRequestsResponse {
+  me: ActorInfo;
+  /** все свои, новые сверху; attention — по карточке */
+  cards: (RequestCard & { attention: MyAttention })[];
+  counts: { attention: number; waiting: number; draft: number; closed: number };
+  /** очереди — для карточки (передать в другую очередь и т.п.) */
+  queues: QueueRef[];
+  /** доступна ли вкладка «Аналитика» (РОП зоны / руководитель логистики / админ) */
+  canAnalytics: boolean;
+}
+
+/** Уровень разреза аналитики: регион → департамент → очередь → логист (как в Панели снабжения). */
+export type AnalyticsLevel = 'region' | 'dept' | 'queue' | 'logist';
+
+export interface AnalyticsRow {
+  /** путь ключей от корня (`МСК`, `МСК|ОС`, `МСК|ОС|5`, `МСК|ОС|5|2007`) — уникален, по нему раскрытие */
+  key: string;
+  level: AnalyticsLevel;
+  label: string;
+  parentKey: string | null;
+  tiles: Tiles;
+  /** сейчас на логисте (new/in_work) и из них с просроченным SLA — снимок на момент запроса */
+  openNow: number;
+  overdueNow: number;
+}
+
+/** GET /api/logist-kanban/analytics?from=&to=&<фильтры доски> — РОП (зона), руководитель логистики/админ (всё).
+ *  Плитки — computeTiles по запросам узла; логист узла — текущий держатель (не взят — «не взят»). */
+export interface AnalyticsResponse {
+  periodFrom: string; periodTo: string;
+  total: AnalyticsRow;
+  rows: AnalyticsRow[];
+  /** чей срез: all — весь поток, zone — менеджеры зоны РОПа */
+  scope: 'all' | 'zone';
+  options: BoardResponse['options'];
+  filters: LogistFilters;
 }

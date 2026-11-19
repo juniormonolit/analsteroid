@@ -119,6 +119,8 @@ export const BOT_FUNCTION_KEYS = [
   // Канбан запросов логистам (S2, 19.11): менеджеру — «запрос ушёл / дополни черновик» по роботу стадии.
   // Миграция 271, выключено по умолчанию.
   'logist_requests',
+  // S5 (19.11): логистам очереди — новый запрос / горит SLA / возврат / чат; РОПу — просрочка. Миграция 272, выключено.
+  'logist_requests_staff',
 ] as const;
 export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
 

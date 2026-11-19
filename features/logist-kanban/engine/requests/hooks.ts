@@ -24,6 +24,10 @@ export async function afterLogistChange(ctx: LogistHookCtx): Promise<void> {
   } catch (e) {
     console.error('[logist-bx] очередь', ctx.action, ctx.request.id, e instanceof Error ? e.message : e);
   }
+  // S5: бот «Аналитик» (notify.ts) — в фоне: ответ пользователю не ждёт отправку в Битрикс (сервер — долгоживущий node)
+  void import('./notify')
+    .then(({ notifyForChange }) => notifyForChange(ctx))
+    .catch(e => console.error('[logist-notify]', ctx.action, ctx.request.id, e instanceof Error ? e.message : e));
 }
 
 /** «Принять вариант» → переписать товары сделки (crm.deal.productrows.set от имени менеджера). S4.

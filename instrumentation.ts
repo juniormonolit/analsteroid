@@ -68,6 +68,7 @@ export async function register() {
     if (allow.has('supplyPanelSync')) scheduleSupplyPanelSync();
     if (allow.has('logistQueueMembers')) scheduleLogistQueueMembers();
     if (allow.has('logistBxSync')) scheduleLogistBxSync();
+    if (allow.has('logistRequests')) scheduleLogistRequests();
     if (allow.has('dailyReport')) scheduleMoscowReport();
     if (allow.has('repeatKanbanSnapshot')) scheduleRepeatKanbanSnapshot();
     if (allow.has('repeatQueueIssue')) scheduleRepeatQueueIssue();
@@ -103,6 +104,7 @@ export async function register() {
   scheduleSupplyPanelSync();
   scheduleLogistQueueMembers();
   scheduleLogistBxSync();
+  scheduleLogistRequests();
   scheduleRepeatQueueIssue();
   scheduleRepeatMorning();
   scheduleRepeatAutoBrak();
@@ -932,6 +934,48 @@ function scheduleLogistBxSync() {
     }
   };
   setInterval(() => { void tick(); }, 60 * 1000);
+}
+
+// Канбан запросов логистам, S5: раз в 10 минут — проверка SLA (бот «Аналитик»: «горит» логистам, «просрочен» РОПу;
+// только в рабочее время, раз на цикл — журнал logist_request_notifications) и раз в час — исход сделок из sa.deals
+// (syncDealOutcomes: продано/забраковано → deal_outcome, вкладка «Сделки», «Сумма продаж»). Отправка гейтится функциями
+// бота logist_requests / logist_requests_staff и общим dry-run. Один тик на кластер — pg_try_advisory_lock.
+// На проде — BACKGROUND_JOBS_ALLOW=…,logistRequests.
+function scheduleLogistRequests() {
+  let running = false;
+  let lastOutcomes = 0;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    const { systemDb } = await import('./lib/db/clients');
+    const client = await systemDb().connect().catch(() => null);
+    if (!client) { running = false; return; }
+    try {
+      const lock = await client.query<{ ok: boolean }>(`SELECT pg_try_advisory_lock(hashtext('logist_requests_job')) AS ok`);
+      if (!lock.rows[0]?.ok) return;
+      try {
+        const { sweepSla } = await import('./features/logist-kanban/engine/requests/notify');
+        const s = await sweepSla();
+        if (s.sent) console.log(`[logistRequests] SLA: на логисте ${s.checked}, горит ${s.hot}, просрочено ${s.overdue}, сообщений ${s.sent}`);
+        if (Date.now() - lastOutcomes > 60 * 60 * 1000) {
+          lastOutcomes = Date.now();
+          const { syncDealOutcomes } = await import('./features/logist-kanban/engine/requests/repo');
+          const o = await syncDealOutcomes();
+          if (o.updated) console.log(`[logistRequests] исход сделок: проверено ${o.checked}, отмечено ${o.updated}`);
+        }
+      } finally {
+        await client.query(`SELECT pg_advisory_unlock(hashtext('logist_requests_job'))`).catch(() => {});
+      }
+    } catch (err) {
+      // до миграций 267/272 таблиц нет — молча ждём
+      if ((err as { code?: string }).code !== '42P01') console.error('[logistRequests] не удалось:', err instanceof Error ? err.message : err);
+    } finally {
+      client.release();
+      running = false;
+    }
+  };
+  setTimeout(() => { void tick(); }, 2 * 60 * 1000);
+  setInterval(() => { void tick(); }, 10 * 60 * 1000);
 }
 
 function scheduleSupplyPanelSync() {

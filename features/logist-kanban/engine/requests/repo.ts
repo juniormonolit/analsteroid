@@ -52,14 +52,14 @@ export async function saveSettings(patch: unknown, by: string): Promise<LogistSe
   return merged;
 }
 
-function queueMap(queues: LogistQueue[]): CardCtx['queues'] {
+export function queueMap(queues: LogistQueue[]): CardCtx['queues'] {
   return new Map(queues.map(q => [q.id, { id: q.id, groupId: q.groupId, name: q.name, region: q.region, dept: q.dept, slaHours: q.slaHours }]));
 }
 
 // ── выборка ─────────────────────────────────────────────────────────────────────────────
 
 /** SELECT карточки: r.* + краткие позиции, число вариантов, непрочитанные. $1 — bitrix id текущего (или ''). */
-const CARD_SELECT = `
+export const CARD_SELECT = `
   SELECT r.*,
     (SELECT jsonb_agg(jsonb_build_object('name', i.name, 'quantity', i.quantity, 'measure', i.measure, 'our_price', i.our_price,
                                          'product_group', i.product_group, 'competitor_price', i.competitor_price) ORDER BY i.pos, i.id)

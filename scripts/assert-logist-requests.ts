@@ -17,7 +17,9 @@ import { filtersToSearchParams, matchFilters, parseFilters, sortComparator } fro
 import { offerTotals, parseAction, parseOffer, sendProblems, InputError } from '../features/logist-kanban/engine/requests/validate.ts';
 import { membersFromBitrix, pickDefaultQueue, queuesFromSupplyFacts, regionFromName } from '../features/logist-kanban/engine/requests/routing.ts';
 import { computeTiles } from '../features/logist-kanban/engine/requests/tiles.ts';
-import type { LogistQueue, RequestCard } from '../features/logist-kanban/engine/requests/contract.ts';
+import type { LogistQueue, QueueMember, RequestCard } from '../features/logist-kanban/engine/requests/contract.ts';
+import { queueRecipients, recipientVerdict } from '../features/logist-kanban/engine/requests/recipients.ts';
+import { attentionOf, buildAnalytics } from '../features/logist-kanban/engine/requests/my.ts';
 
 let failures = 0, passed = 0;
 function check(cond: boolean, label: string, extra?: unknown) {
@@ -199,6 +201,33 @@ const tiles = computeTiles([
 ], '2026-11-19', '2026-11-19');
 check(tiles.newCount === 1 && tiles.reopenedCount === 1 && tiles.takeSpeedH === 1 && tiles.answerSpeedH === 3 && tiles.execSpeedH === 2, 'плитки за день', tiles);
 check(tiles.salesSum === 10_000 && tiles.salesCount === 1, 'сумма продаж — по сделкам с исходом sold');
+
+// ── S5: получатели уведомлений, «ждёт меня», разрез аналитики ───────────────────────────
+console.log('S5');
+const notify = mergeSettings({}).notify;
+check(notify.positionPatterns.join() === 'логист,снабж', 'по умолчанию — «логист», «снабж»', notify);
+check(mergeSettings({ notify: { positionPatterns: ['ЛОГИСТ', 7], includeBitrixIds: ['12', 'x'], excludeBitrixIds: 'bad' } }).notify.positionPatterns.join() === 'логист,7'
+  && mergeSettings({ notify: { includeBitrixIds: ['12', 'x'] } }).notify.includeBitrixIds.join() === '12', 'настройки получателей чистятся');
+const mem = (id: string, pos: string | null): QueueMember => ({ bitrixId: id, name: id, role: 'logist', source: 'bitrix', bxRole: 'K', workPosition: pos, syncedAt: null });
+const members = [mem('1', 'Логист ОС'), mem('2', 'Генеральный директор'), mem('3', null), mem('4', 'Специалист по снабжению'), mem('5', 'Разработчик')];
+check(queueRecipients(members, notify).join() === '1,4', 'рассылка — только логисты/снабженцы по должности');
+const custom = { ...notify, includeBitrixIds: ['3'], excludeBitrixIds: ['4'] };
+check(queueRecipients(members, custom, '1').join() === '3', 'ручное включение/исключение, автор действия — мимо');
+check(recipientVerdict(members[1]!, notify) === 'other_position' && recipientVerdict(members[2]!, notify) === 'no_position', 'почему не получает');
+check(queueRecipients(members, { ...notify, positionPatterns: [] }).length === 5, 'пустой список слов — всем');
+check(attentionOf({ status: 'answered', unread: 0 }) === 'answered' && attentionOf({ status: 'in_work', unread: 2 }) === 'chat'
+  && attentionOf({ status: 'draft', unread: 0 }) === 'draft' && attentionOf({ status: 'new', unread: 0 }) === null
+  && attentionOf({ status: 'cancelled', unread: 3 }) === null, '«ждёт меня»: ответ, чат, черновик');
+const L2 = { bitrixId: '2008', name: 'Пётр' };
+const an = buildAnalytics([
+  { card: card({ id: 1, logist: L }), events: [{ at: msk('2026-11-19T10:00'), kind: 'sent', actor: null }, { at: msk('2026-11-19T11:00'), kind: 'taken', actor: L }] },
+  { card: card({ id: 2, logist: L2 }), events: [{ at: msk('2026-11-19T12:00'), kind: 'sent', actor: null }] },
+  { card: card({ id: 3, region: 'СПБ', queue: null, sla: { hours: 3, deadline: null, leftHours: -1, state: 'overdue' } }), events: [{ at: msk('2026-11-19T12:00'), kind: 'sent', actor: null }] },
+], '2026-11-19', '2026-11-19');
+check(an.total.tiles.newCount === 3 && an.total.openNow === 3 && an.total.overdueNow === 1, 'итог разреза');
+check(an.rows.find(r => r.key === 'МСК')!.tiles.newCount === 2 && an.rows.find(r => r.key === 'МСК|ОС|5')!.tiles.newCount === 2, 'регион и очередь');
+check(an.rows.filter(r => r.level === 'logist' && r.parentKey === 'МСК|ОС|5').length === 2 && an.rows.find(r => r.key === 'МСК|ОС|5|200')!.tiles.takeSpeedH === 1, 'логисты очереди');
+check(an.rows.find(r => r.key === 'СПБ|ОС|0')?.label === 'Без очереди' && an.rows.find(r => r.key === 'СПБ|ОС|0|0')?.label === 'Не взят', 'без очереди / не взят');
 
 console.log(`\n${passed} ok, ${failures} fail`);
 if (failures) process.exit(1);

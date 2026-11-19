@@ -9,11 +9,12 @@ import { ChevronDown, RefreshCw, Sprout } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import type {
-  LogistQueue, LogistSettings, PriorityWeights, RobotMode, QueueUpsertBody, QueuesResponse, SeedQueuesResponse, SettingsBody, SyncMembersResponse,
+  LogistQueue, LogistSettings, NotifyRecipientsSettings, QueueMember, PriorityWeights, RobotMode, QueueUpsertBody, QueuesResponse, SeedQueuesResponse, SettingsBody, SyncMembersResponse,
 } from '../engine/requests/contract';
 import { lkFetch, postJson, putJson } from './api';
 import { fmtDT } from './format';
 import { INPUT } from './Offers';
+import { VERDICT_LABEL, isRecipient, recipientVerdict } from '../engine/requests/recipients';
 
 const WEIGHT_FIELDS: { key: keyof PriorityWeights; label: string; hint: string }[] = [
   { key: 'slaOverdue', label: 'SLA просрочен — разово', hint: 'очков сразу при просрочке' },
@@ -56,6 +57,7 @@ export function SettingsDrawer({ onClose, onChanged }: { onClose: () => void; on
       <div className="flex min-w-0 flex-col gap-4 text-[13px] text-[var(--color-text)]">
         {q.error && <p className="text-sm text-[var(--color-negative)]">{(q.error as Error).message}</p>}
         {q.data && <SettingsForm initial={q.data.settings} onSaved={() => { void qc.invalidateQueries({ queryKey: ['logist-queues'] }); onChanged(); }} />}
+        {q.data && <NotifyForm notify={q.data.settings.notify} queues={q.data.queues} onSaved={() => void qc.invalidateQueries({ queryKey: ['logist-queues'] })} />}
 
         <section className="flex min-w-0 flex-col gap-2">
           <h3 className="text-sm font-semibold">Очереди ({q.data?.queues.length ?? '…'})</h3>
@@ -79,7 +81,8 @@ export function SettingsDrawer({ onClose, onChanged }: { onClose: () => void; on
           {q.isLoading && <p className="text-[var(--color-text-muted)]">Загружаю…</p>}
           {q.data && q.data.queues.length === 0 && <p className="text-[var(--color-text-muted)]">Очередей нет — нажмите «Посеять очереди».</p>}
           <div className="flex min-w-0 flex-col gap-1.5">
-            {q.data?.queues.map(queue => <QueueRow key={queue.id} queue={queue} defaultSla={q.data.settings.slaHours} onSaved={() => void qc.invalidateQueries({ queryKey: ['logist-queues'] })} />)}
+            {q.data?.queues.map(queue => <QueueRow key={queue.id} queue={queue} defaultSla={q.data.settings.slaHours} notify={q.data.settings.notify}
+              onSaved={() => void qc.invalidateQueries({ queryKey: ['logist-queues'] })} />)}
           </div>
         </section>
       </div>
@@ -153,7 +156,69 @@ function SettingsForm({ initial, onSaved }: { initial: LogistSettings; onSaved: 
   );
 }
 
-function QueueRow({ queue: q, defaultSla, onSaved }: { queue: LogistQueue; defaultSla: number; onSaved: () => void }) {
+// ── S5: кому слать «новый запрос» / «горит SLA» ─────────────────────────────────────────
+
+const saveNotify = (notify: NotifyRecipientsSettings) => putJson<LogistSettings>('/api/logist-kanban/settings', { notify } satisfies SettingsBody);
+
+/** Участник: включить/исключить из рассылки вручную (видимость и «Взять» не меняются). */
+function toggledNotify(n: NotifyRecipientsSettings, m: QueueMember): NotifyRecipientsSettings {
+  const on = isRecipient(recipientVerdict(m, n));
+  const inc = n.includeBitrixIds.filter(x => x !== m.bitrixId), exc = n.excludeBitrixIds.filter(x => x !== m.bitrixId);
+  if (on) return { ...n, includeBitrixIds: inc, excludeBitrixIds: [...exc, m.bitrixId] };
+  return { ...n, includeBitrixIds: [...inc, m.bitrixId], excludeBitrixIds: exc };
+}
+
+function NotifyForm({ notify, queues, onSaved }: { notify: NotifyRecipientsSettings; queues: LogistQueue[]; onSaved: () => void }) {
+  const [text, setText] = useState(notify.positionPatterns.join(', '));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; bad: boolean } | null>(null);
+  useEffect(() => { setText(notify.positionPatterns.join(', ')); }, [notify.positionPatterns]);
+  const people = useMemo(() => {
+    const m = new Map<string, QueueMember>();
+    for (const q of queues) if (q.active) for (const x of q.members) m.set(x.bitrixId, x);
+    return [...m.values()];
+  }, [queues]);
+  const on = people.filter(p => isRecipient(recipientVerdict(p, notify))).length;
+  const dirty = text !== notify.positionPatterns.join(', ');
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      await saveNotify({ ...notify, positionPatterns: text.split(',').map(x => x.trim().toLowerCase()).filter(Boolean) });
+      setMsg({ text: 'Сохранено', bad: false }); onSaved();
+    } catch (e) { setMsg({ text: e instanceof Error ? e.message : 'Не сохранилось', bad: true }); }
+    finally { setBusy(false); }
+  };
+  return (
+    <section className="flex min-w-0 flex-col gap-2">
+      <h3 className="text-sm font-semibold">Уведомления логистам (бот «Аналитик»)</h3>
+      <p className="text-[12px] text-[var(--color-text-muted)]">
+        В проектах Битрикса кроме логистов есть руководители, РОПы, разработчики. «Новый запрос» и «горит SLA» получают только те участники
+        очереди, у кого должность содержит одно из слов ниже, плюс включённые вручную (в списке участников очереди — кнопка у человека).
+        Видеть запросы и брать их это не мешает. Сейчас получают {on} из {people.length} участников активных очередей.
+      </p>
+      <div className="flex min-w-0 flex-wrap items-end gap-2">
+        <label className="flex min-w-0 flex-1 basis-64 flex-col gap-1 text-[12px] text-[var(--color-text-muted)]">
+          Слова в должности (через запятую; пусто — всем, кроме исключённых)
+          <input value={text} onChange={e => setText(e.target.value)} placeholder="логист, снабж" className={INPUT} />
+        </label>
+        {dirty && <button type="button" disabled={busy} onClick={save} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-medium text-white disabled:opacity-50">{busy ? 'Сохраняю…' : 'Сохранить'}</button>}
+      </div>
+      {(notify.includeBitrixIds.length > 0 || notify.excludeBitrixIds.length > 0) && (
+        <p className="text-[12px] text-[var(--color-text-secondary)]">Вручную: включено {notify.includeBitrixIds.length}, исключено {notify.excludeBitrixIds.length}.</p>
+      )}
+      {msg && <p role={msg.bad ? 'alert' : 'status'} className={`text-[12.5px] ${msg.bad ? 'text-[var(--color-negative)]' : 'text-[var(--color-positive)]'}`}>{msg.text}</p>}
+    </section>
+  );
+}
+
+function QueueRow({ queue: q, defaultSla, notify, onSaved }: { queue: LogistQueue; defaultSla: number; notify: NotifyRecipientsSettings; onSaved: () => void }) {
+  const [toggling, setToggling] = useState<string | null>(null);
+  const toggleNotify = async (m: QueueMember) => {
+    setToggling(m.bitrixId); setErr(null);
+    try { await saveNotify(toggledNotify(notify, m)); onSaved(); }
+    catch (e) { setErr(e instanceof Error ? e.message : 'Не сохранилось'); }
+    finally { setToggling(null); }
+  };
   const [open, setOpen] = useState(false);
   const [sla, setSla] = useState(q.slaHours != null ? String(q.slaHours) : '');
   const [busy, setBusy] = useState(false);
@@ -195,12 +260,23 @@ function QueueRow({ queue: q, defaultSla, onSaved }: { queue: LogistQueue; defau
             {q.membersSyncError && <span className="text-[12px] text-[var(--color-negative)]">{q.membersSyncError}</span>}
             {q.members.length === 0 ? <span className="text-[12px] text-[var(--color-text-muted)]">участников нет</span> : (
               <ul className="flex min-w-0 flex-col gap-0.5 text-[12.5px]">
-                {q.members.map(m => (
-                  <li key={m.bitrixId} className="min-w-0 truncate">
-                    {m.name ?? `id ${m.bitrixId}`}
-                    <span className="text-[var(--color-text-muted)]">{m.workPosition ? ` · ${m.workPosition}` : ' · должность не указана'}{m.role === 'lead' ? ' · руководитель' : ''}</span>
-                  </li>
-                ))}
+                {q.members.map(m => {
+                  const v = recipientVerdict(m, notify);
+                  const recv = isRecipient(v);
+                  return (
+                    <li key={m.bitrixId} className="flex min-w-0 items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate">
+                        {m.name ?? `id ${m.bitrixId}`}
+                        <span className="text-[var(--color-text-muted)]">{m.workPosition ? ` · ${m.workPosition}` : ' · должность не указана'}{m.role === 'lead' ? ' · руководитель' : ''}</span>
+                      </span>
+                      <button type="button" disabled={toggling === m.bitrixId} onClick={() => void toggleNotify(m)}
+                        title={`${recv ? 'Получает' : 'Не получает'} уведомления: ${VERDICT_LABEL[v]}. Нажмите, чтобы ${recv ? 'исключить' : 'включить'}.`}
+                        className={`tap-target min-h-9 shrink-0 rounded-md border px-2 text-[11.5px] disabled:opacity-50 ${recv ? 'border-[var(--color-positive)] text-[var(--color-positive)]' : 'border-[var(--color-border)] text-[var(--color-text-muted)]'}`}>
+                        {recv ? '🔔 получает' : '🔕 без уведомл.'}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>

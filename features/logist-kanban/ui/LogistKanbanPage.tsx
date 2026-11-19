@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FilePen, HelpCircle, RefreshCw, Search, Settings, User, UserX, X } from 'lucide-react';
+import { BarChart3, FilePen, HelpCircle, RefreshCw, Search, Settings, User, UserX, X } from 'lucide-react';
 import { enumParam, intParam, stringParam, useUrlModal, useUrlState } from '@/lib/hooks/useUrlState';
 import {
   BOARD_COLUMNS, REQUEST_TYPES, REQUEST_TYPE_LABEL,
@@ -125,6 +125,11 @@ export function LogistKanbanPage() {
                 <Settings size={16} aria-hidden /> <span className="hidden min-[420px]:inline">Настройки</span>
               </button>
             )}
+            {(me?.canManage || me?.isRop) && (
+              <Link href="/profile/logist-requests?tab=analytics" className={BTN_IDLE} title="Аналитика: плитки и разрез регион → департамент → очередь → логист" aria-label="Аналитика">
+                <BarChart3 size={16} aria-hidden /> <span className="hidden min-[420px]:inline">Аналитика</span>
+              </Link>
+            )}
             <Link href="/logist-kanban/guide" className={BTN_IDLE} title="Инструкция: как работать с канбаном логиста" aria-label="Как работать?">
               <HelpCircle size={16} aria-hidden /> <span className="hidden min-[420px]:inline">Как работать?</span>
             </Link>
@@ -210,7 +215,7 @@ function findCard(d: BoardResponse | undefined, id: number): RequestCard | null 
 
 const pDate = (ymd: string) => ymd.slice(0, 10).split('-').reverse().slice(0, 2).join('.');
 
-function TilesRow({ tiles: t }: { tiles: Tiles }) {
+export function TilesRow({ tiles: t }: { tiles: Tiles }) {
   const items: { label: string; short: string; value: string; hint: string }[] = [
     { label: 'Новые', short: 'Новые', value: String(t.newCount), hint: 'Отправлено запросов за период' },
     { label: 'Возобновлённые', short: 'Возвраты', value: String(t.reopenedCount), hint: 'Возвратов на доработку за период' },

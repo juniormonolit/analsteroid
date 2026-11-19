@@ -1,6 +1,6 @@
 // SLA и приоритет («огонёк») — чистые функции. Веса — в настройках (logist_request_settings, админ),
 // здесь значения по умолчанию и их проверка. Решение владельца: SLA по умолчанию 3 рабочих часа на цикл.
-import type { LogistSettings, PriorityFactor, PriorityInfo, PriorityWeights, RequestStatus, RequestType, SlaInfo } from './contract';
+import type { LogistSettings, NotifyRecipientsSettings, PriorityFactor, PriorityInfo, PriorityWeights, RequestStatus, RequestType, SlaInfo } from './contract';
 import { addWorkHours, workHoursBetween, workHoursLeft } from './worktime';
 
 export const DEFAULT_WEIGHTS: PriorityWeights = {
@@ -11,7 +11,25 @@ export const DEFAULT_WEIGHTS: PriorityWeights = {
   perReturn: 15,
   cheaper: 15,
 };
-export const DEFAULT_SETTINGS: LogistSettings = { slaHours: 3, slaHotHours: 1, hotScore: 60, weights: DEFAULT_WEIGHTS, robotMode: 'send' };
+/** S5: по умолчанию уведомления «новый запрос / горит SLA» — тем, у кого в должности «логист» или «снабж». */
+export const DEFAULT_NOTIFY: NotifyRecipientsSettings = { positionPatterns: ['логист', 'снабж'], includeBitrixIds: [], excludeBitrixIds: [] };
+export const DEFAULT_SETTINGS: LogistSettings = { slaHours: 3, slaHotHours: 1, hotScore: 60, weights: DEFAULT_WEIGHTS, robotMode: 'send', notify: DEFAULT_NOTIFY };
+
+const strList = (v: unknown, max: number, re?: RegExp): string[] | null => {
+  if (!Array.isArray(v)) return null;
+  const out = [...new Set(v.filter((x): x is string | number => typeof x === 'string' || typeof x === 'number')
+    .map(x => String(x).trim().slice(0, 100)).filter(x => x && (!re || re.test(x))))];
+  return out.slice(0, max);
+};
+
+export function mergeNotify(raw: unknown): NotifyRecipientsSettings {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    positionPatterns: (strList(r.positionPatterns, 30) ?? DEFAULT_NOTIFY.positionPatterns).map(x => x.toLowerCase()),
+    includeBitrixIds: strList(r.includeBitrixIds, 500, /^\d+$/) ?? [],
+    excludeBitrixIds: strList(r.excludeBitrixIds, 500, /^\d+$/) ?? [],
+  };
+}
 
 const num = (v: unknown, min: number, max: number): number | null =>
   typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : null;
@@ -31,6 +49,7 @@ export function mergeSettings(raw: unknown): LogistSettings {
     hotScore: num(r.hotScore, 0, 100_000) ?? DEFAULT_SETTINGS.hotScore,
     weights,
     robotMode: r.robotMode === 'draft' ? 'draft' : 'send',
+    notify: mergeNotify(r.notify),
   };
 }
 
