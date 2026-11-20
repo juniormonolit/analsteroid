@@ -56,10 +56,8 @@ interface DeptRow {
   rop_name: string | null;
   department_director_bitrix_user_id: string | null;
   department_director_name: string | null;
-  rop_override_id: string | null;
-  rop_override_name: string | null;
-  director_override_id: string | null;
-  director_override_name: string | null;
+  rop_overrides: OverridePerson[];
+  director_overrides: OverridePerson[];
 }
 
 interface Employee { id: string; name: string | null; department_name: string | null; short_login: string | null }
@@ -169,14 +167,15 @@ export default function CallControlBotPage() {
     await reload();
   }
 
-  async function setOverride(departmentId: string, role: 'rop' | 'department_director', bitrixUserId: string | null) {
+  // Ручных получателей на уровень может быть несколько (миграция 273): add / remove одного / reset всех.
+  async function setOverride(departmentId: string, role: 'rop' | 'department_director', action: OverrideAction, bitrixUserId?: string) {
     const res = await fetch('/api/settings/bots/call-control/departments', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ departmentId, role, bitrixUserId }),
+      body: JSON.stringify({ departmentId, role, action, bitrixUserId }),
     });
     const data = await res.json();
     if (!res.ok) { flash('error', data.error ?? 'Ошибка'); return; }
-    flash('success', bitrixUserId ? 'Получатель назначен вручную' : 'Сброшено на оргструктуру');
+    flash('success', action === 'add' ? 'Получатель добавлен' : action === 'remove' ? 'Получатель убран' : 'Сброшено на оргструктуру');
     await reload();
   }
 
@@ -325,8 +324,9 @@ export default function CallControlBotPage() {
         <h2 className="text-sm font-semibold text-[var(--color-text)] mb-2">Получатели по отделам</h2>
         <p className="text-xs text-[var(--color-text-muted)] mb-2">
           Кому уходят эскалации уровней «РОПу» и «Директору департамента» для менеджеров
-          каждого отдела. По умолчанию — по оргструктуре («авто»), клик по ячейке —
-          назначить любого сотрудника вручную в обход оргструктуры.
+          каждого отдела. По умолчанию — по оргструктуре («авто»). «+ добавить» — назначить
+          вручную одного или нескольких сотрудников: уведомление уйдёт каждому из них,
+          оргструктура для этой ячейки больше не используется.
         </p>
         <div className="scroll-x border border-[var(--color-border)] rounded-lg">
           <table className="w-full text-sm min-w-[640px]">
@@ -344,16 +344,16 @@ export default function CallControlBotPage() {
                   <td className="px-3 py-2">
                     <RecipientCell
                       autoName={d.rop_name} autoId={d.rop_bitrix_user_id}
-                      overrideName={d.rop_override_name} overrideId={d.rop_override_id}
-                      onPick={id => setOverride(d.department_id, 'rop', id)}
+                      overrides={d.rop_overrides}
+                      onChange={(action, id) => setOverride(d.department_id, 'rop', action, id)}
                       inputCls={inputCls}
                     />
                   </td>
                   <td className="px-3 py-2">
                     <RecipientCell
                       autoName={d.department_director_name} autoId={d.department_director_bitrix_user_id}
-                      overrideName={d.director_override_name} overrideId={d.director_override_id}
-                      onPick={id => setOverride(d.department_id, 'department_director', id)}
+                      overrides={d.director_overrides}
+                      onChange={(action, id) => setOverride(d.department_id, 'department_director', action, id)}
                       inputCls={inputCls}
                     />
                   </td>
@@ -462,22 +462,26 @@ export default function CallControlBotPage() {
   );
 }
 
-// Ячейка получателя: эффективное значение (ручное ИЛИ оргструктура) + бейдж
-// «вручную»/«авто». Клик — поповер с поиском по всем сотрудникам и сбросом на авто.
-function RecipientCell({ autoName, autoId, overrideName, overrideId, onPick, inputCls }: {
+// Ячейка получателей: ручные назначения (их может быть несколько — каждому уйдёт уведомление)
+// чипами с «×», либо человек из оргструктуры с бейджем «авто». «+ добавить» — поповер с
+// поиском по всем сотрудникам; «Сбросить на авто» убирает всех ручных разом.
+type OverrideAction = 'add' | 'remove' | 'reset';
+interface OverridePerson { id: string; name: string | null }
+
+function RecipientCell({ autoName, autoId, overrides, onChange, inputCls }: {
   autoName: string | null;
   autoId: string | null;
-  overrideName: string | null;
-  overrideId: string | null;
-  onPick: (bitrixUserId: string | null) => void;
+  overrides: OverridePerson[];
+  onChange: (action: OverrideAction, bitrixUserId?: string) => void;
   inputCls: string;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [results, setResults] = useState<Employee[]>([]);
 
-  const isOverride = overrideId != null;
-  const effectiveName = isOverride ? (overrideName ?? overrideId) : (autoName ?? autoId);
+  const isOverride = overrides.length > 0;
+  const autoLabel = autoName ?? autoId;
+  const chosen = new Set(overrides.map(o => o.id));
 
   useEffect(() => {
     if (!open || q.trim().length < 2) { setResults([]); return; }
@@ -492,60 +496,83 @@ function RecipientCell({ autoName, autoId, overrideName, overrideId, onPick, inp
   }, [q, open]);
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={o => { setOpen(o); if (!o) { setQ(''); setResults([]); } }}
-      className="w-[300px] p-2"
-      trigger={
-        <button className="tap-target flex items-center gap-1.5 text-left hover:underline decoration-dotted underline-offset-2">
-          <span className={effectiveName ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}>
-            {effectiveName ?? 'не назначен'}
-          </span>
-          <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${
-            isOverride
-              ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)] font-medium'
-              : 'bg-[var(--color-border)] text-[var(--color-text-muted)]'
-          }`}>
-            {isOverride ? 'вручную' : 'авто'}
-          </span>
-        </button>
-      }
-    >
-      <div className="flex flex-col gap-2">
-        <input
-          autoFocus
-          className={`${inputCls} w-full`}
-          placeholder="Поиск: имя, Bitrix ID, #логин…"
-          value={q}
-          onChange={e => setQ(e.target.value)}
-        />
-        <div className="max-h-56 overflow-y-auto flex flex-col">
-          {results.map(emp => (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {isOverride ? (
+        overrides.map(o => (
+          <span key={o.id} className="inline-flex items-center gap-1 pl-2 pr-0.5 py-0.5 rounded-full bg-[var(--color-accent)]/15 text-[var(--color-text)] text-sm">
+            {o.name ?? o.id}
             <button
-              key={emp.id}
-              onClick={() => { onPick(emp.id); setOpen(false); }}
-              className="text-left px-2 py-1.5 rounded hover:bg-[var(--color-bg-hover)] text-sm text-[var(--color-text)]"
+              onClick={() => onChange('remove', o.id)}
+              aria-label={`Убрать ${o.name ?? o.id}`}
+              className="tap-target w-5 h-5 inline-flex items-center justify-center rounded-full text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
             >
-              {emp.name ?? emp.id}
-              <span className="block text-[11px] text-[var(--color-text-muted)]">
-                {[emp.short_login, emp.department_name].filter(Boolean).join(' · ')}
-              </span>
+              ×
             </button>
-          ))}
-          {q.trim().length >= 2 && results.length === 0 && (
-            <span className="px-2 py-1.5 text-xs text-[var(--color-text-muted)]">Не найдено</span>
+          </span>
+        ))
+      ) : (
+        <span className="inline-flex items-center gap-1.5">
+          <span className={autoLabel ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}>
+            {autoLabel ?? 'не назначен'}
+          </span>
+          <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-[var(--color-border)] text-[var(--color-text-muted)]">авто</span>
+        </span>
+      )}
+      <Popover
+        open={open}
+        onOpenChange={o => { setOpen(o); if (!o) { setQ(''); setResults([]); } }}
+        className="w-[300px] max-w-[calc(100vw-16px)] p-2"
+        trigger={
+          <button className="tap-target text-xs text-[var(--color-accent)] hover:underline px-1">
+            + добавить
+          </button>
+        }
+      >
+        <div className="flex flex-col gap-2">
+          <input
+            autoFocus
+            className={`${inputCls} w-full`}
+            placeholder="Поиск: имя, Bitrix ID, #логин…"
+            value={q}
+            onChange={e => setQ(e.target.value)}
+          />
+          <div className="max-h-56 overflow-y-auto flex flex-col">
+            {results.map(emp => {
+              const already = chosen.has(emp.id);
+              return (
+                <button
+                  key={emp.id}
+                  disabled={already}
+                  onClick={() => { onChange('add', emp.id); setOpen(false); }}
+                  className="text-left px-2 py-1.5 rounded hover:bg-[var(--color-bg-hover)] text-sm text-[var(--color-text)] disabled:opacity-50 disabled:hover:bg-transparent"
+                >
+                  {emp.name ?? emp.id}{already ? ' — уже добавлен' : ''}
+                  <span className="block text-[11px] text-[var(--color-text-muted)]">
+                    {[emp.short_login, emp.department_name].filter(Boolean).join(' · ')}
+                  </span>
+                </button>
+              );
+            })}
+            {q.trim().length >= 2 && results.length === 0 && (
+              <span className="px-2 py-1.5 text-xs text-[var(--color-text-muted)]">Не найдено</span>
+            )}
+          </div>
+          {!isOverride && (
+            <span className="px-2 text-[11px] text-[var(--color-text-muted)]">
+              После добавления оргструктура ({autoLabel ?? 'никто'}) для этой ячейки не используется — добавьте и его, если он тоже должен получать.
+            </span>
+          )}
+          {isOverride && (
+            <button
+              onClick={() => { onChange('reset'); setOpen(false); }}
+              className="self-start text-xs text-[var(--color-accent)] hover:underline px-2 py-1"
+            >
+              Сбросить на авто ({autoLabel ?? 'по оргструктуре'})
+            </button>
           )}
         </div>
-        {isOverride && (
-          <button
-            onClick={() => { onPick(null); setOpen(false); }}
-            className="self-start text-xs text-[var(--color-accent)] hover:underline px-2 py-1"
-          >
-            Сбросить на авто ({autoName ?? autoId ?? 'по оргструктуре'})
-          </button>
-        )}
-      </div>
-    </Popover>
+      </Popover>
+    </div>
   );
 }
 

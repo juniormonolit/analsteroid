@@ -16,6 +16,7 @@
 // Гардрейлы: enabled (выкл из коробки), dry_run (по умолчанию), зеркало-дубль.
 
 import { systemDb, analyticsDb } from '@/lib/db/clients';
+import { effectiveRecipients, loadRecipientOverrides, type OverrideRole } from '@/lib/org/callControlScope';
 import { sendCallControlBotMessage } from '@/lib/bitrix/notify';
 // DEAL_URL_PREFIX живёт в callControlAdmin (клиент-безопасный модуль): страница
 // отчёта импортирует его в браузерный бандл, а этот файл тянет pg/fs.
@@ -462,12 +463,8 @@ export async function runCallControlCycle(): Promise<string> {
 
   // Ручные переопределения получателей по отделам (миграция 100): если для
   // (отдел менеджера, роль) назначен человек — шлём ему в обход оргструктуры.
-  const overrides = await db.query(
-    `SELECT department_id, role, bitrix_user_id FROM call_control_recipient_overrides`
-  );
-  const overrideByDeptRole = new Map<string, string>(
-    overrides.rows.map((r) => [`${r.department_id}:${r.role}`, r.bitrix_user_id])
-  );
+  // С миграции 273 на (отдел, роль) может быть НЕСКОЛЬКО ручных получателей — шлём каждому.
+  const overrideByDeptRole = await loadRecipientOverrides();
   // Имена получателей для зеркала/доставок — тоже из org_resolved_hierarchy.
   const nameByUserId = new Map<string, string>();
   {
@@ -477,7 +474,7 @@ export async function runCallControlCycle(): Promise<string> {
         if (id) ids.add(id);
       }
     }
-    for (const id of overrideByDeptRole.values()) ids.add(id);
+    for (const list of overrideByDeptRole.values()) for (const id of list) ids.add(id);
     for (const r of rulesRes.rows) if (r.fixed_bitrix_user_id) ids.add(r.fixed_bitrix_user_id);
     if (ids.size > 0) {
       const res = await db.query(
@@ -516,16 +513,15 @@ export async function runCallControlCycle(): Promise<string> {
     // Эффективные РОП/директор отдела менеджера: ручное назначение по отделу
     // (миграция 100) имеет приоритет НАД оргструктурой — и для маршрутизации,
     // и для плейсхолдеров {rop_name}/{director_name} (решение Иосифа 14.07).
-    const deptOverride = (role: 'rop' | 'department_director') =>
-      (org?.department_id && overrideByDeptRole.get(`${org.department_id}:${role}`)) || null;
-    const effRopId = deptOverride('rop') ?? org?.rop_bitrix_user_id ?? null;
-    const effRopName = deptOverride('rop')
-      ? (nameByUserId.get(deptOverride('rop')!) ?? deptOverride('rop')!)
-      : org?.rop_name ?? null;
-    const effDirectorId = deptOverride('department_director') ?? org?.department_director_bitrix_user_id ?? null;
-    const effDirectorName = deptOverride('department_director')
-      ? (nameByUserId.get(deptOverride('department_director')!) ?? deptOverride('department_director')!)
-      : org?.department_director_name ?? null;
+    // Ручных может быть несколько (миграция 273) — имена в плейсхолдерах через запятую.
+    const manualNames = (role: OverrideRole): string | null => {
+      const list = org?.department_id ? overrideByDeptRole.get(`${org.department_id}:${role}`) : undefined;
+      return list?.length ? list.map((id) => nameByUserId.get(id) ?? id).join(', ') : null;
+    };
+    const effRopIds = effectiveRecipients(overrideByDeptRole, org?.department_id, 'rop', org?.rop_bitrix_user_id);
+    const effRopName = manualNames('rop') ?? org?.rop_name ?? null;
+    const effDirectorIds = effectiveRecipients(overrideByDeptRole, org?.department_id, 'department_director', org?.department_director_bitrix_user_id);
+    const effDirectorName = manualNames('department_director') ?? org?.department_director_name ?? null;
 
     for (const rule of rulesRes.rows as Array<Record<string, unknown>>) {
       const missedGte = rule.missed_count_gte as number | null;
@@ -554,12 +550,16 @@ export async function runCallControlCycle(): Promise<string> {
 
       // Получатель по уровню правила (эффективные РОП/директор — см. выше).
       const kind = rule.recipient as CallControlRule['recipient'];
-      let recipientId: string | null = null;
-      if (kind === 'manager') recipientId = c.manager_bitrix_user_id;
-      else if (kind === 'rop') recipientId = effRopId;
-      else if (kind === 'department_director') recipientId = effDirectorId;
-      else if (kind === 'company_director') recipientId = org?.company_director_bitrix_user_id ?? null;
-      else if (kind === 'fixed') recipientId = (rule.fixed_bitrix_user_id as string | null) ?? null;
+      let recipientIds: Array<string | null> = [];
+      if (kind === 'manager') recipientIds = [c.manager_bitrix_user_id];
+      else if (kind === 'rop') recipientIds = effRopIds;
+      else if (kind === 'department_director') recipientIds = effDirectorIds;
+      else if (kind === 'company_director') recipientIds = [org?.company_director_bitrix_user_id ?? null];
+      else if (kind === 'fixed') recipientIds = [(rule.fixed_bitrix_user_id as string | null) ?? null];
+      // Никого не нашли — одна доставка с recipient=null: в журнале будет «получатель не разрешился».
+      if (recipientIds.length === 0) recipientIds = [null];
+
+      for (const recipientId of recipientIds) {
 
       const recipientName =
         (recipientId && nameByUserId.get(recipientId)) ||
@@ -599,17 +599,17 @@ export async function runCallControlCycle(): Promise<string> {
         manager_chat_url: chatUrlForRecipient ?? '—',
       });
 
-      // UNIQUE (case_id, rule_id): правило по кейсу срабатывает один раз. Вставка
+      // Уникальность (case_id, rule_id, получатель) — миграция 273: правило по кейсу срабатывает один раз на каждого получателя. Вставка
       // ДО отправки — при гонке двух тиков второй просто не пройдёт по конфликту.
       const ins = await db.query(
         `INSERT INTO call_control_deliveries
            (case_id, rule_id, recipient_kind, recipient_bitrix_user_id, recipient_name, message, dry_run)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (case_id, rule_id) DO NOTHING
+         ON CONFLICT (case_id, rule_id, (COALESCE(recipient_bitrix_user_id, ''))) DO NOTHING
          RETURNING id`,
         [c.id, rule.id, kind, recipientId, recipientName, message, settings.dryRun]
       );
-      if (ins.rowCount === 0) continue; // уже слали
+      if (ins.rowCount === 0) continue; // этому получателю по этому правилу уже слали
 
       let sendError: string | null = null;
       if (!settings.dryRun) {
@@ -647,6 +647,7 @@ export async function runCallControlCycle(): Promise<string> {
         `UPDATE call_control_deliveries SET mirrored = $2, error = $3 WHERE id = $1`,
         [ins.rows[0].id, mirrored, sendError]
       );
+      }
     }
   }
 

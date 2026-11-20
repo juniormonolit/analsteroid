@@ -47,11 +47,14 @@ export async function GET() {
 
   // 2. Ручные переопределения из system(YC).
   const ovRes = await sys.query(
-    `SELECT department_id, role, bitrix_user_id FROM call_control_recipient_overrides`
+    `SELECT department_id, role, bitrix_user_id FROM call_control_recipient_overrides ORDER BY updated_at, bitrix_user_id`
   );
-  const overrideByKey = new Map<string, string>(
-    ovRes.rows.map((r) => [`${r.department_id}:${r.role}`, String(r.bitrix_user_id)])
-  );
+  // С миграции 273 на (отдел, роль) может быть несколько ручных получателей.
+  const overrideByKey = new Map<string, string[]>();
+  for (const r of ovRes.rows) {
+    const key = `${r.department_id}:${r.role}`;
+    overrideByKey.set(key, [...(overrideByKey.get(key) ?? []), String(r.bitrix_user_id)]);
+  }
 
   // 3. Имена для переопределённых получателей — из sa.org_resolved_hierarchy.
   const overrideIds = [...new Set(ovRes.rows.map((r) => String(r.bitrix_user_id)))];
@@ -69,8 +72,8 @@ export async function GET() {
 
   const departments = orgRes.rows
     .map((d) => {
-      const ropOverrideId = overrideByKey.get(`${d.department_id}:rop`) ?? null;
-      const dirOverrideId = overrideByKey.get(`${d.department_id}:department_director`) ?? null;
+      const people = (role: string) => (overrideByKey.get(`${d.department_id}:${role}`) ?? [])
+        .map((id) => ({ id, name: nameById.get(id) ?? null }));
       return {
         department_id: d.department_id,
         department_name: d.department_name,
@@ -78,10 +81,8 @@ export async function GET() {
         rop_name: d.rop_name,
         department_director_bitrix_user_id: d.department_director_bitrix_user_id,
         department_director_name: d.department_director_name,
-        rop_override_id: ropOverrideId,
-        rop_override_name: ropOverrideId ? (nameById.get(ropOverrideId) ?? null) : null,
-        director_override_id: dirOverrideId,
-        director_override_name: dirOverrideId ? (nameById.get(dirOverrideId) ?? null) : null,
+        rop_overrides: people('rop'),
+        director_overrides: people('department_director'),
       };
     })
     .sort((a, b) => String(a.department_name ?? '').localeCompare(String(b.department_name ?? ''), 'ru'));
@@ -94,8 +95,10 @@ export async function PUT(req: NextRequest) {
   const denied = permError(session, 'section.settings');
   if (denied) return denied;
 
+  // action: add — добавить получателя; remove — убрать одного; reset — убрать всех (назад к оргструктуре).
+  // Без action (старый клиент): bitrixUserId — заменить всех одним, null — reset.
   const body = await req.json().catch(() => null) as
-    { departmentId?: string; role?: string; bitrixUserId?: string | null } | null;
+    { departmentId?: string; role?: string; bitrixUserId?: string | null; action?: 'add' | 'remove' | 'reset' } | null;
   if (!body?.departmentId || !/^[0-9a-f-]{36}$/i.test(body.departmentId)) {
     return NextResponse.json({ error: 'departmentId: uuid' }, { status: 400 });
   }
@@ -107,18 +110,31 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: 'bitrixUserId: число или null (сброс на авто)' }, { status: 400 });
   }
 
+  const action = body.action ?? (userId ? 'replace' : 'reset');
+  if (!['add', 'remove', 'reset', 'replace'].includes(action)) {
+    return NextResponse.json({ error: 'action: add|remove|reset' }, { status: 400 });
+  }
+  if ((action === 'add' || action === 'remove' || action === 'replace') && !userId) {
+    return NextResponse.json({ error: 'bitrixUserId обязателен' }, { status: 400 });
+  }
+
   const db = systemDb();
-  if (!userId) {
+  const key = [body.departmentId, body.role];
+  if (action === 'reset' || action === 'replace') {
+    await db.query(`DELETE FROM call_control_recipient_overrides WHERE department_id = $1 AND role = $2`, key);
+  }
+  if (action === 'remove') {
     await db.query(
-      `DELETE FROM call_control_recipient_overrides WHERE department_id = $1 AND role = $2`,
-      [body.departmentId, body.role]
+      `DELETE FROM call_control_recipient_overrides WHERE department_id = $1 AND role = $2 AND bitrix_user_id = $3`,
+      [...key, userId]
     );
-  } else {
+  }
+  if (action === 'add' || action === 'replace') {
     await db.query(
       `INSERT INTO call_control_recipient_overrides (department_id, role, bitrix_user_id)
        VALUES ($1, $2, $3)
-       ON CONFLICT (department_id, role) DO UPDATE SET bitrix_user_id = EXCLUDED.bitrix_user_id, updated_at = now()`,
-      [body.departmentId, body.role, userId]
+       ON CONFLICT (department_id, role, bitrix_user_id) DO NOTHING`,
+      [...key, userId]
     );
   }
   return NextResponse.json({ ok: true });
