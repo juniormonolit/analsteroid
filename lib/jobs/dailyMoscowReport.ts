@@ -1,10 +1,14 @@
 // Ежедневный отчёт «МОСКВА» для бота «Аналитик» (личка владельца, 18:00 МСК).
 //
-// Источники (решение владельца, 2026-07-07):
-//  - Суммы продаж/отгрузок — ЖИВЬЁМ из Битрикса (mlt.sales.list / mlt.shipments.list):
-//    к 18:00 наша БД может отставать, Битрикс — истина.
-//  - Те же суммы параллельно считаются из нашей БД → блок «Расхождения» в конце
-//    отчёта (контроль точности синка).
+// Источники:
+//  - Суммы продаж/отгрузок — из НАШЕЙ БД, теми же метриками, что в Монолитике
+//    (решение владельца 20.11: «цифры в 18:00 в Монолитике и в отчёте должны сходиться
+//    идеально»). До 20.11 суммы брались живьём из Битрикса (mlt.sales.list, решение 07.07),
+//    и отчёт расходился с приложением: Битрикс считает продажу по ручному полю «Дата
+//    продажи» (UF_CRM_1720789362 — бывает у сделки в отказе, переставляется задним
+//    числом), а Монолитика — по первому переходу в стадию продажи. Разбор — WORKLOG 20.11.
+//  - Битрикс по-прежнему запрашивается → отдельное сообщение «Сверка Битрикс ↔ БД»
+//    (контроль расхождения определений и синка).
 //  - Конверсии за месяц — из БД (методов Битрикса со списком броней за период нет).
 //  - Планы: manager_plans (план отгрузок менеджера = plan_shipments, план продаж =
 //    plan_shipments / plan_n — та же логика, что в app/api/reports/run). Дневной план =
@@ -322,18 +326,24 @@ export async function buildDailyMoscowReport(reportDate?: string): Promise<Daily
 
   const orgMap = await getManagerOrgMap();
 
+  // Битрикс нужен теперь только для сверки — его недоступность не должна срывать отчёт.
+  let bitrixError: string | null = null;
+  const bitrixSafe = (method: string) => fetchBitrixDeals(method, factFrom, dateStr).catch((e: unknown) => {
+    bitrixError = e instanceof Error ? e.message : String(e);
+    return null;
+  });
   const [bitrixSales, bitrixShipments, wd, plans, dbConv] = await Promise.all([
-    fetchBitrixDeals('mlt.sales.list', factFrom, dateStr),
-    fetchBitrixDeals('mlt.shipments.list', factFrom, dateStr),
+    bitrixSafe('mlt.sales.list'),
+    bitrixSafe('mlt.shipments.list'),
     getWorkingDays(monthFirstDay, dateStr, weekStart),
     getMonthPlans(monthFirstDay, orgMap),
     getDbConversions(mskMidnightIso(monthFirstDay), mskMidnightIso(nextDay), orgMap),
   ]);
 
-  const bxSales = sumBitrixByPeriods(bitrixSales, 'MLT_DATE_SALE', orgMap, dateStr, weekStart);
-  const bxShip = sumBitrixByPeriods(bitrixShipments, 'MLT_DATE_SHIPMENT', orgMap, dateStr, weekStart);
+  const bxSales = bitrixSales ? sumBitrixByPeriods(bitrixSales, 'MLT_DATE_SALE', orgMap, dateStr, weekStart) : null;
+  const bxShip = bitrixShipments ? sumBitrixByPeriods(bitrixShipments, 'MLT_DATE_SHIPMENT', orgMap, dateStr, weekStart) : null;
 
-  // БД-суммы для блока расхождений: SQL-генератор принимает одно окно на запрос,
+  // БД-суммы (факт отчёта и сверка): SQL-генератор принимает одно окно на запрос,
   // поэтому день/неделя/месяц считаются отдельными запросами.
   const [dbSalesDay, dbShipDay, dbSalesWeek, dbShipWeek, dbSalesMonth, dbShipMonth] = await Promise.all([
     queryDbByManager(SALES_AMOUNT_IDS, mskMidnightIso(dateStr), mskMidnightIso(nextDay)),
@@ -367,15 +377,15 @@ export async function buildDailyMoscowReport(reportDate?: string): Promise<Daily
   const mtdPlanShip = scale(plans.shipments, wd.passedInMonth / wd.inMonth);
 
   const discrepancies = [
-    ...collectDiscrepancies('Продажи', bxSales, dbSalesSums),
-    ...collectDiscrepancies('Отгрузки', bxShip, dbShipSums),
+    ...(bxSales ? collectDiscrepancies('Продажи', bxSales, dbSalesSums) : []),
+    ...(bxShip ? collectDiscrepancies('Отгрузки', bxShip, dbShipSums) : []),
   ];
 
   const message = buildReportText(buildDailyReportSpec({
     dateStr,
     entities: DEPTS.map(cat => ({ key: cat, title: DEPT_TITLES[cat] })),
-    factSales: { day: toSums(bxSales.day), week: toSums(bxSales.week), month: toSums(bxSales.month) },
-    factShipMonth: toSums(bxShip.month),
+    factSales: { day: toSums(dbSalesSums.day), week: toSums(dbSalesSums.week), month: toSums(dbSalesSums.month) },
+    factShipMonth: toSums(dbShipSums.month),
     planSales: { day: toSums(dayPlanSales), week: toSums(weekPlanSales), mtd: toSums(mtdPlanSales) },
     planShipMtd: toSums(mtdPlanShip),
     conv: { ...dbConv, [TOTAL]: dbConv.total },
@@ -390,7 +400,9 @@ export async function buildDailyMoscowReport(reportDate?: string): Promise<Daily
   }));
 
   const discrepancyMessage = `[b]Сверка Битрикс ↔ БД за ${fmtDateRu(dateStr)}[/b]\n` + (
-    discrepancies.length > 0
+    bitrixError
+      ? `Битрикс недоступен, сверка не выполнена (${bitrixError})`
+      : discrepancies.length > 0
       ? discrepancies.join('\n')
       : `Расхождений нет (порог ${DISCREPANCY_THRESHOLD / 1000} тыс ₽)`
   );

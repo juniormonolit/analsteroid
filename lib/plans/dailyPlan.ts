@@ -6,10 +6,11 @@
 //
 // Режимы (plan_settings.daily_plan_mode, миграция 050):
 //  - 'divide20' (дефолт): дневной план = месячный план ÷ 20 — константа, НЕ зависит от
-//    фактического числа будней месяца. "Прошедшие будни" (множитель для MTD/pace-таргета
-//    месяца/недели) считаются пн–пт по календарным датам, БЕЗ обращения к working_calendar
-//    и БЕЗ учёта праздников РФ — иначе режим остался бы зависим от календаря, который мы
-//    как раз убираем.
+//    фактического числа будней месяца. "Прошедшие рабочие дни" (множитель для MTD/pace-таргета
+//    месяца/недели) считаются по производственному календарю РФ из кода
+//    (lib/metrics/productionCalendar.ts — праздники и переносы, без БД и working_calendar).
+//    До 20.11 здесь были голые пн–пт, и праздник (04.11.2026) засчитывался как рабочий день —
+//    план на дату завышался на дневную норму (жалоба владельца на ежедневный отчёт 20.11).
 //  - 'calendar': прежняя логика без изменений — оба числа (сколько рабочих дней всего /
 //    сколько уже прошло) читаются из working_calendar (учитывает праздники, isdayoff.ru).
 //    Используется, только если супер-админ явно переключил тумблер в /settings/daily-plan-mode.
@@ -24,6 +25,7 @@
 // в planSummary.ts), getYearWorkingDays как функция больше не нужна и удалена отсюда.
 
 import { systemDb } from '@/lib/db/clients';
+import { isWorkingDayJs } from '@/lib/metrics/productionCalendar';
 
 export type DailyPlanMode = 'divide20' | 'calendar';
 
@@ -64,16 +66,17 @@ export interface WorkingDayProgress {
   passed: number;
 }
 
-/** Считает будни (пн–пт) между from и to включительно, по календарным датам,
- *  БЕЗ учёта праздников. Используется только в divide20-режиме. */
-function countWeekdaysInclusive(fromStr: string, toStr: string): number {
+/** Считает рабочие дни между from и to включительно по производственному календарю
+ *  (праздники и переносы РФ, lib/metrics/productionCalendar). Только divide20-режим;
+ *  для года, которого нет в справочнике, календарь сам откатывается к пн–пт. */
+function countWorkingDaysInclusive(fromStr: string, toStr: string): number {
   if (toStr < fromStr) return 0;
   const from = new Date(`${fromStr}T00:00:00Z`);
   const to = new Date(`${toStr}T00:00:00Z`);
   let count = 0;
   for (let d = new Date(from); d <= to; d.setUTCDate(d.getUTCDate() + 1)) {
-    const day = d.getUTCDay(); // 0=Вс..6=Сб
-    if (day !== 0 && day !== 6) count++;
+    const dow = d.getUTCDay(); // 0=Вс..6=Сб
+    if (isWorkingDayJs(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), dow === 0 ? 7 : dow)) count++;
   }
   return count;
 }
@@ -105,7 +108,7 @@ export async function getMonthWorkingDays(monthFirstDay: string, asOfDateStr: st
 
   if (mode === 'divide20') {
     const capped = clampToMonth(asOfDateStr, monthFirstDay);
-    return { total: FIXED_MONTH_DIVISOR, passed: countWeekdaysInclusive(monthFirstDay, capped) };
+    return { total: FIXED_MONTH_DIVISOR, passed: countWorkingDaysInclusive(monthFirstDay, capped) };
   }
 
   // calendar — прежняя логика (working_calendar), без изменений.
@@ -166,7 +169,7 @@ export async function getWorkingDaysByMonthInRange(
         chunks.push({
           month: curMonthFirst.slice(0, 7),
           workingDaysInMonth: FIXED_MONTH_DIVISOR,
-          workingDaysInRange: countWeekdaysInclusive(chunkFrom, chunkTo),
+          workingDaysInRange: countWorkingDaysInclusive(chunkFrom, chunkTo),
         });
       } else {
         // calendar — прежняя логика (working_calendar), без изменений режима.
@@ -221,7 +224,7 @@ export async function getWeekWorkingDays(weekStartStr: string, asOfDateStr: stri
 
   if (mode === 'divide20') {
     const capped = clampToWeek(asOfDateStr, weekStartStr);
-    return { total: FIXED_WEEK_DIVISOR, passed: countWeekdaysInclusive(weekStartStr, capped) };
+    return { total: FIXED_WEEK_DIVISOR, passed: countWorkingDaysInclusive(weekStartStr, capped) };
   }
 
   // calendar — прежняя логика (working_calendar), без изменений.
