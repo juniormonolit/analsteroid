@@ -454,7 +454,7 @@ async function addTaskTodo(dealId: number, responsibleId: number, taskId: number
  *  UF_HEAD — тот же резолвер, что у оргсинка). */
 export async function ropOfManager(managerBitrixId: string): Promise<string | null> {
   const r = await analyticsDb().query<{ rop: string | null }>(
-    `SELECT rop_bitrix_user_id AS rop FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id = $1 LIMIT 1`, [managerBitrixId],
+    `SELECT rop_bitrix_user_id AS rop FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id = $1 ORDER BY is_active DESC NULLS LAST LIMIT 1`, [managerBitrixId],
   );
   return r.rows[0]?.rop ?? null;
 }

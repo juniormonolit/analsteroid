@@ -29,7 +29,11 @@ export async function POST(req: NextRequest) {
     console.info(`[big-deals action] ${session.login} ${body.type} task=${body.taskId}${dryRun ? ' DRY' : ''}${r.viaWebhook ? ' VIA-WEBHOOK' : ''} calls=${r.calls.map(c => c.method).join(',')}`);
     return NextResponse.json({ ok: true, card: r.card ?? undefined, warnings: r.warnings.length ? r.warnings : undefined, ...(dryRun ? { calls: r.calls } : {}) });
   } catch (e) {
-    if (e instanceof BigActionError) return NextResponse.json({ error: e.message }, { status: e.status });
+    if (e instanceof BigActionError) {
+      // Отказы тоже в лог: 23.11 «не ставится менеджер» — в логе не было ни попытки, ни причины.
+      console.info(`[big-deals action] ${session.login} ${body.type} task=${body.taskId} ОТКАЗ ${e.status}: ${e.message}`);
+      return NextResponse.json({ error: e.message }, { status: e.status });
+    }
     console.error('[big-deals action]', e instanceof Error ? e.message : e);
     return NextResponse.json({ error: 'Не удалось выполнить действие — повторите или откройте задачу в Битриксе' }, { status: 500 });
   }

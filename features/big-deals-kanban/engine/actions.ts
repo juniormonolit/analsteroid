@@ -275,7 +275,7 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
       if (status === '4') await run.task('tasks.task.disapprove', { taskId }, 'из «ждёт контроля» обратно в работу — задача НЕ закрывается');
       if (deadline) await run.task('tasks.task.update', { taskId, fields: { DEADLINE: deadline.toISOString() } }).catch(e => { run.warnings.push(`Срок не изменился: ${e instanceof Error ? e.message : e}`); });
       const text = String(action.comment ?? '').trim();
-      await run.comment(taskId, `РОП посмотрел ответ, работаем дальше (Монолитика${who}).${deadline ? `\nНовый срок: ${fmtDeadline(deadline)}.` : ''}${text ? `\n${text.slice(0, 4000)}` : ''}`, uploadedFiles);
+      await run.comment(taskId, `РОП посмотрел ответ, работаем дальше (Монолитика${who}).${deadline ? `\nНовый срок: ${fmtDeadline(deadline)}.` : ''}${text ? `\n\n${emphasize(text.slice(0, 4000))}` : ''}`, uploadedFiles);
       break;
     }
     case 'approve': {
@@ -329,19 +329,22 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
       break;
     }
     case 'return': {
+      // Текст необязателен (Осипов 23.11: «заебало 123 писать при возврате задачи»).
       const comment = String(action.comment ?? '').trim();
-      if (comment.length < 3) throw new BigActionError('Напишите, что доделать');
       if (status !== '4') throw new BigActionError('Вернуть можно только задачу, которая ждёт контроля');
       const deadline = parseDeadline(action.deadline);
       await run.task('tasks.task.disapprove', { taskId });
       if (deadline) await run.task('tasks.task.update', { taskId, fields: { DEADLINE: deadline.toISOString() } }).catch(e => { run.warnings.push(`Срок не изменился: ${e instanceof Error ? e.message : e}`); });
-      await run.comment(taskId, `Возвращено на доработку из канбана больших чеков (Монолитика${who}):${deadline ? `\nНовый срок: ${fmtDeadline(deadline)}.` : ''}\n${comment.slice(0, 4000)}`, uploadedFiles);
+      // Сам вопрос — отдельным абзацем жирным (Осипов 23.11: «сливается всё, может вопрос выделим?»).
+      await run.comment(taskId, `Возвращено на доработку из канбана больших чеков (Монолитика${who}).${deadline ? `\nНовый срок: ${fmtDeadline(deadline)}.` : ''}${comment ? `\n\n${emphasize(comment.slice(0, 4000))}` : ''}`, uploadedFiles);
       break;
     }
     case 'complete': {
-      // «Не продано → завершить»: в колонку «Не продано (проверка)», если она есть у проекта, и закрыть.
-      const hasLost = Number(await stageIdForColumn(groupId, 'lost_check')) > 0;
-      if (hasLost) await moveTo('lost_check');
+      // «Не продано → завершить» из карточки жмёт РОП — он работу уже проверил: сразу в «Не продано (проверено)»
+      // (Осипов 23.11). Нет такой колонки у проекта — в «Не продано (проверка)», нет и её — просто закрыть.
+      const lostCol = Number(await stageIdForColumn(groupId, 'lost_done')) > 0 ? 'lost_done'
+        : Number(await stageIdForColumn(groupId, 'lost_check')) > 0 ? 'lost_check' : null;
+      if (lostCol) await moveTo(lostCol);
       await run.close(taskId, status, control);
       await run.comment(taskId, `Не продано — задача закрыта из канбана больших чеков (Монолитика${who}).`);
       break;
@@ -387,8 +390,20 @@ async function currentColumn(taskId: number, t: BxBigTask): Promise<BigColumnKey
   return null;
 }
 
+/** Текст РОПа менеджеру — жирным, построчно (BB-код [B] через перенос строки Битрикс рвёт). */
+function emphasize(text: string): string {
+  return text.split('\n').map(l => (l.trim() ? `[b]${l}[/b]` : l)).join('\n');
+}
+
+/**
+ * Действующий ли менеджер (переназначение вне своей зоны). База недоступна (таймауты 23.11) — не отказываем
+ * молча «не найден», а спрашиваем Битрикс: активный сотрудник = можно (Осипов 23.11: «всё ещё не ставится менеджер»).
+ */
 async function isActiveManager(id: string): Promise<boolean> {
   const { analyticsDb } = await import('@/lib/db/clients');
-  const r = await analyticsDb().query(`SELECT 1 FROM sa.org_resolved_hierarchy WHERE is_active AND manager_bitrix_user_id = $1 LIMIT 1`, [id]).catch(() => ({ rows: [] }));
-  return r.rows.length > 0;
+  const r = await analyticsDb().query(`SELECT 1 FROM sa.org_resolved_hierarchy WHERE is_active AND manager_bitrix_user_id = $1 LIMIT 1`, [id])
+    .catch(e => { console.warn('[big-deals] isActiveManager: база недоступна, проверяю по Битриксу:', e instanceof Error ? e.message : e); return null; });
+  if (r) return r.rows.length > 0;
+  const u = await read<{ ACTIVE?: boolean | string }[]>('user.get', { ID: id }).catch(() => null);
+  return u?.[0]?.ACTIVE === true || u?.[0]?.ACTIVE === 'Y';
 }

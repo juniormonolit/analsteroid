@@ -1,7 +1,7 @@
 'use client';
 // Действия РОПа в карточке задачи: назначить менеджера с ТЗ, перенести в колонку (для тача, где нет drag),
 // «Принять» (РОП 19.11: работа принята, задача закрывается) / «Принял, работаем дальше» (владелец 18.11: ответ увидел — задача возвращается в работу, НЕ закрывается) /
-// вернуть на доработку (задача ждёт контроля), «Не продано → завершить». POST /api/big-deals-kanban/action.
+// вернуть на доработку (задача ждёт контроля; текст необязателен, есть шаблоны вопросов), «Не продано → завершить» (сразу в «проверено»). POST /api/big-deals-kanban/action.
 // Закрытие задачи (перенос в AUTO_COMPLETE_COLUMNS, «Не продано → завершить») — только через ConfirmCloseModal.
 import { useState } from 'react';
 import { SearchSelect } from '@/components/ui/SearchSelect';
@@ -63,6 +63,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
   const deadlineIso = mskInputToIso(deadline);
   const columnOptions = BIG_COLUMNS.filter(c => c.key !== card.column).map(c => ({ value: c.key, label: c.title, hint: c.hint ?? null }));
   const addTz = (t: string) => setTz(prev => (prev.trim() ? `${prev.trimEnd()}\n${t}` : t));
+  const addComment = (t: string) => setComment(prev => (prev.trim() ? `${prev.trimEnd()}\n${t}` : t));
 
   return (
     <Section title="Действия">
@@ -97,10 +98,11 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
 
         {mode === 'return' && (
           <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
-            <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="Что доделать" className={input} />
+            <QuestionsBlock questions={questions} deal={card.deal} mock={mock} onInsert={addComment} title="Вопрос менеджеру" />
+            <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="Что доделать (необязательно) — уйдёт в чат жирным" className={input} />
             <DeadlineField label="Новый срок (необязательно)" value={deadline} onChange={setDeadline} />
-            <button type="button" className={`${primary} self-end`} disabled={busy || comment.trim().length < 3}
-              onClick={() => run({ type: 'return', comment: comment.trim(), deadline: deadlineIso })}>
+            <button type="button" className={`${primary} self-end`} disabled={busy}
+              onClick={() => run({ type: 'return', comment: comment.trim() || undefined, deadline: deadlineIso })}>
               {busy ? 'Возвращаю…' : 'Вернуть'}
             </button>
           </div>
@@ -159,7 +161,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
 
         {pending && (
           <ConfirmCloseModal count={1} busy={busy} onCancel={() => setPending(null)}
-            title={pending.type === 'complete' ? 'Не продано — завершить задачу?' : `Перенести в «${BIG_COLUMNS.find(c => c.key === pending.column)?.title}» и закрыть?`}
+            title={pending.type === 'complete' ? 'Не продано — закрыть сразу в «проверено»?' : `Перенести в «${BIG_COLUMNS.find(c => c.key === pending.column)?.title}» и закрыть?`}
             onConfirm={() => void run(pending.type === 'complete' ? { type: 'complete' } : { type: 'move', column: pending.column })} />
         )}
 
