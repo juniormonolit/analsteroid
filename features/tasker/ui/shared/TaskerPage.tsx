@@ -1,6 +1,7 @@
 'use client';
 // Раздел «Задачник» (/tasker, ai_docs/fresh_docs/TASKER_SPEC.md): три вида — Доска / Неделя / Сегодня —
-// с общим фильтром и карточкой задачи в Drawer; вкладка «Обучения» ведёт на /tasker/trainings (сессия D).
+// с общим фильтром и карточкой задачи в Drawer; вкладка «Обучения» ведёт на /tasker/trainings (сессия D),
+// «Собрания» — на /tasker/meetings (регулярные собрания, features/tasker/meetings).
 // Данные — GET /api/tasker/tasks (view, from/to, фильтр), смена статуса — PATCH /api/tasker/tasks/:id
 // с оптимистичным переносом и откатом. Вид, неделя, фильтр и открытая задача — в URL.
 // ?mock=1 в dev — моковые данные без API.
@@ -29,7 +30,7 @@ const BTN = 'inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg
  * Вкладки раздела. В TaskerPage виды переключаются на месте (onSelect); без onSelect (страница
  * /tasker/trainings) — ссылками на /tasker?view=….
  */
-export function TaskerTabs({ active, onSelect }: { active: TaskerView | 'trainings'; onSelect?: (v: TaskerView) => void }) {
+export function TaskerTabs({ active, onSelect }: { active: TaskerView | 'trainings' | 'meetings'; onSelect?: (v: TaskerView) => void }) {
   return (
     <nav className="flex w-fit max-w-full flex-wrap gap-1 rounded-lg border border-[var(--color-border)] p-0.5" aria-label="Вид Задачника">
       {VIEWS.map(v => {
@@ -40,6 +41,7 @@ export function TaskerTabs({ active, onSelect }: { active: TaskerView | 'trainin
           <Link key={v} href={v === 'board' ? '/tasker' : `/tasker?view=${v}`} className={tabCls(active === v)}>{label}</Link>
         );
       })}
+      <Link href="/tasker/meetings" aria-current={active === 'meetings' ? 'page' : undefined} className={tabCls(active === 'meetings')}>Собрания</Link>
       <Link href="/tasker/trainings" aria-current={active === 'trainings' ? 'page' : undefined} className={tabCls(active === 'trainings')}>Обучения</Link>
     </nav>
   );
@@ -149,7 +151,7 @@ export function TaskerPage({ canAssign }: { canAssign: boolean }) {
         {isLoading && !data && !error && (
           <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">Загружаю задачи…</div>
         )}
-        {data && data.tasks.length === 0 && data.sessions.length === 0 && data.trainings.length === 0 && (
+        {data && data.tasks.length === 0 && data.sessions.length === 0 && data.trainings.length === 0 && !(data.meetings?.length) && (
           <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">
             {f.active ? 'По фильтру задач нет.' : canAssign ? 'Задач пока нет. Поставьте первую — кнопкой «Новая задача» или из отчёта «По менеджерам».' : 'Задач пока нет.'}
           </div>
@@ -159,9 +161,9 @@ export function TaskerPage({ canAssign }: { canAssign: boolean }) {
       {data && (view === 'board' ? (
         <TaskerBoard tasks={data.tasks} dragEnabled={!isTouch} onOpen={onOpen} onMove={move} />
       ) : view === 'week' ? (
-        <TaskerWeek monday={monday} tasks={data.tasks} sessions={data.sessions} trainings={data.trainings} onOpen={onOpen} />
+        <TaskerWeek monday={monday} tasks={data.tasks} sessions={data.sessions} trainings={data.trainings} meetings={data.meetings ?? []} onOpen={onOpen} />
       ) : (
-        <TaskerToday tasks={data.tasks} sessions={data.sessions} trainings={data.trainings} onOpen={onOpen} />
+        <TaskerToday tasks={data.tasks} sessions={data.sessions} trainings={data.trainings} meetings={data.meetings ?? []} onOpen={onOpen} />
       ))}
 
       {openTask && (

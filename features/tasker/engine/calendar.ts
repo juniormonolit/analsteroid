@@ -16,7 +16,7 @@ import { appBaseUrl, bitrixTaskUrl, loadMetricDefs, loadSettings } from './confi
 const TZ = 'Europe/Moscow';
 
 const sectionCache = new Map<string, { id: number; at: number }>();
-async function sectionFor(ownerId: string): Promise<number> {
+export async function sectionFor(ownerId: string): Promise<number> {
   const hit = sectionCache.get(ownerId);
   if (hit && Date.now() - hit.at < 6 * 3600_000) return hit.id;
   const r = await bx(taskWebhook(), 'calendar.section.get', { type: 'user', ownerId: Number(ownerId) }) as { result?: unknown };
@@ -29,12 +29,12 @@ async function sectionFor(ownerId: string): Promise<number> {
 }
 
 /** 'YYYY-MM-DD HH:MM:SS' по МСК. */
-function mskStamp(d: Date): string {
+export function mskStamp(d: Date): string {
   return new Date(d.getTime() + 3 * 3600_000).toISOString().slice(0, 19).replace('T', ' ');
 }
-const mskDay = (d: Date, shiftDays = 0) => new Date(d.getTime() + 3 * 3600_000 + shiftDays * 86_400_000).toISOString().slice(0, 10);
+export const mskDay = (d: Date, shiftDays = 0) => new Date(d.getTime() + 3 * 3600_000 + shiftDays * 86_400_000).toISOString().slice(0, 10);
 
-const isNotFound = (e: unknown) => /not.?found|не найден|NOT_FOUND/i.test(e instanceof Error ? e.message : String(e));
+export const isNotFound = (e: unknown) => /not.?found|не найден|NOT_FOUND/i.test(e instanceof Error ? e.message : String(e));
 
 export const sessionMarker = (sessionId: number) => `Задачник · сессия #${sessionId}`;
 

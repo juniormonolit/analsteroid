@@ -1,21 +1,24 @@
 'use client';
 // Неделя Задачника: 5 рабочих дней (пн–пт), в каждом — по времени: сессии РОПа (задачи
-// сессии внутри), задачи по плановому слоту (нет слота — по сроку) и записи на обучения.
+// сессии внутри), задачи по плановому слоту (нет слота — по сроку), записи на обучения и встречи
+// регулярных собраний (features/tasker/meetings).
 // Десктоп — 5 колонок; планшет — 2; телефон — дни списком сверху вниз.
 import { GraduationCap, Users } from 'lucide-react';
-import type { TaskerSession, TaskerTask, TrainingEnrollment } from '../../types';
+import type { TaskerMeetingOccurrence, TaskerSession, TaskerTask, TrainingEnrollment } from '../../types';
+import { MeetingBlock } from '../../meetings/ui/MeetingBlock';
 import { addDays, fmtDayLong, fmtTime, mskDay, shortName, todayMsk } from '../shared/format';
 import { TaskCard } from '../shared/TaskCard';
 
 type Item =
   | { kind: 'session'; at: string; session: TaskerSession; tasks: TaskerTask[] }
   | { kind: 'task'; at: string; task: TaskerTask; bySlot: boolean }
-  | { kind: 'training'; at: string; training: TrainingEnrollment[] };
+  | { kind: 'training'; at: string; training: TrainingEnrollment[] }
+  | { kind: 'meeting'; at: string; meeting: TaskerMeetingOccurrence };
 
 export function weekDays(monday: string) { return [0, 1, 2, 3, 4].map(i => addDays(monday, i)); }
 
 /** Раскладка по дням: ключ — YYYY-MM-DD МСК. Общая с «Сегодня». */
-export function layoutDays(days: string[], tasks: TaskerTask[], sessions: TaskerSession[], trainings: TrainingEnrollment[]): Map<string, Item[]> {
+export function layoutDays(days: string[], tasks: TaskerTask[], sessions: TaskerSession[], trainings: TrainingEnrollment[], meetings: TaskerMeetingOccurrence[] = []): Map<string, Item[]> {
   const res = new Map<string, Item[]>(days.map(d => [d, []]));
   const byId = new Map(tasks.map(t => [t.id, t]));
   const inSession = new Set<number>();
@@ -37,6 +40,7 @@ export function layoutDays(days: string[], tasks: TaskerTask[], sessions: Tasker
   const byEvent = new Map<number, TrainingEnrollment[]>();
   for (const e of trainings) byEvent.set(e.eventId, [...(byEvent.get(e.eventId) ?? []), e]);
   for (const list of byEvent.values()) res.get(mskDay(list[0].startsAt))?.push({ kind: 'training', at: list[0].startsAt, training: list });
+  for (const m of meetings) res.get(m.date)?.push({ kind: 'meeting', at: m.startsAt, meeting: m });
   for (const list of res.values()) list.sort((a, b) => a.at.localeCompare(b.at));
   return res;
 }
@@ -84,6 +88,8 @@ export function DayItems({ items, onOpen }: { items: Item[]; onOpen: (t: TaskerT
     <>
       {items.map(it => it.kind === 'session' ? (
         <SessionBlock key={`s${it.session.id}`} session={it.session} tasks={it.tasks} onOpen={onOpen} />
+      ) : it.kind === 'meeting' ? (
+        <MeetingBlock key={`m${it.meeting.meetingId}-${it.meeting.date}`} m={it.meeting} />
       ) : it.kind === 'training' ? (
         <TrainingBlock key={`e${it.training[0].eventId}`} list={it.training} />
       ) : (
@@ -96,15 +102,16 @@ export function DayItems({ items, onOpen }: { items: Item[]; onOpen: (t: TaskerT
   );
 }
 
-export function TaskerWeek({ monday, tasks, sessions, trainings, onOpen }: {
+export function TaskerWeek({ monday, tasks, sessions, trainings, meetings = [], onOpen }: {
   monday: string;
   tasks: TaskerTask[];
   sessions: TaskerSession[];
   trainings: TrainingEnrollment[];
+  meetings?: TaskerMeetingOccurrence[];
   onOpen: (t: TaskerTask) => void;
 }) {
   const days = weekDays(monday);
-  const byDay = layoutDays(days, tasks, sessions, trainings);
+  const byDay = layoutDays(days, tasks, sessions, trainings, meetings);
   const today = todayMsk();
   return (
     <div className="grid min-w-0 grid-cols-1 gap-2.5 px-4 pb-6 pt-3 sm:grid-cols-2 sm:px-6 lg:grid-cols-5">

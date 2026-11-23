@@ -218,6 +218,8 @@ export interface TaskerTasksResponse {
   tasks: TaskerTask[];
   sessions: TaskerSession[];
   trainings: TrainingEnrollment[];
+  /** Вхождения регулярных собраний в окне from–to (только «Неделя»/«Сегодня»; на доске — пусто). */
+  meetings?: TaskerMeetingOccurrence[];
 }
 
 /** POST /api/tasker/tasks */
@@ -337,4 +339,103 @@ export interface TaskerManagerOption {
 
 export interface TaskerManagersResponse {
   managers: TaskerManagerOption[];
+}
+
+// ── Регулярные собрания (TASKER_SPEC.md «Регулярные собрания», миграция 278) ──────────────
+
+/** Повтор. Дни недели — ISO: 1 = пн … 7 = вс. */
+export type TaskerRecurrence =
+  | { kind: 'weekdays' }
+  | { kind: 'weekly'; days: number[] }
+  | { kind: 'biweekly'; days: number[] }
+  | { kind: 'monthly_day'; day: number }
+  | { kind: 'monthly_nth'; nth: 1 | 2 | 3 | 4 | -1; weekday: number };
+
+export type TaskerCalendarState = 'pending' | 'synced' | 'failed';
+
+export interface TaskerMeeting {
+  id: number;
+  title: string;
+  agenda: string;
+  organizer: TaskerPerson;
+  /** YYYY-MM-DD — дата начала серии */
+  startDate: string;
+  /** HH:MM по МСК */
+  startTime: string;
+  durationMin: number;
+  recurrence: TaskerRecurrence;
+  /** «по будням в 10:00», «по пн и чт», «2-й вторник месяца»… */
+  recurrenceLabel: string;
+  untilDate: string | null;
+  place: string | null;
+  departments: { id: string; name: string }[];
+  people: TaskerPerson[];
+  /** Итоговый состав: люди отделов + отдельные люди (без организатора). */
+  participants: TaskerPerson[];
+  /** Отменённые вхождения (YYYY-MM-DD). */
+  cancelledDates: string[];
+  cancelledAt: string | null;
+  /** Ближайшие вхождения (до 8), с отметкой отмены. */
+  upcoming: { date: string; startsAt: string; cancelled: boolean }[];
+  calendar: { state: TaskerCalendarState; error: string | null; eventId: number | null; mode: 'rrule' | 'rolling' };
+  /** Текущий пользователь может править/отменять. */
+  canEdit: boolean;
+  createdBy: string | null;
+}
+
+/** Одно вхождение собрания — для «Недели»/«Сегодня». */
+export interface TaskerMeetingOccurrence {
+  meetingId: number;
+  date: string;
+  /** ISO datetime начала */
+  startsAt: string;
+  durationMin: number;
+  title: string;
+  place: string | null;
+  organizer: TaskerPerson;
+  participantsCount: number;
+  recurrenceLabel: string;
+  cancelled: boolean;
+}
+
+/** POST /api/tasker/meetings, PATCH /api/tasker/meetings/:id (PATCH — любые поля). */
+export interface TaskerMeetingInput {
+  title: string;
+  agenda?: string;
+  /** Организатор — Bitrix ID; по умолчанию создатель. Выбрать другого может директор/админ. */
+  organizerId?: number | null;
+  startDate: string;
+  startTime: string;
+  durationMin?: number;
+  recurrence: TaskerRecurrence;
+  untilDate?: string | null;
+  place?: string | null;
+  departmentIds?: string[];
+  personIds?: number[];
+}
+
+/** GET /api/tasker/meetings?from&to — серии (видимые) + вхождения в окне. */
+export interface TaskerMeetingsResponse {
+  meetings: TaskerMeeting[];
+  occurrences: TaskerMeetingOccurrence[];
+}
+
+export interface TaskerMeetingResponse {
+  meeting: TaskerMeeting;
+}
+
+/** POST /api/tasker/meetings/:id/occurrences — отменить/вернуть одно вхождение. */
+export interface TaskerOccurrenceRequest {
+  date: string;
+  cancelled: boolean;
+}
+
+/** GET /api/tasker/meetings/options — справочники формы. */
+export interface TaskerMeetingOptionsResponse {
+  departments: { id: string; name: string; path: string | null }[];
+  people: TaskerManagerOption[];
+  /** Можно выбрать организатором другого (директор/админ). */
+  canPickOrganizer: boolean;
+  /** Bitrix ID текущего пользователя (организатор по умолчанию). */
+  selfBitrixId: number | null;
 }

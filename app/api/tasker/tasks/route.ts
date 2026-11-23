@@ -6,6 +6,7 @@ import { listSessions, listTasks } from '@/features/tasker/engine/repo';
 import { createTasks } from '@/features/tasker/engine/create';
 import { errorResponse } from '@/features/tasker/engine/config';
 import { getTrainingActor, listEnrollments } from '@/features/tasker/trainings/engine';
+import { listMeetings } from '@/features/tasker/meetings/engine/store';
 import type { TaskerTasksQuery, TaskerTasksResponse, TaskerView } from '@/features/tasker/types';
 
 export const dynamic = 'force-dynamic';
@@ -37,7 +38,13 @@ export async function GET(req: NextRequest) {
     const trainings = await getTrainingActor(auth.session)
       .then(actor => listEnrollments(actor, { managerIds: q.managerId ? [q.managerId] : [], from: q.from ?? null, to: q.to ?? null }))
       .catch(e => { console.warn('[tasker] обучения:', e instanceof Error ? e.message : e); return []; });
-    const body: TaskerTasksResponse = { tasks, sessions, trainings };
+    // Вхождения регулярных собраний — только для «Недели»/«Сегодня» (окно задано); сбой не ломает виды.
+    const meetings = q.from && q.to
+      ? await listMeetings(auth.session, auth.scope, { from: q.from, to: q.to, managerId: q.managerId ?? null })
+        .then(r => r.occurrences)
+        .catch(e => { if ((e as { code?: string }).code !== '42P01') console.warn('[tasker] собрания:', e instanceof Error ? e.message : e); return []; })
+      : [];
+    const body: TaskerTasksResponse = { tasks, sessions, trainings, meetings };
     return NextResponse.json(body);
   } catch (e) {
     return errorResponse(e);
