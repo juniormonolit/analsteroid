@@ -13,7 +13,7 @@ import {
   MIN_DENOMINATOR, NOT_CONFIGURED_MESSAGE, SESSION_BASE_MIN, SESSION_PER_EXTRA_MIN, TaskerError, toMskIso,
   type TaskerMetricDef, type TaskerSettings,
 } from './config';
-import { computeSnapshots, stripMeta } from './snapshot';
+import { computeSnapshots, snapshotCacheScope, stripMeta } from './snapshot';
 import { inRequestRunner, type ReportRunner } from './reportRunner';
 import { crmBindingOf, loadHotCustomers } from './customers';
 import { drainTask, enqueue, type BxOp } from './bitrix';
@@ -166,7 +166,8 @@ export async function createTasks(
   if (!eligible.length) return { created: [], warnings };
 
   // Снимок — один прогон отчёта на всех.
-  const snaps = await computeSnapshots(run, eligible, metric, req.period);
+  // Тот же кэш, что у формы: снимок в задаче = цифры, которые РОП только что видел.
+  const snaps = await computeSnapshots(run, eligible, metric, req.period, { cacheScope: snapshotCacheScope(scope.kind, session.id) });
 
   const deadlineIso = toMskIso(req.deadline);
   const sessionCache = new Map<string, number>();

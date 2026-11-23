@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { canSeeManager } from '@/lib/org/sessionScope';
 import { taskerAuth } from '@/features/tasker/engine/http';
-import { computeSnapshots, stripMeta } from '@/features/tasker/engine/snapshot';
+import { computeSnapshots, snapshotCacheScope, stripMeta } from '@/features/tasker/engine/snapshot';
 import { inRequestRunner } from '@/features/tasker/engine/reportRunner';
 import { errorResponse, isYmd, metricDef, TaskerError } from '@/features/tasker/engine/config';
 import type { TaskerSnapshotRequest, TaskerSnapshotResponse } from '@/features/tasker/types';
@@ -23,7 +23,8 @@ export async function POST(req: NextRequest) {
     const visible = ids.filter(id => canSeeManager(auth.scope, String(id)));
     if (!visible.length) return NextResponse.json({ error: 'Эти менеджеры вам недоступны', code: 'forbidden' }, { status: 403 });
     const metric = await metricDef(b.metricId);
-    const snaps = await computeSnapshots(inRequestRunner, visible.map(String), metric, { from: b.period.from, to: b.period.to });
+    const snaps = await computeSnapshots(inRequestRunner, visible.map(String), metric, { from: b.period.from, to: b.period.to },
+      { cacheScope: snapshotCacheScope(auth.scope.kind, auth.session.id) });
     const out: TaskerSnapshotResponse = {};
     for (const id of visible) out[String(id)] = stripMeta(snaps[String(id)]);
     return NextResponse.json(out);
