@@ -3,7 +3,7 @@
 --     закреплённые отделы (слот предлагается только их менеджерам). Правит тренер в «Настройках» раздела.
 --     Стартовые данные — из Excel тренера «Обучения брони_повторки.xlsx» (лист «ОС» с сентября 2026 и «НЦ»):
 --     Пн–Пт 9:30 / 10:15 / 15:00 / 16:15 онлайн по ~45 мин; Вт/Чт 16:15 закреплены за Москвой («МСК ОС»);
---     11:00 — «нулевой цикл», Питер, очно. Отделы из Excel — подписи (РОПы/«МСК ОС»), а не id орг-структуры,
+--     11:15 — «нулевой цикл» (было 11:00, правка Будковского 23.11), Питер, очно. Отделы из Excel — подписи (РОПы/«МСК ОС»), а не id орг-структуры,
 --     поэтому закреплённые слоты сидятся с department_label без department_ids: пока тренер не выберет отделы,
 --     такой слот автоматически не предлагается (вручную — можно).
 --  2) tasker_training_events.slot_id / department_label — из какого слота собрано занятие и подпись отдела
@@ -43,15 +43,15 @@ ALTER TABLE tasker_training_events
 INSERT INTO tasker_training_slots (weekday, start_time, duration_min, label, place, is_offline, department_label)
 SELECT v.weekday, v.start_time::time, v.duration_min, v.label, v.place, v.is_offline, v.department_label
   FROM (VALUES
-    (1, '09:30', 45, NULL, NULL, false, NULL), (1, '10:15', 45, NULL, NULL, false, NULL), (1, '11:00', 45, 'Нулевой цикл', 'Санкт-Петербург, очно', true, 'Питер · НЦ'),
+    (1, '09:30', 45, NULL, NULL, false, NULL), (1, '10:15', 45, NULL, NULL, false, NULL), (1, '11:15', 45, 'Нулевой цикл', 'Санкт-Петербург, очно', true, 'Питер · НЦ'),
     (1, '15:00', 45, NULL, NULL, false, NULL), (1, '16:15', 45, NULL, NULL, false, NULL),
-    (2, '09:30', 45, NULL, NULL, false, NULL), (2, '10:15', 45, NULL, NULL, false, NULL), (2, '11:00', 45, 'Нулевой цикл', 'Санкт-Петербург, очно', true, 'Питер · НЦ'),
+    (2, '09:30', 45, NULL, NULL, false, NULL), (2, '10:15', 45, NULL, NULL, false, NULL), (2, '11:15', 45, 'Нулевой цикл', 'Санкт-Петербург, очно', true, 'Питер · НЦ'),
     (2, '15:00', 45, NULL, NULL, false, NULL), (2, '16:15', 45, NULL, NULL, false, 'Москва'),
-    (3, '09:30', 45, NULL, NULL, false, NULL), (3, '10:15', 45, NULL, NULL, false, NULL), (3, '11:00', 45, 'Нулевой цикл', 'Санкт-Петербург, очно', true, 'Питер · НЦ'),
+    (3, '09:30', 45, NULL, NULL, false, NULL), (3, '10:15', 45, NULL, NULL, false, NULL), (3, '11:15', 45, 'Нулевой цикл', 'Санкт-Петербург, очно', true, 'Питер · НЦ'),
     (3, '15:00', 45, NULL, NULL, false, NULL), (3, '16:15', 45, NULL, NULL, false, NULL),
-    (4, '09:30', 45, NULL, NULL, false, NULL), (4, '10:15', 45, NULL, NULL, false, NULL), (4, '11:00', 45, 'Нулевой цикл', 'Санкт-Петербург, очно', true, 'Питер · НЦ'),
+    (4, '09:30', 45, NULL, NULL, false, NULL), (4, '10:15', 45, NULL, NULL, false, NULL), (4, '11:15', 45, 'Нулевой цикл', 'Санкт-Петербург, очно', true, 'Питер · НЦ'),
     (4, '15:00', 45, NULL, NULL, false, NULL), (4, '16:15', 45, NULL, NULL, false, 'Москва'),
-    (5, '09:30', 45, NULL, NULL, false, NULL), (5, '10:15', 45, NULL, NULL, false, NULL), (5, '11:00', 45, 'Нулевой цикл', 'Санкт-Петербург, очно', true, 'Питер · НЦ'),
+    (5, '09:30', 45, NULL, NULL, false, NULL), (5, '10:15', 45, NULL, NULL, false, NULL), (5, '11:15', 45, 'Нулевой цикл', 'Санкт-Петербург, очно', true, 'Питер · НЦ'),
     (5, '15:00', 45, NULL, NULL, false, NULL), (5, '16:15', 45, NULL, NULL, false, NULL)
   ) AS v(weekday, start_time, duration_min, label, place, is_offline, department_label)
  WHERE NOT EXISTS (SELECT 1 FROM tasker_training_slots);
