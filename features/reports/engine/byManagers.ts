@@ -114,6 +114,26 @@ function aggregate(
   return agg;
 }
 
+// ── Тип аккаунта (менеджеры / логисты) ─────────────────────────────────────
+// Строки отчёта режутся по префиксу Битрикс-логина (manager* / logist*) из employees.
+// Вынесено, чтобы «Карта показателей» (features/metric-map) брала ТО ЖЕ население, что
+// «Итого» этого отчёта (по умолчанию accountType='managers', см. /api/reports/run).
+
+/** bitrix id → Битрикс-логин в оригинальном регистре (только активные сотрудники). */
+export async function loadAccountLogins(): Promise<Map<string, string>> {
+  const res = await systemDb().query<{ bitrix_user_id: string; bitrix_login: string | null }>(
+    `SELECT bitrix_user_id::text AS bitrix_user_id, bitrix_login FROM employees WHERE is_active = true`,
+  );
+  return new Map(res.rows.map(r => [r.bitrix_user_id, r.bitrix_login ?? '']));
+}
+
+/** Проходит ли строка менеджера фильтр типа аккаунта отчёта. */
+export function accountTypeAllows(login: string | undefined, accountType: AccountType): boolean {
+  const prefix = accountType === 'managers' ? 'manager' : accountType === 'logists' ? 'logist' : null;
+  if (!prefix) return true;
+  return (login ?? '').toLowerCase().startsWith(prefix);
+}
+
 // ── Public API ────────────────────────────────────────────────────────────
 export interface ByManagersOptions {
   period: DateRange;
@@ -182,8 +202,6 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   const pgFilterSnap = buildProductGroupFilter(pgFilterInput, 1); // после [CURATED_STAGE_IDS]
   const pgKey = productGroupCacheKey(pgFilterInput);
 
-  const sysDb = systemDb();
-
   // Org hierarchy + dept filter run every request (fast, small tables).
   // ОРГСТРУКТУРА — из sa (analyticsDb), НЕ из YC system: синк Битрикса (ночной +
   // кнопка «Синхронизировать» на странице Оргструктуры) с 13.07 пишет ТОЛЬКО в
@@ -217,9 +235,7 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
     // employees.bitrix_login (NOT in org_resolved_hierarchy, where managers are short_login #NNNN).
     // Грузим ВСЕГДА (а не только при accountType!=='all'): полный логин теперь ещё и
     // выводится колонкой «Логин» (метрика manager_login, правка владельца 31.08).
-    sysDb.query<{ bitrix_user_id: string; bitrix_login: string | null }>(
-      `SELECT bitrix_user_id::text AS bitrix_user_id, bitrix_login FROM employees WHERE is_active = true`,
-    ),
+    loadAccountLogins(),
     // Стаж рядом с #логином (правка владельца 19.11). Сбой источника дат — не повод
     // ронять отчёт: без стажа строки рисуются как раньше.
     getEmployeeStartDates().catch(err => {
@@ -232,8 +248,7 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   const allowedBitrix  = deptRes ? new Set(deptRes.rows.map(r => r.bitrix_user_id)) : null;
   // Оригинальный регистр (Manager2015) — для колонки «Логин»; префикс-фильтр
   // аккаунтов сравнивает через toLowerCase() сам.
-  const loginByBitrix  = new Map(loginRes.rows.map(r => [r.bitrix_user_id, r.bitrix_login ?? '']));
-  const accountPrefix  = accountType === 'managers' ? 'manager' : accountType === 'logists' ? 'logist' : null;
+  const loginByBitrix  = loginRes;
 
   // Metrics
   const allMetrics = await loadMetrics();
@@ -361,10 +376,7 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   // Map to ReportRow[]
   return [...agg.entries()]
     .filter(([id]) => !allowedBitrix || allowedBitrix.has(id))
-    .filter(([id]) => {
-      if (!accountPrefix) return true;
-      return (loginByBitrix.get(id) ?? '').toLowerCase().startsWith(accountPrefix);
-    })
+    .filter(([id]) => accountTypeAllows(loginByBitrix.get(id), accountType))
     .map(([id, metrics]) => {
       const org = orgMap.get(id);
       // «Сделок в работе» (перв./повт./все) — троица напрямую из снимка, НЕ через

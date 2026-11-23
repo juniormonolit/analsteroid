@@ -7,7 +7,8 @@ import { fetchByManagers } from '../features/reports/engine/byManagers.ts';
 
 const [from = '2026-10-01', to = '2026-10-31', ...mgrArg] = process.argv.slice(2);
 const period = { from: new Date(`${from}T00:00:00+03:00`), to: new Date(`${to}T12:00:00+03:00`) };
-const rows = await fetchByManagers({ period, dealScope: 'all', clientType: 'all' });
+// accountType='managers' — умолчание /api/reports/run для «По менеджерам»: «Итого» отчёта = «Компания» карты.
+const rows = await fetchByManagers({ period, dealScope: 'all', clientType: 'all', accountType: 'managers' });
 const sum = (id: string, f?: (r: typeof rows[number]) => boolean) =>
   rows.filter(r => !f || f(r)).reduce((s, r) => s + Number(r.metrics[id] ?? 0), 0);
 const fmt = (n: number | null | undefined) => (n == null ? '—' : Math.round(n).toLocaleString('ru-RU'));

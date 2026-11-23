@@ -13,6 +13,7 @@ import type { MapPeriod, MapScope, MapScopeType, MetricMapResponse } from '../ty
 import { addAgg, clearAggCache, emptyAgg, fetchManagerAggs, type Agg } from './data';
 import { computeMap } from './compute';
 import { ROOT_ID } from './tree';
+import { accountTypeAllows, loadAccountLogins } from '@/features/reports/engine/byManagers';
 
 export const WINDOW_MONTHS = 3;
 const MSK = 'Europe/Moscow';
@@ -65,41 +66,48 @@ export async function resolveDeptUuid(id: string): Promise<string | null> {
 interface ScopePlan {
   label: string;
   productGroupId?: number;
-  /** null — все менеджеры (компания / товарная группа), иначе — набор bitrix id. */
-  managers: Set<string> | null;
+  /** Фильтр строк менеджеров: компания/группа — как «Итого» отчёта по менеджерам
+   *  (accountType='managers'), отдел — его менеджеры, менеджер — он сам. */
+  managers: (id: string) => boolean;
   /** Менеджеры «команды» для медиан. */
   team: Set<string>;
   singleManager: boolean;
 }
 
+// Население карты = строки отчёта «По менеджерам» с его фильтром по умолчанию
+// accountType='managers' (Битрикс-логин manager*), иначе «Компания» ≠ «Итого» отчёта:
+// сверка 23.11 — без фильтра +485 540 ₽ отгрузок и +1 454 перв. сделок от не-менеджерских аккаунтов.
+const REPORT_ACCOUNT_TYPE = 'managers' as const;
+
 async function planScope(s: ParsedScope): Promise<ScopePlan | { error: string }> {
-  const org = await loadOrg();
-  const allActive = new Set(org.map(o => o.managerId));
-  if (s.type === 'company') return { label: 'Компания', managers: null, team: allActive, singleManager: false };
+  const [org, logins] = await Promise.all([loadOrg(), loadAccountLogins()]);
+  const isReportRow = (id: string) => accountTypeAllows(logins.get(id), REPORT_ACCOUNT_TYPE);
+  const allActive = new Set(org.map(o => o.managerId).filter(isReportRow));
+  if (s.type === 'company') return { label: 'Компания', managers: isReportRow, team: allActive, singleManager: false };
   if (s.type === 'product_group') {
     const pg = await analyticsDb().query<{ name: string }>('SELECT name FROM product_groups WHERE id = $1::int', [Number(s.id)]);
     return {
       label: pg.rows[0]?.name ?? `Группа #${s.id}`, productGroupId: Number(s.id),
-      managers: null, team: allActive, singleManager: false,
+      managers: isReportRow, team: allActive, singleManager: false,
     };
   }
   if (s.type === 'department') {
     const uuid = await resolveDeptUuid(s.id!);
     if (!uuid) return { error: 'Отдел не найден' };
     const subtree = await expandDepartmentSubtree([uuid]);
-    const members = new Set(org.filter(o => o.deptUuid && subtree.has(o.deptUuid)).map(o => o.managerId));
+    const members = new Set(org.filter(o => o.deptUuid && subtree.has(o.deptUuid) && isReportRow(o.managerId)).map(o => o.managerId));
     const { byId } = await loadDepartments();
-    return { label: byId.get(uuid)?.name ?? 'Отдел', managers: members, team: members, singleManager: false };
+    return { label: byId.get(uuid)?.name ?? 'Отдел', managers: id => members.has(id), team: members, singleManager: false };
   }
   // manager: команда — его отдел (точно), вне оргструктуры — вся компания
   const me = org.find(o => o.managerId === s.id);
-  const team = me?.deptUuid ? new Set(org.filter(o => o.deptUuid === me.deptUuid).map(o => o.managerId)) : allActive;
-  return { label: me?.name ?? `#${s.id}`, managers: new Set([s.id!]), team, singleManager: true };
+  const team = me?.deptUuid ? new Set(org.filter(o => o.deptUuid === me.deptUuid && isReportRow(o.managerId)).map(o => o.managerId)) : allActive;
+  return { label: me?.name ?? `#${s.id}`, managers: id => id === s.id, team, singleManager: true };
 }
 
-function sumFor(rows: Map<string, Agg>, managers: Set<string> | null): Agg {
+function sumFor(rows: Map<string, Agg>, managers: (id: string) => boolean): Agg {
   const out = emptyAgg();
-  for (const [id, a] of rows) if (!managers || managers.has(id)) addAgg(out, a);
+  for (const [id, a] of rows) if (managers(id)) addAgg(out, a);
   return out;
 }
 
@@ -179,6 +187,11 @@ export async function computeMetricMap(req: MapRequest): Promise<MetricMapRespon
 
 // ── Снимки ───────────────────────────────────────────────────────────────────
 
+/** Версия расчёта в снимке: другая — снимок устарел даже для закрытого периода.
+ *  2 — население = строки отчёта по менеджерам (accountType='managers'), 23.11. */
+const ENGINE_VERSION = 2;
+type StoredPayload = MetricMapResponse & { engineVersion?: number };
+
 function snapshotFresh(periodTo: string, computedAt: Date): boolean {
   const computedDay = formatInTimeZone(computedAt, MSK, 'yyyy-MM-dd');
   return periodTo < computedDay || computedDay === mskToday();
@@ -190,19 +203,24 @@ async function saveSnapshot(req: MapRequest, data: MetricMapResponse): Promise<v
      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
      ON CONFLICT (scope_key, period_from, period_to, compare_from, compare_to)
      DO UPDATE SET payload = EXCLUDED.payload, computed_at = EXCLUDED.computed_at`,
-    [scopeKey(req.scope), req.from, req.to, req.compareFrom, req.compareTo, JSON.stringify(data), data.computedAt],
+    [scopeKey(req.scope), req.from, req.to, req.compareFrom, req.compareTo,
+     JSON.stringify({ ...data, engineVersion: ENGINE_VERSION } satisfies StoredPayload), data.computedAt],
   );
 }
 
 export async function getMetricMap(req: MapRequest): Promise<MetricMapResponse> {
   try {
-    const r = await systemDb().query<{ payload: MetricMapResponse; computed_at: Date }>(
+    const r = await systemDb().query<{ payload: StoredPayload; computed_at: Date }>(
       `SELECT payload, computed_at FROM metric_map_snapshots
         WHERE scope_key = $1 AND period_from = $2 AND period_to = $3 AND compare_from = $4 AND compare_to = $5`,
       [scopeKey(req.scope), req.from, req.to, req.compareFrom, req.compareTo],
     );
     const row = r.rows[0];
-    if (row && snapshotFresh(req.to, new Date(row.computed_at))) return row.payload;
+    if (row && row.payload.engineVersion === ENGINE_VERSION && snapshotFresh(req.to, new Date(row.computed_at))) {
+      const { engineVersion: _v, ...payload } = row.payload;
+      void _v;
+      return payload;
+    }
   } catch (err) {
     // Таблицы ещё нет (миграция не накатана) — считаем без снимка, раздел не роняем.
     console.warn('[metric-map] снимок недоступен:', err instanceof Error ? err.message : err);
