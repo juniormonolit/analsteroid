@@ -12,7 +12,7 @@ import {
   TASKER_METRIC_GROUP_LABELS, TASKER_VERDICT_LABELS,
   type Snapshot, type TaskerSnapshotResponse, type TaskerTask,
 } from '../../types';
-import { BOARD_COLUMN_LABELS, VERDICT_CLS, boardColumn, fmtD, fmtDT, fmtValue, isOverdue, moveTargets, mskDay, TASK_KIND_LABELS, taskExtras, todayMsk, type MoveTarget } from './format';
+import { BOARD_COLUMN_LABELS, VERDICT_CLS, boardColumn, fmtD, fmtDT, fmtValue, isOverdue, moveTargets, mskDay, TASK_KIND_LABELS, todayMsk, type MoveTarget } from './format';
 import { ManagerTrainingHistory } from '@/features/tasker/trainings/ui/ManagerTrainingHistory';
 
 /** Минимум символов «Что сделано» — как на сервере (engine/patch.ts MIN_DONE_NOTE). */
@@ -66,7 +66,7 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
   const linkTarget = isBitrixIframe ? '_top' : '_blank';
   const overdue = isOverdue(t);
   const targets = moveTargets(t);
-  const { kind, assignee, doneNote, doneAt } = taskExtras(t);
+  const { kind, assignee, doneNote, doneAt } = t;
   const canChangeStatus = targets.length > 0;
   const [completing, setCompleting] = useState(false);
   const [note, setNote] = useState('');

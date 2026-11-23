@@ -42,7 +42,8 @@ function task(i: number, status: TaskerStatus, opts: { day: string; hm?: string;
     executorBitrixId: i % 4 === 1 ? '2054' : String(rop.id),
     assignee: i % 4 === 1 ? { id: 2054, name: 'Будковский Андрей' } : rop,
     doneNote: status === 'done' || status === 'measuring' || status === 'result' ? 'Разобрали 6 сделок, проверили брони, перезвонили трём клиентам.' : null,
-    doneAt: null, doneBy: null, canChangeStatus: true,
+    doneAt: status === 'done' || status === 'measuring' || status === 'result' ? at(addDays(opts.day, -1), '17:00') : null,
+    doneBy: null, canChangeStatus: true,
     departmentName: i % 2 ? 'Отдел продаж Юг' : 'Отдел продаж Центр',
     metricId: m.id, metricLabel: m.label, metricGroup: m.group, higherIsBetter: m.higherIsBetter, format: m.format,
     period: { from: addDays(todayMsk(), -40), to: addDays(todayMsk(), -10) },
@@ -57,14 +58,6 @@ function task(i: number, status: TaskerStatus, opts: { day: string; hm?: string;
     status,
     bitrixStatus: null,
     closedAt: status === 'done' || status === 'measuring' || status === 'result' ? at(addDays(opts.day, -1), '17:00') : null,
-    // Поля правок 23.11 (сессия A) — пока вне TaskerTask, см. taskExtras() в format.ts.
-    ...({
-      kind: i % 2 ? 'theory' : 'practice',
-      assignee: i % 2 ? P(900, 'Будковский Павел') : ROPS[i % 2],
-      doneNote: status === 'done' || status === 'measuring' || status === 'result'
-        ? 'Разобрали 14 сделок в «Созвонился и озвучил», 6 вывели дальше; проверили брони на неделю.' : null,
-      doneAt: status === 'done' || status === 'measuring' || status === 'result' ? at(addDays(opts.day, -1), '17:00') : null,
-    } as object),
     verdict: opts.verdict ?? null,
     measuredValue: opts.verdict ? Math.round(value * (opts.verdict === 'achieved' ? 1.35 : opts.verdict === 'improved' ? 1.15 : 1) * 10) / 10 : null,
     measuredAt: opts.verdict ? at(opts.control ?? opts.day, '09:00') : null,

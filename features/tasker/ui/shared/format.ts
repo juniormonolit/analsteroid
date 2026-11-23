@@ -1,5 +1,5 @@
 // Форматтеры и даты Задачника (общие для доски, недели, «Сегодня» и карточки). Время — МСК.
-import type { TaskerMetric, TaskerPerson, TaskerTask, TaskerVerdict } from '../../types';
+import type { TaskerMetric, TaskerTask, TaskerVerdict } from '../../types';
 
 const TZ = 'Europe/Moscow';
 const MSK_OFFSET_MS = 3 * 3600_000;
@@ -113,10 +113,7 @@ export function plural(n: number, one: string, few: string, many: string) {
   return many;
 }
 
-// ── Поля правок 23.11 (исполнитель, теория/практика, «Что сделано») ─────────────
-// Поля добавляет сессия A (миграция 279: kind, assignee_*, done_note, done_at). Читаем через
-// опциональное расширение, чтобы виды работали и со старым ответом API, и с новым.
-export type TaskKind = 'theory' | 'practice';
-export const TASK_KIND_LABELS: Record<TaskKind, string> = { theory: 'Теория', practice: 'Практика' };
-type TaskExtras = { kind?: TaskKind | null; assignee?: TaskerPerson | null; doneNote?: string | null; doneAt?: string | null };
-export const taskExtras = (t: TaskerTask) => t as TaskerTask & TaskExtras;
+// ── Поля правок 23.11 — теперь в TaskerTask (миграция 279). Алиасы оставлены для ManagerTaskerBlock.
+export { TASKER_KIND_LABELS as TASK_KIND_LABELS } from '../../types';
+/** @deprecated поля kind/assignee/doneNote/doneAt есть в TaskerTask — читайте напрямую. */
+export const taskExtras = (t: TaskerTask) => t;

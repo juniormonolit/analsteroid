@@ -3,7 +3,7 @@
 // Строки по важности: тема (метрика) → менеджер → было/цель → срок/слот и сигналы.
 import { AlertTriangle, CalendarClock, CloudOff, Target } from 'lucide-react';
 import { TASKER_VERDICT_LABELS, type TaskerTask } from '../../types';
-import { TASK_KIND_LABELS, VERDICT_CLS, fmtD, fmtDT, fmtValue, isOverdue, shortName, taskExtras } from './format';
+import { TASK_KIND_LABELS, VERDICT_CLS, fmtD, fmtDT, fmtValue, isOverdue, shortName } from './format';
 
 export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, onDragEnd, compact }: {
   task: TaskerTask;
@@ -16,7 +16,7 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
   compact?: boolean;
 }) {
   const overdue = isOverdue(t);
-  const { kind, assignee, doneNote } = taskExtras(t);
+  const { kind, assignee, doneNote } = t;
   return (
     <button
       type="button"
