@@ -1,25 +1,26 @@
-// Какая задача — «Теория» на тренера. Модель «Теория / Практика» ведёт ядро (сессия A); здесь — единственное место,
-// где модуль обучений об этом знает. Пока колонки типа задачи в tasker_tasks нет, очередь пуста (available=false).
+// Какая задача — «Теория» на тренера. Модель «Теория / Практика» ведёт ядро (миграция 279, сессия A):
+// tasker_tasks.kind = 'theory', исполнитель — assignee_bitrix_id (тренер), завершение — done_at.
+// Здесь — единственное место, где модуль обучений об этом знает. До наката 279 колонок нет — очередь пуста
+// (available=false), остальной раздел работает.
 import 'server-only';
 import { systemDb } from '@/lib/db/clients';
 
-let cache: { at: number; cols: Set<string> } | null = null;
+let cache: { at: number; ok: boolean } | null = null;
 
-async function taskColumns(): Promise<Set<string>> {
-  if (cache && Date.now() - cache.at < 5 * 60_000) return cache.cols;
-  const r = await systemDb().query<{ column_name: string }>(
-    `SELECT column_name FROM information_schema.columns WHERE table_name = 'tasker_tasks' AND table_schema = current_schema()`);
-  cache = { at: Date.now(), cols: new Set(r.rows.map(x => x.column_name)) };
-  return cache.cols;
+async function hasKindColumn(): Promise<boolean> {
+  if (cache && Date.now() - cache.at < 5 * 60_000) return cache.ok;
+  const r = await systemDb().query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'tasker_tasks' AND table_schema = current_schema() AND column_name IN ('kind', 'assignee_bitrix_id', 'done_at')`);
+  cache = { at: Date.now(), ok: (r.rowCount ?? 0) === 3 };
+  return cache.ok;
 }
 
-/** WHERE-фрагмент «задача Теория на тренера» для алиаса tasker_tasks; null — модель ещё не развёрнута. */
+/** WHERE-фрагмент «открытая задача Теория на тренера» для алиаса tasker_tasks ($1 = тренер); null — 279 не накачена. */
 export async function theoryTaskWhere(alias: string, trainerId: string): Promise<{ sql: string; args: unknown[] } | null> {
-  const cols = await taskColumns();
-  void trainerId;
-  // Имя колонки у ядра на момент написания не зафиксировано (23.11) — берём первую существующую из вероятных.
-  // Когда A закоммитит модель, оставить одну строку с точным именем.
-  const col = ['kind', 'task_kind', 'task_type', 'work_type'].find(c => cols.has(c));
-  if (col) return { sql: `${alias}.${col} = 'theory'`, args: [] };
-  return null;
+  if (!(await hasKindColumn())) return null;
+  return {
+    sql: `${alias}.kind = 'theory' AND COALESCE(${alias}.assignee_bitrix_id, '') = $1 AND ${alias}.done_at IS NULL`,
+    args: [trainerId],
+  };
 }
