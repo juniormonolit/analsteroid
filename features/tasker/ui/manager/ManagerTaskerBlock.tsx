@@ -158,9 +158,7 @@ export function ManagerTaskerBlock({ managerId, managerName, department, period 
           managerIds={[managerId]}
           managerOptions={[{ value: managerId, label: managerName, hint: department ?? null }]}
           period={period}
-          // Тип «Теория» (исполнитель — тренер): проп kind заводит сессия A вместе с кнопками Теория/Практика;
-          // до этого форма его просто не читает.
-          {...({ kind: 'theory' } as Partial<CreateTaskDrawerProps>)}
+          kind="theory"
         />
       )}
     </section>
