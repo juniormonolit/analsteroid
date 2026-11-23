@@ -3,7 +3,7 @@
 // Строки по важности: тема (метрика) → менеджер → было/цель → срок/слот и сигналы.
 import { AlertTriangle, CalendarClock, CloudOff, Target } from 'lucide-react';
 import { TASKER_VERDICT_LABELS, type TaskerTask } from '../../types';
-import { VERDICT_CLS, fmtD, fmtDT, fmtValue, isOverdue, shortName } from './format';
+import { TASK_KIND_LABELS, VERDICT_CLS, fmtD, fmtDT, fmtValue, isOverdue, shortName, taskExtras } from './format';
 
 export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, onDragEnd, compact }: {
   task: TaskerTask;
@@ -16,6 +16,7 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
   compact?: boolean;
 }) {
   const overdue = isOverdue(t);
+  const { kind, assignee, doneNote } = taskExtras(t);
   return (
     <button
       type="button"
@@ -35,9 +36,12 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
       </div>
       <div className="flex min-w-0 items-center gap-1.5 text-[var(--color-text-secondary)]">
         <span className="min-w-0 truncate" title={`Менеджер: ${t.manager.name}`}>{shortName(t.manager.name)}</span>
-        {!compact && t.rop && <>
+        {kind && <span className={`shrink-0 rounded px-1.5 py-px text-[11px] font-medium ${kind === 'theory' ? 'bg-[var(--color-warning)]/15 text-[var(--color-warning)]' : 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'}`}>{TASK_KIND_LABELS[kind]}</span>}
+        {!compact && (assignee ?? t.rop) && <>
           <span aria-hidden className="shrink-0 text-[var(--color-text-muted)]">·</span>
-          <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`РОП: ${t.rop.name}`}>РОП {shortName(t.rop.name)}</span>
+          {assignee
+            ? <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`Исполнитель: ${assignee.name}`}>{shortName(assignee.name)}</span>
+            : <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`РОП: ${t.rop!.name}`}>РОП {shortName(t.rop!.name)}</span>}
         </>}
       </div>
       {!compact && (
@@ -45,6 +49,11 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
           <Target size={12} className="shrink-0 text-[var(--color-text-muted)]" aria-hidden />
           <span className="truncate">{fmtValue(t.snapshot.value, t.format)} → {fmtValue(t.target, t.format)}</span>
           {t.measuredValue != null && <span className="truncate text-[var(--color-text-muted)]">· замер {fmtValue(t.measuredValue, t.format)}</span>}
+        </div>
+      )}
+      {doneNote && !compact && (
+        <div className="line-clamp-2 min-w-0 break-words rounded bg-[var(--color-bg-surface)] px-1.5 py-1 text-[var(--color-text-secondary)]" title={doneNote}>
+          <span className="font-medium text-[var(--color-text)]">Сделано: </span>{doneNote}
         </div>
       )}
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[var(--color-text-muted)]">

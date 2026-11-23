@@ -52,6 +52,14 @@ function task(i: number, status: TaskerStatus, opts: { day: string; hm?: string;
     status,
     bitrixStatus: null,
     closedAt: status === 'done' || status === 'measuring' || status === 'result' ? at(addDays(opts.day, -1), '17:00') : null,
+    // Поля правок 23.11 (сессия A) — пока вне TaskerTask, см. taskExtras() в format.ts.
+    ...({
+      kind: i % 2 ? 'theory' : 'practice',
+      assignee: i % 2 ? P(900, 'Будковский Павел') : ROPS[i % 2],
+      doneNote: status === 'done' || status === 'measuring' || status === 'result'
+        ? 'Разобрали 14 сделок в «Созвонился и озвучил», 6 вывели дальше; проверили брони на неделю.' : null,
+      doneAt: status === 'done' || status === 'measuring' || status === 'result' ? at(addDays(opts.day, -1), '17:00') : null,
+    } as object),
     verdict: opts.verdict ?? null,
     measuredValue: opts.verdict ? Math.round(value * (opts.verdict === 'achieved' ? 1.35 : opts.verdict === 'improved' ? 1.15 : 1) * 10) / 10 : null,
     measuredAt: opts.verdict ? at(opts.control ?? opts.day, '09:00') : null,
@@ -73,7 +81,8 @@ export function mockTasks(): TaskerTasksResponse {
     task(15, 'new', { day: today, slot: true, hm: '11:00', session: 1 }),
     task(1, 'in_progress', { day: addDays(today, -2) }),
     task(2, 'in_progress', { day: addDays(mon, 3), slot: true, hm: '15:00' }),
-    task(3, 'awaiting_control', { day: today }),
+    task(3, 'in_progress', { day: today }),
+    task(12, 'result', { day: addDays(today, -19), control: addDays(today, -5), verdict: 'improved' }),
     task(4, 'new', { day: addDays(mon, 4) }),
     task(5, 'done', { day: addDays(today, -1) }),
     task(7, 'measuring', { day: addDays(today, -14), control: today }),

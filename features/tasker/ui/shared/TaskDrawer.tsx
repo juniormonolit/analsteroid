@@ -8,13 +8,12 @@ import { CheckSquare, CloudOff, ExternalLink, Square } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import {
-  TASKER_METRIC_GROUP_LABELS, TASKER_STATUS_LABELS, TASKER_VERDICT_LABELS,
-  type Snapshot, type TaskerPatchableStatus, type TaskerSnapshotResponse, type TaskerTask,
+  TASKER_METRIC_GROUP_LABELS, TASKER_VERDICT_LABELS,
+  type Snapshot, type TaskerSnapshotResponse, type TaskerTask,
 } from '../../types';
-import { VERDICT_CLS, fmtD, fmtDT, fmtValue, isOverdue, mskDay, todayMsk } from './format';
+import { BOARD_COLUMN_LABELS, VERDICT_CLS, boardColumn, fmtD, fmtDT, fmtValue, isOverdue, moveTargets, mskDay, TASK_KIND_LABELS, taskExtras, todayMsk, type MoveTarget } from './format';
 import { ManagerTrainingHistory } from '@/features/tasker/trainings/ui/ManagerTrainingHistory';
 
-export const PATCHABLE: TaskerPatchableStatus[] = ['new', 'in_progress', 'awaiting_control', 'done'];
 
 function useLiveValue(t: TaskerTask, mock: boolean) {
   const from = mskDay(t.createdAt);
@@ -53,7 +52,7 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
   task: TaskerTask;
   mock: boolean;
   onClose: () => void;
-  onStatus: (t: TaskerTask, s: TaskerPatchableStatus) => void;
+  onStatus: (t: TaskerTask, s: MoveTarget) => void;
   busy?: boolean;
 }) {
   const live = useLiveValue(t, mock);
@@ -61,14 +60,17 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
   const { isBitrixIframe } = useAppMode();
   const linkTarget = isBitrixIframe ? '_top' : '_blank';
   const overdue = isOverdue(t);
-  const canChangeStatus = PATCHABLE.includes(t.status as TaskerPatchableStatus) && t.bitrixTaskId != null;
+  const targets = moveTargets(t);
+  const { kind, assignee, doneNote, doneAt } = taskExtras(t);
+  const canChangeStatus = targets.length > 0;
 
   return (
     <Drawer open onOpenChange={o => { if (!o) onClose(); }} title={`${t.metricLabel} · ${t.manager.name}`} desktopWidth="sm:max-w-lg">
       <div className="flex min-w-0 flex-col gap-5 text-sm">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
-          <span className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 font-medium text-[var(--color-accent)]">{TASKER_STATUS_LABELS[t.status]}</span>
+          <span className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 font-medium text-[var(--color-accent)]">{BOARD_COLUMN_LABELS[boardColumn(t)]}</span>
           <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text-muted)]">{TASKER_METRIC_GROUP_LABELS[t.metricGroup]}</span>
+          {kind && <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5 font-medium text-[var(--color-text)]">{TASK_KIND_LABELS[kind]}</span>}
           {overdue && <span className="rounded-full bg-[var(--color-negative-soft)] px-2 py-0.5 font-medium text-[var(--color-negative)]">просрочена</span>}
           {t.verdict && <span className={`rounded-full px-2 py-0.5 font-medium ${VERDICT_CLS[t.verdict]}`}>{TASKER_VERDICT_LABELS[t.verdict]}</span>}
         </div>
@@ -119,6 +121,7 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
 
         <section aria-label="Кто и когда" className="min-w-0 divide-y divide-[var(--color-border)]">
           <Row label="Менеджер">{t.manager.name}</Row>
+          {assignee && <Row label={kind === 'theory' ? 'Исполнитель (тренер)' : 'Исполнитель'}>{assignee.name}</Row>}
           {t.rop && <Row label="РОП">{t.rop.name}</Row>}
           {t.director && <Row label="Наблюдатель">{t.director.name}</Row>}
           <Row label="Поставил">{t.creator.name}</Row>
@@ -126,6 +129,13 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
           {t.slotStart && <Row label="Сессия">{fmtDT(t.slotStart)} · {t.durationMin} мин</Row>}
           <Row label="Контрольная дата">{fmtD(t.controlDate)}</Row>
         </section>
+
+        {doneNote && (
+          <section aria-label="Что сделано" className="min-w-0">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Что сделано{doneAt ? ` · ${fmtDT(doneAt)}` : ''}</h3>
+            <p className="whitespace-pre-line break-words rounded-lg bg-[var(--color-bg-surface)] p-3 text-[var(--color-text)]">{doneNote}</p>
+          </section>
+        )}
 
         {t.body.trim() && (
           <section aria-label="Рекомендации" className="min-w-0">
@@ -167,10 +177,10 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
           <section aria-label="Статус" className="min-w-0">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Перевести в</h3>
             <div className="flex min-w-0 flex-wrap gap-1.5">
-              {PATCHABLE.filter(s => s !== t.status).map(s => (
+              {targets.map(s => (
                 <button key={s} type="button" disabled={busy} onClick={() => onStatus(t, s)}
                   className="inline-flex min-h-11 items-center rounded-lg border border-[var(--color-border)] px-3 text-sm hover:bg-[var(--color-bg-hover)] disabled:opacity-50">
-                  {TASKER_STATUS_LABELS[s]}
+                  {(t.status === 'done' || t.status === 'measuring') && s === 'in_progress' ? 'Вернуть в работу' : BOARD_COLUMN_LABELS[s]}
                 </button>
               ))}
             </div>

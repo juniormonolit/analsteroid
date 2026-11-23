@@ -1,5 +1,5 @@
 // Форматтеры и даты Задачника (общие для доски, недели, «Сегодня» и карточки). Время — МСК.
-import type { TaskerMetric, TaskerTask, TaskerVerdict } from '../../types';
+import type { TaskerMetric, TaskerPerson, TaskerTask, TaskerVerdict } from '../../types';
 
 const TZ = 'Europe/Moscow';
 const MSK_OFFSET_MS = 3 * 3600_000;
@@ -53,7 +53,7 @@ export const fmtDT = (iso: string | null) => (iso ? `${fmtD(iso)}, ${fmtTime(iso
 export const fmtDayLong = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
 
 /** Задача ещё не сдана менеджером (для «просрочено»). */
-export const isOpen = (t: TaskerTask) => t.status === 'new' || t.status === 'in_progress';
+export const isOpen = (t: TaskerTask) => t.status === 'new' || t.status === 'in_progress' || (t.status as string) === 'awaiting_control';
 
 /** Срок прошёл, а задача не сдана. */
 export const isOverdue = (t: TaskerTask, now = Date.now()) => isOpen(t) && new Date(t.deadline).getTime() < now;
@@ -65,15 +65,44 @@ export const VERDICT_CLS: Record<TaskerVerdict, string> = {
   not_enough_data: 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]',
 };
 
-/** Цвет полосы колонки статуса — палитра Google Sheets (main_color_palette). */
-export const STATUS_COLOR: Record<TaskerTask['status'], string> = {
-  new: '#4a86e8',
-  in_progress: '#ff9900',
-  awaiting_control: '#9900ff',
-  done: '#6aa84f',
-  measuring: '#45818e',
-  result: '#999999',
+
+// ── Колонки доски (правки собрания 23.11) ────────────────────────────────────
+// «Ждёт контроля» убрана: РОП закрывает задачу сам с «Что сделано». Старые задачи в статусе 4
+// Битрикса (если ещё попадутся) показываем в «В работе» — подтверждать их больше некому.
+// «Итог» разделён по знаку результата: «Вырос» (achieved/improved) и «Не вырос» (no_change,
+// not_enough_data — серой пометкой).
+export type BoardColumn = 'new' | 'in_progress' | 'done' | 'measuring' | 'grown' | 'not_grown';
+export const BOARD_COLUMNS: BoardColumn[] = ['new', 'in_progress', 'done', 'measuring', 'grown', 'not_grown'];
+export const BOARD_COLUMN_LABELS: Record<BoardColumn, string> = {
+  new: 'Новая', in_progress: 'В работе', done: 'Завершена', measuring: 'На замере', grown: 'Вырос', not_grown: 'Не вырос',
 };
+/** Цвет полосы колонки — палитра Google Sheets (main_color_palette). */
+export const STATUS_COLOR: Record<BoardColumn, string> = {
+  new: '#4a86e8', in_progress: '#ff9900', done: '#6aa84f', measuring: '#45818e', grown: '#34a853', not_grown: '#ea4335',
+};
+export const isGrown = (v: TaskerVerdict | null) => v === 'achieved' || v === 'improved';
+
+export function boardColumn(t: TaskerTask): BoardColumn {
+  const s = t.status as string;
+  if (s === 'result' || t.verdict) return isGrown(t.verdict) ? 'grown' : 'not_grown';
+  if (s === 'awaiting_control') return 'in_progress';
+  return s as BoardColumn;
+}
+
+/** Статусы, которые человек ставит сам (= смена статуса задачи в Битриксе). */
+export type MoveTarget = 'new' | 'in_progress' | 'done';
+export const MOVE_TARGETS: MoveTarget[] = ['new', 'in_progress', 'done'];
+
+/** Куда задачу можно перевести вручную. Завершённую (в т.ч. «На замере») — обратно в работу,
+ *  пока автозамер не поставил вердикт: ошибочное завершение откатывается. После итога — нет:
+ *  плохой итог = новая задача (собрание 23.11). */
+export function moveTargets(t: TaskerTask): MoveTarget[] {
+  if (t.bitrixTaskId == null || t.verdict) return [];
+  const col = boardColumn(t);
+  if (col === 'new' || col === 'in_progress') return MOVE_TARGETS.filter(s => s !== col);
+  if (col === 'done' || col === 'measuring') return ['in_progress'];
+  return [];
+}
 
 export function plural(n: number, one: string, few: string, many: string) {
   const a = Math.abs(n) % 100, b = a % 10;
@@ -82,3 +111,11 @@ export function plural(n: number, one: string, few: string, many: string) {
   if (b >= 2 && b <= 4) return few;
   return many;
 }
+
+// ── Поля правок 23.11 (исполнитель, теория/практика, «Что сделано») ─────────────
+// Поля добавляет сессия A (миграция 279: kind, assignee_*, done_note, done_at). Читаем через
+// опциональное расширение, чтобы виды работали и со старым ответом API, и с новым.
+export type TaskKind = 'theory' | 'practice';
+export const TASK_KIND_LABELS: Record<TaskKind, string> = { theory: 'Теория', practice: 'Практика' };
+type TaskExtras = { kind?: TaskKind | null; assignee?: TaskerPerson | null; doneNote?: string | null; doneAt?: string | null };
+export const taskExtras = (t: TaskerTask) => t as TaskerTask & TaskExtras;

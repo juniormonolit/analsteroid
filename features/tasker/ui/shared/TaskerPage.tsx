@@ -11,9 +11,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react';
 import { enumParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { useIsTouch } from '@/lib/hooks/useMediaQuery';
-import type { TaskerPatchableStatus, TaskerTask, TaskerTasksResponse, TaskerView } from '../../types';
+import type { TaskerTask, TaskerTasksResponse, TaskerView } from '../../types';
 import { TASKS_KEY, patchTask, useMockFlag, useTaskerFilters, useTaskerMetrics, useTaskerTasks } from './api';
-import { addDays, fmtD, mondayOf, todayMsk } from './format';
+import { addDays, fmtD, mondayOf, todayMsk, type MoveTarget } from './format';
 import { TaskerFilters } from './TaskerFilters';
 import { TaskDrawer } from './TaskDrawer';
 import { CreateTaskDrawer } from '../create/CreateTaskDrawer';
@@ -75,7 +75,7 @@ export function TaskerPage({ canAssign }: { canAssign: boolean }) {
   }, [toast]);
 
   const [busy, setBusy] = useState(false);
-  const move = useCallback(async (t: TaskerTask, status: TaskerPatchableStatus) => {
+  const move = useCallback(async (t: TaskerTask, status: MoveTarget) => {
     if (t.status === status) return;
     await qc.cancelQueries({ queryKey });
     const prev = qc.getQueryData<TaskerTasksResponse>(queryKey);
