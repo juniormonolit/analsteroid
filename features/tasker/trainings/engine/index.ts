@@ -14,6 +14,7 @@ import { hasPerm } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import { getEmployeeDirectory, getActiveEmployeeRoster, resolveEmployeeNames } from '@/lib/org/employeeDirectory';
 import { canSeeManager, getSessionScope, type SessionScope } from '@/lib/org/sessionScope';
+import { retryStaleCalendarSyncs, syncTrainingCalendar } from './calendar';
 import type {
   TrainingAttendee, TrainingEnrollment, TrainingEvent, TrainingManagerOption,
 } from '../types';
@@ -47,6 +48,7 @@ interface EventRow {
   id: string; title: string; description: string; start_at: Date; duration_min: number;
   place: string | null; capacity: number | null; trainer_bitrix_user_id: string | null;
   cancelled_at: Date | null; enrolled_count: string;
+  calendar_event_id: string | null; calendar_sync_state: string; calendar_sync_error: string | null;
 }
 interface EnrollRow {
   event_id: string; manager_bitrix_user_id: string; enrolled_by_name: string | null;
@@ -71,10 +73,12 @@ export async function listEvents(actor: TrainingActor, p: ListEventsParams = {})
   if (p.to) add(`e.start_at < ($?::date + 1)`, p.to);
   if (p.upcoming) where.push(`e.start_at + make_interval(mins => e.duration_min) > now()`);
   if (!p.includeCancelled) where.push('e.cancelled_at IS NULL');
+  retryStaleCalendarSyncs();
   const db = systemDb();
   const ev = await db.query<EventRow>(
     `SELECT e.id, e.title, e.description, e.start_at, e.duration_min, e.place, e.capacity,
             e.trainer_bitrix_user_id, e.cancelled_at,
+            e.calendar_event_id, e.calendar_sync_state, e.calendar_sync_error,
             (SELECT count(*) FROM tasker_training_enrollments x WHERE x.event_id = e.id) AS enrolled_count
        FROM tasker_training_events e
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
@@ -127,6 +131,12 @@ export async function listEvents(actor: TrainingActor, p: ListEventsParams = {})
     cancelledAt: r.cancelled_at ? r.cancelled_at.toISOString() : null,
     enrolledCount: Number(r.enrolled_count),
     attendees: byEvent.get(r.id) ?? [],
+    calendar: {
+      state: (r.calendar_sync_state === 'synced' || r.calendar_sync_state === 'failed' ? r.calendar_sync_state : 'pending') as TrainingEvent['calendar']['state'],
+      // Текст ошибки Битрикса — только тренеру (может содержать технические детали).
+      error: actor.canManage ? r.calendar_sync_error : null,
+      eventId: r.calendar_event_id ? Number(r.calendar_event_id) : null,
+    },
   }));
 }
 
@@ -270,7 +280,9 @@ export async function createEvent(actor: TrainingActor, raw: unknown): Promise<T
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
     [v.title, v.description ?? '', v.startAt, v.durationMin, v.place ?? null, v.capacity ?? null, trainer ?? null, actor.session.id],
   );
-  return getEvent(actor, Number(r.rows[0].id));
+  const id = Number(r.rows[0].id);
+  await syncTrainingCalendar(id); // не бросает: сбой Битрикса = «не синхронизировано» + повтор
+  return getEvent(actor, id);
 }
 
 export async function updateEvent(actor: TrainingActor, id: number, raw: unknown): Promise<TrainingEvent> {
@@ -298,7 +310,8 @@ export async function updateEvent(actor: TrainingActor, id: number, raw: unknown
     throw new TrainingError(`Уже записано ${cur.rows[0].enrolled} — лимит не может быть меньше`, 409);
   }
   if (sets.length) {
-    await db.query(`UPDATE tasker_training_events SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, args);
+    await db.query(`UPDATE tasker_training_events SET ${sets.join(', ')}, calendar_sync_state = 'pending', updated_at = now() WHERE id = $1`, args);
+    await syncTrainingCalendar(id);
   }
   return getEvent(actor, id);
 }
@@ -307,11 +320,13 @@ export async function updateEvent(actor: TrainingActor, id: number, raw: unknown
 export async function cancelEvent(actor: TrainingActor, id: number): Promise<TrainingEvent> {
   requireManage(actor);
   const r = await systemDb().query(
-    `UPDATE tasker_training_events SET cancelled_at = COALESCE(cancelled_at, now()), cancelled_by = COALESCE(cancelled_by, $2), updated_at = now()
+    `UPDATE tasker_training_events SET cancelled_at = COALESCE(cancelled_at, now()), cancelled_by = COALESCE(cancelled_by, $2),
+            calendar_sync_state = 'pending', updated_at = now()
       WHERE id = $1`,
     [id, actor.session.id],
   );
   if (!r.rowCount) throw new TrainingError('Обучение не найдено', 404);
+  await syncTrainingCalendar(id);
   return getEvent(actor, id);
 }
 
@@ -331,6 +346,7 @@ export async function enroll(actor: TrainingActor, eventId: number, rawManagerId
   if (taskId !== null && (!Number.isInteger(taskId) || taskId <= 0)) throw new TrainingError('Некорректная задача');
 
   const client = await systemDb().connect();
+  let changed = false;
   try {
     await client.query('BEGIN');
     // Блокируем событие: две одновременные записи не перескочат лимит мест.
@@ -362,6 +378,8 @@ export async function enroll(actor: TrainingActor, eventId: number, rawManagerId
         `INSERT INTO tasker_training_enrollments (event_id, manager_bitrix_user_id, enrolled_by, tasker_task_id)
          VALUES ($1, $2, $3, $4)`, [eventId, managerId, actor.session.id, taskId],
       );
+      await client.query(`UPDATE tasker_training_events SET calendar_sync_state = 'pending' WHERE id = $1`, [eventId]);
+      changed = true;
     }
     await client.query('COMMIT');
   } catch (err) {
@@ -370,6 +388,7 @@ export async function enroll(actor: TrainingActor, eventId: number, rawManagerId
   } finally {
     client.release();
   }
+  if (changed) await syncTrainingCalendar(eventId); // менеджер → участник события в календаре тренера
   return getEvent(actor, eventId);
 }
 
@@ -377,8 +396,21 @@ export async function unenroll(actor: TrainingActor, eventId: number, rawManager
   if (!actor.canEnroll) throw new TrainingError('Отписывать с обучений может РОП, директор или администратор', 403);
   const managerId = parseManagerId(rawManagerId);
   if (!canTouchManager(actor, managerId)) throw new TrainingError('Этот менеджер вам не подчиняется', 403);
-  await systemDb().query(
+  const del = await systemDb().query(
     'DELETE FROM tasker_training_enrollments WHERE event_id = $1 AND manager_bitrix_user_id = $2', [eventId, managerId],
   );
+  if (del.rowCount) {
+    await systemDb().query(`UPDATE tasker_training_events SET calendar_sync_state = 'pending' WHERE id = $1`, [eventId]);
+    await syncTrainingCalendar(eventId);
+  }
   return getEvent(actor, eventId);
+}
+
+/** Повтор синхронизации с календарём Битрикса вручную (кнопка тренера). */
+export async function resyncCalendar(actor: TrainingActor, id: number): Promise<TrainingEvent> {
+  requireManage(actor);
+  const r = await systemDb().query('UPDATE tasker_training_events SET calendar_sync_attempts = 0 WHERE id = $1', [id]);
+  if (!r.rowCount) throw new TrainingError('Обучение не найдено', 404);
+  await syncTrainingCalendar(id);
+  return getEvent(actor, id);
 }

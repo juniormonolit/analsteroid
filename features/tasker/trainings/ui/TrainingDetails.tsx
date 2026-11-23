@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { CalendarClock, MapPin, Pencil, UserPlus, Users, X, Ban, ExternalLink } from 'lucide-react';
+import { CalendarClock, CalendarCheck, CalendarX, MapPin, Pencil, RefreshCw, UserPlus, Users, X, Ban, ExternalLink } from 'lucide-react';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import type { TrainingEvent, TrainingManagersResponse } from '../types';
 import { getJson } from './api';
@@ -18,6 +18,7 @@ export function TrainingDetails({
   onUnenroll,
   onEdit,
   onCancelEvent,
+  onResync,
 }: {
   event: TrainingEvent;
   canManage: boolean;
@@ -28,6 +29,7 @@ export function TrainingDetails({
   onUnenroll: (managerId: number) => void;
   onEdit: () => void;
   onCancelEvent: () => void;
+  onResync: () => void;
 }) {
   const [pick, setPick] = useState('');
   const ended = endOf(event.startsAt, event.durationMin).getTime() <= Date.now();
@@ -69,6 +71,24 @@ export function TrainingDetails({
       </div>
 
       {event.description && <p className="whitespace-pre-wrap break-words rounded-lg bg-[var(--color-bg-hover)] px-3 py-2 leading-relaxed">{event.description}</p>}
+
+      {canManage && (
+        <div className={`flex min-w-0 flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-[13px] ${event.calendar.state === 'failed' ? 'border-[var(--color-negative)]' : 'border-[var(--color-border)]'}`}>
+          {event.calendar.state === 'synced' ? <CalendarCheck size={15} className="shrink-0 text-[var(--color-positive)]" /> : <CalendarX size={15} className="shrink-0" />}
+          <span className="min-w-[12rem] flex-1 break-words">
+            {event.calendar.state === 'synced'
+              ? cancelled ? 'Убрано из календаря Битрикса' : 'В календаре тренера в Битриксе, записанные — участники'
+              : event.calendar.state === 'pending' ? 'Календарь Битрикса: синхронизируется…'
+              : <>Календарь Битрикса: не синхронизировано{event.calendar.error ? <span className="text-[var(--color-text-muted)]"> — {event.calendar.error}</span> : null}. Повторим автоматически.</>}
+          </span>
+          {event.calendar.state !== 'synced' && (
+            <button type="button" onClick={onResync} disabled={busy}
+              className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 hover:bg-[var(--color-bg-hover)]">
+              <RefreshCw size={14} /> Повторить
+            </button>
+          )}
+        </div>
+      )}
 
       {canManage && !cancelled && (
         <div className="flex flex-wrap gap-2">

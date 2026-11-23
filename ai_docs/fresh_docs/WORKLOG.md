@@ -31,6 +31,24 @@
   Не проверено: живой API (его ещё нет), режимы PWA/iframe Битрикса вживую.
 
 ---
+## 2026-11-23 — Задачник: обучения в календаре Битрикса (фаза 1b, сессия D)
+
+Владелец выдал `BITRIX_WEBHOOK_URL` право `calendar`. Проверено: `calendar.section.get` работает; тестовые события
+add → update → getbyid → delete прошли в календаре 2098 и тренера (2054), оба (89751, 89752) удалены.
+- Миграция 275 дополнена (на прод всё ещё не применена): `calendar_event_id`, `calendar_owner_id`, `calendar_sync_state`
+  (pending/synced/failed), `calendar_sync_error`, `calendar_sync_attempts`, `calendar_synced_at`.
+- `features/tasker/trainings/engine/calendar.ts` → `syncTrainingCalendar(id)`: приводит событие в календаре тренера
+  (type=user, ownerId=тренер, раздел — первый из `calendar.section.get`, is_meeting=Y, host=тренер, attendees = тренер +
+  записанные, приглашения шлёт Битрикс) к состоянию в Монолитике. Создание/правка/отмена/запись/отписка зовут синк;
+  отмена и смена тренера = `calendar.event.delete` (удалённое руками в Битриксе создаётся заново). Синк под `FOR UPDATE`
+  строки события — две записи подряд не создадут два события. Никогда не бросает: ошибка → `failed` + текст.
+- Повтор: кнопка тренера «Повторить» (`POST /api/tasker/trainings/:id/sync`) и ленивый повтор при чтении расписания
+  (pending/failed, не трогались ≥ 5 мин, < 20 попыток, не прошедшие; ≤ 5 событий, не чаще раза в минуту на инстанс).
+- UI: у тренера в карточке — статус календаря («в календаре тренера» / «синхронизируется…» / «не синхронизировано — ошибка»).
+- Тренер Андрей Будковский — Bitrix ID **2054** (найден `user.search`). Право выдать по SQL из записи выше
+  (в `users` искать по `bitrix_user_id = '2054'`).
+
+---
 ## 2026-11-23 — Задачник (сессия C): форма постановки и входы из отчёта/карточки
 
 ТЗ — `TASKER_SPEC.md`, «Сценарий» п.1–2. Файлы: `features/tasker/ui/create/`.
@@ -74,7 +92,7 @@
   у тренера — создать/изменить/отменить (ConfirmDialog), «Записать менеджера» (SearchSelect) и отписка. Проверено на 1280/375
   на моках (локально нет доступа к БД).
 - **Как выдать право тренеру (Будковскому).** Личные исключения в UI «Пользователи» принимают только `section.*`, поэтому SQL
-  (system БД, найти человека): `SELECT id, login, display_name, bitrix_user_id FROM users WHERE display_name ILIKE '%Будковск%';`
+  (system БД, найти человека): `SELECT id, login, display_name, bitrix_user_id FROM users WHERE bitrix_user_id = '2054' OR display_name ILIKE '%Будковск%';`
   затем `UPDATE users SET section_overrides = array(SELECT DISTINCT unnest(COALESCE(section_overrides,'{}') || '{action.tasker.trainings.manage}')) WHERE id = '<id>';`
   Сессия подхватывает права сразу (union в `getSession`). Пересохранение его исключений из UI ключ уберёт — тогда повторить.
   Ему же нужен `section.tasker` (роль или исключение). Фаза 2 — в BACKLOG.

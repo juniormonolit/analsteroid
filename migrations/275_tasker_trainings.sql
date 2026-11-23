@@ -3,6 +3,7 @@
 -- РОП/директор/админ записывает своих менеджеров (canSeeManager), в том числе из формы задачи (tasker_task_id).
 -- Удаление события = отмена (cancelled_at), записи сохраняются для истории.
 -- БД: monolitika (systemDb). Накат — под monolitik; гранты роли приложения — по образцу 270/272. Идемпотентна.
+-- Фаза 1b — календарь Битрикса (колонки calendar_* ниже).
 -- Откат: DROP TABLE tasker_training_enrollments; DROP TABLE tasker_training_events;
 
 CREATE TABLE IF NOT EXISTS tasker_training_events (
@@ -21,6 +22,19 @@ CREATE TABLE IF NOT EXISTS tasker_training_events (
   cancelled_by            uuid
 );
 CREATE INDEX IF NOT EXISTS tasker_training_events_start_idx ON tasker_training_events (start_at);
+
+-- Фаза 1b (23.11, вебхуку BITRIX_WEBHOOK_URL выдано право calendar): событие = calendar.event.add в календаре
+-- тренера, записанные — участники. Ошибка Битрикса не ломает событие в Монолитике: state='failed' + повтор
+-- (кнопка тренера и ленивый повтор при чтении расписания). calendar_owner_id — чей календарь (смена тренера = перенос).
+ALTER TABLE tasker_training_events
+  ADD COLUMN IF NOT EXISTS calendar_event_id      bigint,
+  ADD COLUMN IF NOT EXISTS calendar_owner_id      text,
+  ADD COLUMN IF NOT EXISTS calendar_sync_state    text NOT NULL DEFAULT 'pending', -- pending | synced | failed
+  ADD COLUMN IF NOT EXISTS calendar_sync_error    text,
+  ADD COLUMN IF NOT EXISTS calendar_sync_attempts integer NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS calendar_synced_at     timestamptz;
+CREATE INDEX IF NOT EXISTS tasker_training_events_calsync_idx ON tasker_training_events (calendar_sync_state)
+  WHERE calendar_sync_state <> 'synced';
 
 CREATE TABLE IF NOT EXISTS tasker_training_enrollments (
   id                      bigserial PRIMARY KEY,

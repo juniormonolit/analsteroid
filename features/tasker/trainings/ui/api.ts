@@ -25,3 +25,6 @@ export const enrollManager = (id: number, managerId: number) =>
 
 export const unenrollManager = (id: number, managerId: number) =>
   call<TrainingEventResponse>(`/api/tasker/trainings/${id}/enroll`, { method: 'DELETE', body: JSON.stringify({ managerId }) });
+
+export const resyncTraining = (id: number) =>
+  call<TrainingEventResponse>(`/api/tasker/trainings/${id}/sync`, { method: 'POST' });

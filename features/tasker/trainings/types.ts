@@ -35,6 +35,13 @@ export interface TrainingEvent {
    * (чужих — числом в enrolledCount).
    */
   attendees: TrainingAttendee[];
+  /** Событие в календаре тренера в Битриксе (фаза 1b). failed — «не синхронизировано», будет повтор. */
+  calendar: {
+    state: 'pending' | 'synced' | 'failed';
+    /** Текст ошибки — только тренеру. */
+    error: string | null;
+    eventId: number | null;
+  };
 }
 
 /** GET /api/tasker/trainings?from&to&upcoming=1&includeCancelled=1 */

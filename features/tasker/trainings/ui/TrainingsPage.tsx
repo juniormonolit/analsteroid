@@ -7,7 +7,7 @@ import { Drawer } from '@/components/ui/Drawer';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import type { TrainingEvent, TrainingEventInput, TrainingsResponse } from '../types';
 import {
-  TRAININGS_KEY, cancelTraining, createTraining, enrollManager, getJson, unenrollManager, updateTraining,
+  TRAININGS_KEY, cancelTraining, createTraining, enrollManager, getJson, resyncTraining, unenrollManager, updateTraining,
 } from './api';
 import { addDaysKey, durationLabel, endOf, mskDateKey, mskDayLabel, mskTime } from './format';
 import { TrainingDetails } from './TrainingDetails';
@@ -141,6 +141,7 @@ export function TrainingsPage() {
             onUnenroll={id => run(() => unenrollManager(current.id, id))}
             onEdit={() => openPanel({ kind: 'edit', id: current.id })}
             onCancelEvent={() => setConfirmCancel(true)}
+            onResync={() => run(() => resyncTraining(current.id))}
           />
         )}
         {panel && panel.kind !== 'create' && !current && (
@@ -151,7 +152,7 @@ export function TrainingsPage() {
       <ConfirmDialog
         open={confirmCancel}
         title="Отменить обучение?"
-        description={current ? `«${current.title}» исчезнет из ближайших у всех; записи менеджеров сохранятся в истории.` : ''}
+        description={current ? `«${current.title}» исчезнет из ближайших у всех и из календаря тренера в Битриксе (участникам придёт отмена); записи менеджеров сохранятся в истории.` : ''}
         confirmLabel="Отменить обучение"
         cancelLabel="Не отменять"
         tone="danger"
