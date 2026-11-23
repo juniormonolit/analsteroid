@@ -20,6 +20,7 @@ import { CreateTaskDrawer } from '../create/CreateTaskDrawer';
 import { TaskerBoard } from '../board/TaskerBoard';
 import { TaskerWeek } from '../week/TaskerWeek';
 import { TaskerToday } from '../today/TaskerToday';
+import { useCanManageTemplates } from '../templates/useCanManageTemplates';
 
 const VIEWS = ['board', 'week', 'today'] as const;
 const VIEW_LABELS: Record<TaskerView, string> = { board: 'Доска', week: 'Неделя', today: 'Сегодня' };
@@ -30,7 +31,8 @@ const BTN = 'inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg
  * Вкладки раздела. В TaskerPage виды переключаются на месте (onSelect); без onSelect (страница
  * /tasker/trainings) — ссылками на /tasker?view=….
  */
-export function TaskerTabs({ active, onSelect }: { active: TaskerView | 'trainings' | 'meetings'; onSelect?: (v: TaskerView) => void }) {
+export function TaskerTabs({ active, onSelect }: { active: TaskerView | 'trainings' | 'meetings' | 'templates'; onSelect?: (v: TaskerView) => void }) {
+  const canTemplates = useCanManageTemplates();
   return (
     <nav className="flex w-fit max-w-full flex-wrap gap-1 rounded-lg border border-[var(--color-border)] p-0.5" aria-label="Вид Задачника">
       {VIEWS.map(v => {
@@ -43,6 +45,7 @@ export function TaskerTabs({ active, onSelect }: { active: TaskerView | 'trainin
       })}
       <Link href="/tasker/meetings" aria-current={active === 'meetings' ? 'page' : undefined} className={tabCls(active === 'meetings')}>Собрания</Link>
       <Link href="/tasker/trainings" aria-current={active === 'trainings' ? 'page' : undefined} className={tabCls(active === 'trainings')}>Обучения</Link>
+      {canTemplates && <Link href="/tasker/templates" aria-current={active === 'templates' ? 'page' : undefined} className={tabCls(active === 'templates')}>Шаблоны</Link>}
     </nav>
   );
 }

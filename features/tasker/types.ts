@@ -306,6 +306,38 @@ export interface TaskerTemplatesResponse {
   templates: TaskerTemplate[];
 }
 
+/** Шаблон в редакторе (GET /api/tasker/templates?all=1, право action.tasker.templates): вместе с архивом. */
+export interface TaskerTemplateFull extends TaskerTemplate {
+  /** false — в архиве (в форме задачи не показывается). */
+  active: boolean;
+  archivedAt: string | null;
+  updatedAt: string | null;
+  /** ФИО (или login) последнего правившего; null — базовый шаблон. */
+  updatedBy: string | null;
+}
+
+export interface TaskerTemplatesFullResponse {
+  templates: TaskerTemplateFull[];
+  canEdit: boolean;
+}
+
+/** POST /api/tasker/templates (создать) и PATCH /api/tasker/templates/[id]. Тело — текст с BB-кодами
+ *  [URL=…]…[/URL] и [IMG]…[/IMG]; в форме задачи [IMG] превращается в ссылку (Битрикс в описании задачи
+ *  [IMG] не проверен). */
+export interface TaskerTemplateSaveRequest {
+  metricId?: string;
+  title?: string;
+  body?: string;
+  sortOrder?: number;
+  active?: boolean;
+}
+
+/** POST /api/tasker/templates/images (multipart `file`) → абсолютная ссылка на картинку. */
+export interface TaskerTemplateImageResponse {
+  id: string;
+  url: string;
+}
+
 /** GET /api/tasker/customers?managerId — открытое окно (22 дня) + ровно 1 отгрузка. */
 export interface TaskerCustomer {
   clientKey: string;

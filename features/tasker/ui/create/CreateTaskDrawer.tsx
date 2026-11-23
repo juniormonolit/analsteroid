@@ -14,6 +14,7 @@ import {
 } from './api';
 // Проверка наложения времени у слота сессии (сессия A).
 import { AvailabilityWarning } from '../shared/AvailabilityWarning';
+import { renderTemplateBody, templateToBitrix } from '../templates/templateBody';
 import type { TaskerAvailabilityRequest } from '@/features/tasker/types';
 
 /**
@@ -119,9 +120,11 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
 
   const [target, setTarget] = useState('');
   const [targetTouched, setTargetTouched] = useState(false);
-  const [templateId, setTemplateId] = useState<number | null>(null);
-  const [body, setBody] = useState('');
-  const [bodyTouched, setBodyTouched] = useState(false);
+  // Рекомендации (правки собрания 23.11): вариант шаблона по показателю (конструктор «Шаблоны») + «дописать своё».
+  // templateChoice: '' — ещё не выбран (подставится первый вариант), 'none' — без шаблона, иначе id варианта.
+  const [templateChoice, setTemplateChoice] = useState('');
+  const [extra, setExtra] = useState('');
+  const [templateOpen, setTemplateOpen] = useState(false);
 
   const [withCustomers, setWithCustomers] = useState(false);
   const [uncheckedCustomers, setUncheckedCustomers] = useState<Set<string>>(new Set());
@@ -212,14 +215,12 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
     staleTime: 5 * 60_000,
   });
   const templates = useMemo(() => templatesQ.data?.templates ?? [], [templatesQ.data]);
-  useEffect(() => { setTemplateId(null); if (!bodyTouched) setBody(''); }, [metricId]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    // Нетронутое тело — сразу первый шаблон метрики, чтобы форма не открывалась пустой.
-    if (!bodyTouched && templateId === null && templates.length > 0) {
-      setTemplateId(templates[0].id);
-      setBody(templates[0].body);
-    }
-  }, [templates, bodyTouched, templateId]);
+  useEffect(() => { setTemplateChoice(''); setTemplateOpen(false); }, [metricId]);
+  // Не выбран явно — первый вариант показателя (порядок задают в «Шаблонах»), чтобы форма не открывалась пустой.
+  const template = templateChoice === 'none' ? null
+    : templates.find(t => String(t.id) === templateChoice) ?? (templateChoice === '' ? templates[0] ?? null : null);
+  const templateId = template?.id ?? null;
+  const body = [template ? templateToBitrix(template.body) : '', extra.trim()].filter(Boolean).join('\n\n');
 
   // ── заказчики из повторки ──
   const customerQs = useQueries({
@@ -369,22 +370,38 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
             onChange={e => { setTarget(e.target.value); setTargetTouched(true); }} className={`${INPUT} sm:max-w-[200px]`} />
         </Field>
 
-        <Field label="Рекомендации" hint="Текст уходит в описание задачи Битрикса вместе с целью и снимком">
+        <Field label="Рекомендации" hint="Вариант инструкции и ваш текст уходят в описание задачи Битрикса вместе с целью и снимком. Варианты правят в «Задачник → Шаблоны»">
           {templates.length > 0 && (
             <SearchSelect
-              options={templates.map(t => ({ value: String(t.id), label: t.title }))}
-              value={templateId ? String(templateId) : ''}
-              onChange={v => {
-                const t = templates.find(x => String(x.id) === v);
-                if (t) { setTemplateId(t.id); setBody(t.body); setBodyTouched(false); }
-              }}
-              placeholder="Шаблон рекомендаций" ariaLabel="Шаблон рекомендаций" className="w-full"
+              options={[
+                ...templates.map(t => ({ value: String(t.id), label: t.title })),
+                { value: 'none', label: 'Без шаблона — только своё' },
+              ]}
+              value={template ? String(template.id) : 'none'}
+              onChange={v => { setTemplateChoice(v); setTemplateOpen(false); }}
+              placeholder="Вариант инструкции" ariaLabel="Вариант инструкции" className="w-full"
             />
           )}
-          <textarea value={body} rows={6}
-            onChange={e => { setBody(e.target.value); setBodyTouched(true); }}
-            placeholder={metricId ? 'Что сделать менеджеру…' : 'Сначала выберите показатель'}
-            className={`${INPUT} min-h-[120px] resize-y py-2 leading-snug`} />
+          {template && (
+            <div className="min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-hover)]/40 p-3">
+              <div className={`whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--color-text)] ${templateOpen ? '' : 'line-clamp-5'}`}>
+                {renderTemplateBody(template.body)}
+              </div>
+              {(template.body.length > 240 || template.body.split('\n').length > 5) && (
+                <button type="button" onClick={() => setTemplateOpen(o => !o)} className="mt-1 min-h-8 text-xs text-[var(--color-accent)] hover:underline">
+                  {templateOpen ? 'Свернуть' : 'Показать целиком'}
+                </button>
+              )}
+            </div>
+          )}
+          {metricId && !templatesQ.isLoading && templates.length === 0 && (
+            <p className="text-xs text-[var(--color-text-muted)]">Для этого показателя вариантов инструкции пока нет — напишите своё.</p>
+          )}
+          <textarea value={extra} rows={template ? 3 : 6}
+            onChange={e => setExtra(e.target.value)}
+            aria-label={template ? 'Дописать своё' : 'Рекомендации'}
+            placeholder={!metricId ? 'Сначала выберите показатель' : template ? 'Дописать своё (необязательно)…' : 'Что сделать…'}
+            className={`${INPUT} ${template ? 'min-h-[80px]' : 'min-h-[120px]'} resize-y py-2 leading-snug`} />
         </Field>
 
         <CustomersBlock

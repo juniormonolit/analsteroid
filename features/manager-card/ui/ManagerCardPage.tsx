@@ -29,6 +29,7 @@ import { LeaderSkills } from './LeaderSkills';
 import { ManagerDailySalesCard } from './ManagerDailySalesCard';
 import { Check, Eye, Lock } from 'lucide-react';
 import { CreateTaskButton } from '@/features/tasker/ui/create/CreateTaskButton';
+import { ManagerTaskerBlock } from '@/features/tasker/ui/manager/ManagerTaskerBlock';
 import type { CardSegment, ManagerCardResult, AxisUnit } from '@/features/manager-card/engine/managerCard';
 
 // Ответ карточки: у отдела к нему добавляется deptComparison (peerCount/
@@ -811,6 +812,13 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
           <SectionCard title="Динамика продаж за период">
             <ManagerDailySalesCard managerId={managerId} mode={mode} period={period} segment={segment} />
           </SectionCard>
+
+          {/* ── Задачи и обучения (Задачник, правки собрания 23.11 п.8): чужая карточка менеджера,
+              блок сам скрывается без section.tasker ── */}
+          {mode === 'manager' && !showBadges && /^\d+$/.test(managerId) && (
+            <ManagerTaskerBlock managerId={managerId} managerName={data?.profile.name ?? managerName ?? `#${managerId}`}
+              department={data?.profile.department ?? null} period={period} />
+          )}
 
           {/* ── График работы (только менеджер: у отдела нет единого профиля активности) ── */}
           {mode === 'manager' && (
