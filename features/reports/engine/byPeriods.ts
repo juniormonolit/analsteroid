@@ -1,7 +1,7 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { cached, reportTtl } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
-import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
+import { buildCollectedSQL, dateFieldExpr } from '@/lib/metrics/sqlGen';
 import { buildProductGroupFilter, productGroupCacheKey } from './productGroupFilter';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
 import { buildDealFilterWhere, type DealFilter } from '@/lib/metrics/dealFilters';
@@ -248,7 +248,7 @@ export async function fetchByPeriods(opts: ByPeriodsOptions): Promise<PeriodBuck
   await Promise.all([...byDateField.entries()].map(async ([dateField, group]) => {
     if (!/^[a-z_][a-z0-9_]*$/.test(dateField)) return; // date_field из каталога — не из запроса, но проверяем
     const dim = {
-      idExpr: `to_char(date_trunc('${unit}', (d.${dateField} AT TIME ZONE '${MSK}')), 'YYYY-MM-DD')`,
+      idExpr: `to_char(date_trunc('${unit}', (${dateFieldExpr(dateField)} AT TIME ZONE '${MSK}')), 'YYYY-MM-DD')`,
       groupBy: 'GROUP BY 1, d.funnel_id',
       notNullWhere,
       funnelBreakdown: true as const,

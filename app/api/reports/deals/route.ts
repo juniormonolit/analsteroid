@@ -3,7 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { getCallControlManagedDepts } from '@/lib/org/callControlScope';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
-import { resolveFilterClause } from '@/lib/metrics/sqlGen';
+import { resolveFilterClause, dateFieldExpr, dateFieldScope } from '@/lib/metrics/sqlGen';
 import { dimensionWhere, resolveBranchManagerIds, managerIdsWhere, loadManagerInfoMap, loadSourceMap, type SourceDimension } from '@/lib/marketing/sources';
 import { STAGE_SNAPSHOT_GROUPS, DEALS_IN_WORK_METRIC_IDS } from '@/features/reports/engine/stageSnapshot';
 import { STAGE_ENTERED_GROUP_KEYS, stageEnteredMetricIds } from '@/features/reports/engine/stageEntered';
@@ -303,7 +303,7 @@ export async function GET(req: NextRequest) {
             const conds = [
               // Пачка — уже готовое население: у метрики остаётся только «событие
               // случилось», без рамок периода (та же замена, что в sqlGen::genDealsExpr).
-              batchOn ? `d.${leg.dateField} IS NOT NULL` : `d.${leg.dateField} >= $1 AND d.${leg.dateField} < $2`,
+              batchOn ? `${dateFieldExpr(leg.dateField)} IS NOT NULL` : `${dateFieldScope(leg.dateField!)} AND ${dateFieldExpr(leg.dateField)} >= $1 AND ${dateFieldExpr(leg.dateField)} < $2`,
               ...leg.filters.map(f => resolveFilterClause(f, 'd')).filter(Boolean),
             ];
             return `(${conds.join(' AND ')})`;

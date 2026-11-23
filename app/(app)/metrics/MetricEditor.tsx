@@ -52,7 +52,9 @@ const EMPTY: MetricDraft = {
   is_collect_ok: false, is_calc_ok: false, tags: [],
 };
 
-const DATE_FIELDS_DEALS  = ['created_at', 'reserved_at', 'confirmed_at', 'sold_at', 'delivered_at', 'lost_at'];
+const DATE_FIELDS_DEALS  = ['created_at', 'reserved_at', 'confirmed_at', 'sold_at', 'delivered_at', 'lost_at',
+  // Виртуальная дата (lib/metrics/sqlGen.ts → VIRTUAL_DATE_FIELDS): первый вход повторной сделки в квал-стадию.
+  '_repeat_qualified_at'];
 const DATE_FIELDS_EVENTS = ['event_at', 'recorded_at'];
 const AGG_FIELDS_DEALS   = ['deal_id', 'amount'];
 const AGG_FIELDS_EVENTS  = ['deal_id', 'id'];

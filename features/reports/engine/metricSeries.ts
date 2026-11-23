@@ -1,6 +1,6 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
-import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
+import { buildCollectedSQL, dateFieldExpr } from '@/lib/metrics/sqlGen';
 import { buildProductGroupFilter } from './productGroupFilter';
 import { computeCalculated } from './calculated';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
@@ -184,7 +184,7 @@ export async function fetchMetricSeries(opts: MetricSeriesOptions): Promise<Metr
     if (managerIds.length > 0) whereParts.push(`d.current_manager_id::text = ANY($${managerParamIdx}::text[])`);
     if (offhWhere) whereParts.push(offhWhere);
     const dim = {
-      idExpr: `to_char(date_trunc('${unit}', (d.${dep.dateField} AT TIME ZONE '${MSK}')), 'YYYY-MM-DD')`,
+      idExpr: `to_char(date_trunc('${unit}', (${dateFieldExpr(dep.dateField)} AT TIME ZONE '${MSK}')), 'YYYY-MM-DD')`,
       groupBy: `GROUP BY 1, d.funnel_id`,
       notNullWhere: whereParts.length ? whereParts.join(' AND ') : undefined,
       funnelBreakdown: true as const,

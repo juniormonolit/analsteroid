@@ -162,6 +162,60 @@ function sqlLit(v: unknown): string {
   throw new Error('sqlGen: недопустимое значение фильтра');
 }
 
+// ── Виртуальные ДАТЫ метрик (date_field с ведущим «_») ────────────────────────
+// Обычный date_field — колонка sa.deals (sold_at, reserved_at…). Виртуальная дата —
+// момент, которого в sa.deals нет, но который выводится из истории стадий
+// sa.deal_events. Каждая разворачивается в ДВА выражения:
+//   expr  — сама дата для сделки (коррелированный MIN по событиям; ею бьётся период
+//           в CASE метрики и бакет в «По периодам»/графике);
+//   scope — дешёвое надмножество «дата может попасть в $1..$2» для WHERE охвата
+//           (полусоединение без корреляции; точный отбор всё равно делает expr).
+// ЕДИНАЯ точка перевода — dateFieldExpr/dateFieldScope ниже; все движки, что клеят
+// `d.<date_field>`, обязаны идти через них (иначе Postgres 42703).
+//
+// _repeat_qualified_at — «Кол-во квал. сделок (повт.)» (задача владельца 23.11.2026,
+// дословно: «Квалифицированной считается любая сделка в повторной воронке, которая в
+// "созвонился и уточнил следующие материалы" и дальше в любой повторной воронке B2C и
+// B2B»). Дата квалификации = ПЕРВЫЙ вход сделки в любую стадию из набора ниже — так
+// же, как продажа датируется sold_at. Сделка, ушедшая потом в отказ, остаётся
+// квалифицированной (история событий её помнит). Стадии сверены с
+// crm.dealcategory.stage.list (REPEAT_KANBAN_SPEC, features/repeat-kanban/engine/
+// config.ts); id обманчивы: C3:1 — «Продано», а C2:1 — отказ. Вне набора: входные
+// C2:NEW/C3:NEW и отказы C2:LOSE/APOLOGY/1/2, C3:LOSE/APOLOGY/2.
+// Ограничение: события стадий собираются с 03.04.2026 (DEAL_EVENTS_DATA_START) —
+// раньше метрика недосчитывает (сделок без событий у неё нет).
+export const REPEAT_QUALIFIED_STAGE_IDS: readonly string[] = [
+  // B2C (воронка 2): созвонился/уточнил → запрос снабженцу → заполнил материалы →
+  // цена дешевле → забронировано → подтв. бронь → продано → отгружено
+  'C2:3', 'C2:PREPARATION', 'C2:PREPAYMENT_INVOICE', 'C2:4', 'C2:EXECUTING', 'C2:5', 'C2:FINAL_INVOICE', 'C2:WON',
+  // B2B (воронка 3): созвонился/уточнил → запрос снабженцу → отправил КП →
+  // цена дешевле → отправил счёт (бронь) → подтв. → продано → отгружено
+  'C3:3', 'C3:PREPARATION', 'C3:PREPAYMENT_INVOICE', 'C3:4', 'C3:EXECUTING', 'C3:FINAL_INVOICE', 'C3:1', 'C3:WON',
+];
+const QUAL_STAGES_SQL = REPEAT_QUALIFIED_STAGE_IDS.map(s => `'${s}'`).join(', ');
+
+const VIRTUAL_DATE_FIELDS: Record<string, { expr: (a: string) => string; scope: (a: string) => string }> = {
+  _repeat_qualified_at: {
+    expr: a => `(SELECT MIN(_q.event_at) FROM deal_events _q WHERE _q.deal_id = ${a}.deal_id AND _q.stage_id IN (${QUAL_STAGES_SQL}))`,
+    scope: a => `${a}.deal_id IN (SELECT _qs.deal_id FROM deal_events _qs WHERE _qs.stage_id IN (${QUAL_STAGES_SQL}) AND _qs.event_at >= $1 AND _qs.event_at < $2)`,
+  },
+};
+
+/** SQL-выражение даты метрики для сделки `alias` (колонка или виртуальная дата). */
+export function dateFieldExpr(field: string | null | undefined, alias = 'd'): string {
+  const v = field ? VIRTUAL_DATE_FIELDS[field] : undefined;
+  if (v) return v.expr(alias);
+  return `${alias}.${sqlIdent(field, 'date_field')}`;
+}
+
+/** Условие охвата «дата сделки может лежать в $1..$2» (для WHERE движков). */
+export function dateFieldScope(field: string, alias = 'd'): string {
+  const v = VIRTUAL_DATE_FIELDS[field];
+  if (v) return v.scope(alias);
+  const c = `${alias}.${sqlIdent(field, 'date_field')}`;
+  return `(${c} >= $1 AND ${c} < $2)`;
+}
+
 export interface DimensionConfig {
   idExpr: string;           // SQL expr for the ID column, e.g. "d.current_manager_id::text"
   nameExpr?: string;        // SQL expr for name (optional, e.g. for product groups)
@@ -306,9 +360,14 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
  * (features/metric-map/engine), чтобы считать по ТЕМ ЖЕ определениям, что и отчёты.
  */
 export function dealsMetricCond(m: Metric, batch = false): string {
-  sqlIdent(m.dateField, 'date_field');
+  const dt = dateFieldExpr(m.dateField, 'd');
   const when: string[] = [
-    ...(batch ? [`d.${m.dateField} IS NOT NULL`] : [`d.${m.dateField} >= $1`, `d.${m.dateField} < $2`]),
+    // Виртуальная дата: сперва дешёвый хэшированный охват, коррелированный MIN — только
+    // для сделок, у которых квал-событие в периоде вообще было.
+    ...(batch ? [`${dt} IS NOT NULL`]
+      : m.dateField && VIRTUAL_DATE_FIELDS[m.dateField]
+        ? [dateFieldScope(m.dateField, 'd'), `${dt} >= $1`, `${dt} < $2`]
+        : [`${dt} >= $1`, `${dt} < $2`]),
     ...m.filters.map(f => resolveFilterClause(f, 'd')).filter(Boolean),
   ];
   return when.join(' AND ');
@@ -384,7 +443,7 @@ export function buildCollectedSQL(
   // WHERE: a deal is in scope if any of its date fields fall in the period,
   // OR if it has any event in period (for event-sourced metrics).
   const dateFields = [...new Set(dealsM.map(m => m.dateField!))];
-  const dateConds  = batch ? [] : dateFields.map(f => `(d.${f} >= $1 AND d.${f} < $2)`);
+  const dateConds  = batch ? [] : dateFields.map(f => dateFieldScope(f, 'd'));
   if (!batch && eventsM.length > 0) {
     const evtDateField = eventsM[0].dateField!;
     dateConds.push(
