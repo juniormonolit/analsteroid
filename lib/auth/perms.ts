@@ -78,6 +78,9 @@ export const PERM_SECTIONS = [
   // «Задачник» (TASKER_SPEC.md, 23.11): задачи «подтянуть показатель до среднего» с
   // автозамером + расписание обучений. Видят все роли продаж (менеджер — свои задачи).
   { key: 'section.tasker', label: 'Задачник' },
+  // «Карта показателей» (задача владельца 23.11): дерево Сумма отгрузок = перв. + повт.,
+  // ветка = сделки × CR × ср. чек × коэф. отгрузки; вклад факторов и «что если».
+  { key: 'section.metric_map', label: 'Карта показателей' },
   { key: 'section.rating', label: 'Рейтинг' },
   { key: 'section.widget_constructor', label: 'Виджеты' },
   // «Дашборд тест» (задача владельца 08.10) — черновик дашборда директора по
@@ -199,6 +202,7 @@ export const MORE_MENU_PERMS: ReadonlyArray<{ key: PermKey; label: string }> = [
   { key: 'section.repeat_kanban', label: 'Канбан повторных продаж' },
   { key: 'section.logist_kanban', label: 'Канбан логиста' },
   { key: 'section.tasker', label: 'Задачник' },
+  { key: 'section.metric_map', label: 'Карта показателей' },
   { key: 'action.deal_chats', label: 'Чаты' },
   { key: 'section.rating', label: 'Рейтинг' },
   { key: 'section.offload', label: 'Разгрузка отделов' },

@@ -9,7 +9,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, ListChecks, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3, Megaphone, Tags,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3, Megaphone, Tags, GitFork,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -492,6 +492,8 @@ function SidebarBody({
     { href: '/logist-kanban', label: 'Канбан логиста', icon: <Columns3 size={18} />, ok: canMore('section.logist_kanban') },
     // «Задачник» (TASKER_SPEC.md, 23.11) — задачи РОПа менеджеру с автозамером + обучения.
     { href: '/tasker', label: 'Задачник', icon: <ListChecks size={18} />, ok: canMore('section.tasker') },
+    // «Карта показателей» (задача владельца 23.11) — дерево связанных показателей с весами.
+    { href: '/metric-map', label: 'Карта показателей', icon: <GitFork size={18} />, ok: canMore('section.metric_map') },
     // Чаты по сделкам (задача владельца 20.07) — переписки РОПа с менеджерами через
     // бота «Аналитик»; гейт по действию, не по section.* (право включается ролям).
     { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: canMore('action.deal_chats') },
