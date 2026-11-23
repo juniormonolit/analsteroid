@@ -8,6 +8,7 @@ import { bx } from '@/lib/bitrix/notify';
 import { callAsUser, UserCallUnsure } from '@/lib/bitrix/userTokens';
 import { read, taskWebhook, writeOnce } from '@/features/repeat-kanban/engine/createDeal';
 import { loadSettings, NOT_CONFIGURED_MESSAGE, TaskerError } from './config';
+import { syncSessionCalendar } from './calendar';
 import type { TaskerPatchableStatus } from '../types';
 
 export type BxOp =
@@ -15,7 +16,8 @@ export type BxOp =
   | { op: 'checklist'; items: string[] }
   | { op: 'status'; target: TaskerPatchableStatus; asBitrixId: string | null }
   | { op: 'update'; fields: Record<string, unknown>; asBitrixId: string | null }
-  | { op: 'comment'; text: string };
+  | { op: 'comment'; text: string }
+  | { op: 'calendar'; sessionId: number };
 
 interface OutboxRow { id: string; task_id: string; op: string; payload: BxOp; attempts: number; next_at: Date; created_at: Date }
 
@@ -91,7 +93,7 @@ export async function drainAll(limit = 50): Promise<{ tasks: number; done: numbe
 
 const OP_LABEL: Record<string, string> = {
   create_task: 'Создание задачи в Битриксе', checklist: 'Чек-лист заказчиков', status: 'Смена статуса',
-  update: 'Сроки задачи', comment: 'Комментарий в задачу',
+  update: 'Сроки задачи', comment: 'Комментарий в задачу', calendar: 'Событие сессии в календаре РОПа',
 };
 
 // ── вызовы ──────────────────────────────────────────────────────────────────
@@ -181,6 +183,8 @@ async function execute(taskId: number, o: BxOp, attempt: number, createdAt: Date
       await taskCall(o.asBitrixId, 'tasks.task.update', { taskId: bxId, fields: o.fields });
       return { ok: true };
     }
+    case 'calendar':
+      return syncSessionCalendar(o.sessionId);
     case 'comment': {
       const bxId = await bitrixTaskIdOf(taskId);
       // Без AUTHOR_ID — автор = владелец вебхука (системный комментарий автозамера).

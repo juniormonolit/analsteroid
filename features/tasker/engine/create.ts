@@ -170,7 +170,7 @@ export async function createTasks(
 
   const deadlineIso = toMskIso(req.deadline);
   const sessionCache = new Map<string, number>();
-  const touchedSessions = new Set<number>();
+  const touchedSessions = new Map<number, number>(); // sessionId → последняя задача запроса
   const createdIds: number[] = [];
 
   for (const managerId of eligible) {
@@ -217,7 +217,7 @@ export async function createTasks(
         req.trainingEventId, JSON.stringify(checklist)]);
     const taskId = Number(ins.rows[0].id);
     createdIds.push(taskId);
-    if (sess) touchedSessions.add(sess.id);
+    if (sess) touchedSessions.set(sess.id, taskId);
 
     const accomplices = rop && rop !== managerId ? [Number(rop)] : [];
     const auditors = director && director !== managerId && director !== rop ? [Number(director)] : [];
@@ -248,7 +248,14 @@ export async function createTasks(
     }
   }
 
-  for (const s of touchedSessions) await refreshSessionDuration(s);
+  // Сессия = одно событие в календаре РОПа (фаза 1b): ставим/обновляем после того, как задачи получили id в
+  // Битриксе (ссылки в описании). Операция — в очереди последней задачи этой сессии из запроса.
+  for (const [sessionId, taskId] of touchedSessions) {
+    await refreshSessionDuration(sessionId);
+    await enqueue(taskId, [{ op: 'calendar', sessionId }]);
+    const res = await drainTask(taskId, { force: true }).catch(e => ({ done: 0, error: e instanceof Error ? e.message : String(e) }));
+    if (res.error) warnings.push({ managerId: null, code: 'bitrix_failed', message: `Событие сессии в календаре РОПа пока не поставлено (${res.error}) — повторим автоматически` });
+  }
   invalidateLive(settings.groupId);
   const created = (await Promise.all(createdIds.map(id => getTask(id)))).filter((t): t is TaskerTask => !!t);
   return { created, warnings };

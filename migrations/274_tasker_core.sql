@@ -74,8 +74,8 @@ INSERT INTO tasker_templates (metric_id, title, body, sort_order) VALUES
 ON CONFLICT (metric_id, title) DO NOTHING;
 
 -- ── Настройки ───────────────────────────────────────────────────────────────
--- group_id — ID проекта «Задачник» в Битриксе (заводит владелец; пока NULL — создание
--- задач отвечает «не настроен проект Задачника»).
+-- group_id — ID проекта «Задачник» в Битриксе: 125 (создан владельцем 23.11,
+-- https://td.monolit-crm.ru/workgroups/group/125/tasks/). NULL — создание задач отвечает «не настроен проект».
 -- directors — Bitrix ID директора по продажам на филиал ('default' + ключи филиалов как в
 -- оргструктуре: 'СПб', 'Москва', 'Краснодар'). Оргструктура директора не знает (ТЗ, вопрос 4):
 -- по умолчанию Осипов Сергей (1860) на всех.
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS tasker_settings (
   updated_at  timestamptz NOT NULL DEFAULT now()
 );
 INSERT INTO tasker_settings (key, value) VALUES
-  ('group_id', 'null'::jsonb),
+  ('group_id', '125'::jsonb),
   ('directors', '{"default": "1860"}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
@@ -97,10 +97,18 @@ CREATE TABLE IF NOT EXISTS tasker_sessions (
   slot_start         timestamptz NOT NULL,
   -- 30 мин + 15 на каждого следующего менеджера; пересчитывается при добавлении задачи
   duration_min       int NOT NULL DEFAULT 30,
+  -- событие в календаре РОПа (calendar.event.add, фаза 1b): id, чей календарь, состояние синка
   calendar_event_id  bigint,
+  calendar_owner_id  text,
+  calendar_sync_state text NOT NULL DEFAULT 'pending' CHECK (calendar_sync_state IN ('pending', 'synced', 'failed', 'skipped')),
+  calendar_sync_error text,
   created_by         text,
   created_at         timestamptz NOT NULL DEFAULT now()
 );
+-- на случай ранней локальной копии таблицы без колонок календаря
+ALTER TABLE tasker_sessions ADD COLUMN IF NOT EXISTS calendar_owner_id text;
+ALTER TABLE tasker_sessions ADD COLUMN IF NOT EXISTS calendar_sync_state text NOT NULL DEFAULT 'pending';
+ALTER TABLE tasker_sessions ADD COLUMN IF NOT EXISTS calendar_sync_error text;
 CREATE INDEX IF NOT EXISTS tasker_sessions_rop_idx ON tasker_sessions (rop_bitrix_id, metric_id, slot_start);
 
 -- ── Задачи ──────────────────────────────────────────────────────────────────
@@ -160,7 +168,7 @@ CREATE INDEX IF NOT EXISTS tasker_tasks_measure_idx ON tasker_tasks (control_dat
 CREATE UNIQUE INDEX IF NOT EXISTS tasker_tasks_bitrix_idx ON tasker_tasks (bitrix_task_id) WHERE bitrix_task_id IS NOT NULL;
 
 -- ── Outbox записи в Битрикс ─────────────────────────────────────────────────
--- op: create_task | checklist | status | update | comment
+-- op: create_task | checklist | status | update | comment | calendar (событие сессии в календаре РОПа)
 CREATE TABLE IF NOT EXISTS tasker_bx_outbox (
   id          bigserial PRIMARY KEY,
   task_id     bigint NOT NULL REFERENCES tasker_tasks(id) ON DELETE CASCADE,
