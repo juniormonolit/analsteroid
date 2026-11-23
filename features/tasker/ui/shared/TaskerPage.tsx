@@ -78,20 +78,23 @@ export function TaskerPage({ canAssign }: { canAssign: boolean }) {
   }, [toast]);
 
   const [busy, setBusy] = useState(false);
-  const move = useCallback(async (t: TaskerTask, status: MoveTarget) => {
-    if (t.status === status) return;
+  // doneNote — «Что сделано» (обязательно при завершении, форма в карточке). true — сервер принял.
+  const move = useCallback(async (t: TaskerTask, status: MoveTarget, doneNote?: string): Promise<boolean> => {
+    if (t.status === status) return true;
     await qc.cancelQueries({ queryKey });
     const prev = qc.getQueryData<TaskerTasksResponse>(queryKey);
     qc.setQueryData<TaskerTasksResponse>(queryKey, d => replaceTask(d, { ...t, status }));
-    if (mock) return;
+    if (mock) return true;
     setBusy(true);
     try {
-      const fresh = await patchTask(t.id, { status });
+      const fresh = await patchTask(t.id, { status, ...(doneNote ? { doneNote } : {}) });
       qc.setQueryData<TaskerTasksResponse>(queryKey, d => replaceTask(d, fresh));
       qc.invalidateQueries({ queryKey: [TASKS_KEY] });
+      return true;
     } catch (e) {
       qc.setQueryData(queryKey, prev);
       setToast(`Не удалось сменить статус задачи «${t.metricLabel}» (${t.manager.name}): ${e instanceof Error ? e.message : String(e)}`);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -170,7 +173,7 @@ export function TaskerPage({ canAssign }: { canAssign: boolean }) {
       ))}
 
       {openTask && (
-        <TaskDrawer task={openTask} mock={mock} busy={busy} onClose={() => setTaskParam('')} onStatus={(t, s) => move(t, s)} />
+        <TaskDrawer task={openTask} mock={mock} busy={busy} onClose={() => setTaskParam('')} onStatus={(t, s, note) => move(t, s, note)} />
       )}
 
       {canAssign && (

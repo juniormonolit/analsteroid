@@ -39,7 +39,7 @@ export const isNotFound = (e: unknown) => /not.?found|не найден|NOT_FOUN
 export const sessionMarker = (sessionId: number) => `Задачник · сессия #${sessionId}`;
 
 /** Событие прошлой попытки (ответ на add потерялся): тот же календарь и день, маркер в описании. */
-async function findCreatedEvent(ownerId: string, slot: Date, marker: string): Promise<number | null> {
+export async function findCreatedEvent(ownerId: string, slot: Date, marker: string): Promise<number | null> {
   const r = await bx(taskWebhook(), 'calendar.event.get', {
     type: 'user', ownerId: Number(ownerId), from: mskDay(slot, -1), to: mskDay(slot, 1),
   }) as { result?: { ID: string; DESCRIPTION?: string }[] };
@@ -81,7 +81,7 @@ export async function syncSessionCalendar(sessionId: number): Promise<{ eventId:
       return t.bitrix_task_id ? `• ${who}: ${bitrixTaskUrl(Number(t.bitrix_task_id), groupId)}` : `• ${who}: задача создаётся`;
     });
     const description = [
-      `Сессия РОПа по теме «${label}» — разбор задач менеджеров.`,
+      `Сессия по теме «${label}» — разбор задач менеджеров.`,
       lines.join('\n'),
       `Задачник в Монолитике: ${appBaseUrl()}/tasker`,
       marker,

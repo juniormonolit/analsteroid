@@ -9,6 +9,7 @@ import { callAsUser, UserCallUnsure } from '@/lib/bitrix/userTokens';
 import { read, taskWebhook, writeOnce } from '@/features/repeat-kanban/engine/createDeal';
 import { loadSettings, NOT_CONFIGURED_MESSAGE, TaskerError } from './config';
 import { syncSessionCalendar } from './calendar';
+import { syncTaskCalendar } from './taskCalendar';
 import type { TaskerPatchableStatus } from '../types';
 
 export type BxOp =
@@ -17,7 +18,9 @@ export type BxOp =
   | { op: 'status'; target: TaskerPatchableStatus; asBitrixId: string | null }
   | { op: 'update'; fields: Record<string, unknown>; asBitrixId: string | null }
   | { op: 'comment'; text: string }
-  | { op: 'calendar'; sessionId: number };
+  | { op: 'calendar'; sessionId: number }
+  // Событие календаря исполнителя для задачи со слотом без сессии (менеджер — участник), taskCalendar.ts.
+  | { op: 'task_calendar' };
 
 interface OutboxRow { id: string; task_id: string; op: string; payload: BxOp; attempts: number; next_at: Date; created_at: Date }
 
@@ -93,7 +96,8 @@ export async function drainAll(limit = 50): Promise<{ tasks: number; done: numbe
 
 const OP_LABEL: Record<string, string> = {
   create_task: 'Создание задачи в Битриксе', checklist: 'Чек-лист заказчиков', status: 'Смена статуса',
-  update: 'Сроки задачи', comment: 'Комментарий в задачу', calendar: 'Событие сессии в календаре РОПа',
+  update: 'Сроки задачи', comment: 'Комментарий в задачу', calendar: 'Событие сессии в календаре исполнителя',
+  task_calendar: 'Событие задачи в календаре исполнителя',
 };
 
 // ── вызовы ──────────────────────────────────────────────────────────────────
@@ -185,6 +189,8 @@ async function execute(taskId: number, o: BxOp, attempt: number, createdAt: Date
     }
     case 'calendar':
       return syncSessionCalendar(o.sessionId);
+    case 'task_calendar':
+      return syncTaskCalendar(taskId);
     case 'comment': {
       const bxId = await bitrixTaskIdOf(taskId);
       // Без AUTHOR_ID — автор = владелец вебхука (системный комментарий автозамера).
@@ -211,13 +217,12 @@ export function statusSteps(cur: number, target: TaskerPatchableStatus): string[
       if (cur === 4) return ['tasks.task.disapprove', 'tasks.task.start'];
       if (closed) return ['tasks.task.renew', 'tasks.task.start'];
       return ['tasks.task.start'];
-    case 'awaiting_control':
-      if (cur === 4) return [];
-      if (closed) return ['tasks.task.renew', 'tasks.task.complete'];
-      return ['tasks.task.complete'];
     case 'done':
+      // С TASK_CONTROL='N' complete закрывает сразу (5); approve — только у старых задач с контролем (4).
       if (cur === 5) return [];
       if (cur === 4) return ['tasks.task.approve'];
       return ['tasks.task.complete', 'tasks.task.approve'];
+    default:
+      return []; // устаревшая цель из старой очереди (awaiting_control) — ничего не делаем
   }
 }

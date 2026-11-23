@@ -97,7 +97,8 @@ export const MOVE_TARGETS: MoveTarget[] = ['new', 'in_progress', 'done'];
  *  пока автозамер не поставил вердикт: ошибочное завершение откатывается. После итога — нет:
  *  плохой итог = новая задача (собрание 23.11). */
 export function moveTargets(t: TaskerTask): MoveTarget[] {
-  if (t.bitrixTaskId == null || t.verdict) return [];
+  // canChangeStatus — с сервера: исполнитель или постановщик; менеджер видит задачу только для чтения.
+  if (t.bitrixTaskId == null || t.verdict || t.canChangeStatus === false) return [];
   const col = boardColumn(t);
   if (col === 'new' || col === 'in_progress') return MOVE_TARGETS.filter(s => s !== col);
   if (col === 'done' || col === 'measuring') return ['in_progress'];

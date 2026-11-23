@@ -65,15 +65,15 @@ export interface Snapshot {
 // ── Задачи ──────────────────────────────────────────────────────────────────
 
 /**
- * Статус для доски. Первые четыре — из Битрикса (живой tasks.task.list):
- * new (1/2), in_progress (3), awaiting_control (4), done (5; 6/7 — тоже done).
+ * Статус для доски. Первые три — из Битрикса (живой tasks.task.list):
+ * new (1/2), in_progress (3), done (5; 6/7 — тоже done). «Ждёт контроля» убран (правка 23.11, задачи —
+ * TASK_CONTROL='N'); статус 4 у старых задач читается как завершённая.
  * measuring — Битрикс-задача завершена, ждёт контрольной даты замера.
  * result — вердикт поставлен.
  */
 export type TaskerStatus =
   | 'new'
   | 'in_progress'
-  | 'awaiting_control'
   | 'done'
   | 'measuring'
   | 'result';
@@ -81,14 +81,22 @@ export type TaskerStatus =
 export const TASKER_STATUS_LABELS: Record<TaskerStatus, string> = {
   new: 'Новая',
   in_progress: 'В работе',
-  awaiting_control: 'Ждёт контроля',
   done: 'Завершена',
   measuring: 'На замере',
   result: 'Итог',
 };
 
-/** Статусы, которые можно выставить из Монолитики (перетаскивание = смена в Битриксе). */
-export type TaskerPatchableStatus = 'new' | 'in_progress' | 'awaiting_control' | 'done';
+/** Статусы, которые можно выставить из Монолитики (перетаскивание = смена в Битриксе).
+ *  'done' — только с doneNote («Что сделано»); из «Завершена»/«На замере» без вердикта можно вернуть назад. */
+export type TaskerPatchableStatus = 'new' | 'in_progress' | 'done';
+
+/** Тип задачи (правка 23.11): теория — исполнитель тренер (tasker_settings.trainer), практика — РОП/постановщик. */
+export type TaskerTaskKind = 'theory' | 'practice';
+
+export const TASKER_KIND_LABELS: Record<TaskerTaskKind, string> = {
+  theory: 'Теория',
+  practice: 'Практика',
+};
 
 export type TaskerVerdict = 'achieved' | 'improved' | 'no_change' | 'not_enough_data';
 
@@ -126,6 +134,11 @@ export interface TaskerTask {
 
   title: string;
   body: string;
+  /** Тип: теория/практика; null — старые задачи (до 23.11, исполнитель — менеджер). */
+  kind: TaskerTaskKind | null;
+  /** Исполнитель (RESPONSIBLE_ID в Битриксе): РОП или тренер. У старых задач — менеджер. */
+  assignee: TaskerPerson | null;
+  /** Менеджер — объект задачи (о встрече узнаёт из календаря), не исполнитель. */
   manager: TaskerPerson;
   rop: TaskerPerson | null;
   director: TaskerPerson | null;
@@ -156,6 +169,13 @@ export interface TaskerTask {
   /** Сырой статус Битрикса (1..7), если известен. */
   bitrixStatus: number | null;
   closedAt: string | null;
+
+  /** «Что сделано» — обязательное резюме при завершении (уходит комментарием в задачу Битрикса). */
+  doneNote: string | null;
+  doneAt: string | null;
+  doneBy: string | null;
+  /** Может ли текущий пользователь менять статус/завершать (исполнитель или постановщик с правом). Менеджер — только чтение. */
+  canChangeStatus: boolean;
 
   verdict: TaskerVerdict | null;
   /** Значение на замере (тот же формат, что snapshot.value). */
@@ -247,6 +267,8 @@ export interface TaskerCreateRequest {
   trainingEventId?: number | null;
   /** Директор/админ: обойти лимит «≤3 открытых» (дубль метрики не обходится). */
   overrideLimits?: boolean;
+  /** Теория (исполнитель — тренер из настроек) или практика (исполнитель — постановщик). Нет — 'practice'. */
+  kind?: TaskerTaskKind;
   /** Постановщик (Bitrix user id) — из GET /api/tasker/creators. Нет — сам нажавший. Не от себя → нажавший
    *  добавляется наблюдателем; в БД creator_* = выбранный, creator_user_id = кто нажал. */
   creatorBitrixId?: number | null;
@@ -274,6 +296,8 @@ export interface TaskerCreateResponse {
 /** PATCH /api/tasker/tasks/:id */
 export interface TaskerPatchRequest {
   status?: TaskerPatchableStatus;
+  /** Обязателен при status='done': «Что сделано» → комментарий в задачу Битрикса + tasker_tasks.done_note. */
+  doneNote?: string;
   slot?: { start: string } | null;
   deadline?: string;
 }
@@ -299,6 +323,8 @@ export interface TaskerMetricsResponse {
   metrics: TaskerMetric[];
   /** false — group_id проекта Задачника в Битриксе ещё не задан, создание вернёт ошибку. */
   bitrixConfigured: boolean;
+  /** Тренер для задач «Теория» (tasker_settings.trainer, по умолчанию Будковский 2054). */
+  trainer?: TaskerPerson | null;
 }
 
 /** GET /api/tasker/templates?metricId */

@@ -34,8 +34,8 @@ export function TrainingForm({
   const [place, setPlace] = useState(initial?.place ?? '');
   const [capacity, setCapacity] = useState(initial?.capacity ? String(initial.capacity) : '');
   const [metricIds, setMetricIds] = useState<string[]>(initial?.metricIds ?? []);
-  const [beforeDays, setBeforeDays] = useState(String(initial?.measureBeforeDays ?? 14));
-  const [afterDays, setAfterDays] = useState(String(initial?.measureAfterDays ?? 14));
+  const [beforeDays, setBeforeDays] = useState(String(initial?.measureBeforeDays ?? 7));
+  const [afterDays, setAfterDays] = useState(String(initial?.measureAfterDays ?? 7));
   const [localErr, setLocalErr] = useState<string | null>(null);
 
   // Наложения (предупреждение): тренер (создатель — includeSelf) и уже записанные; само событие при правке — не конфликт.

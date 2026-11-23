@@ -9,6 +9,10 @@ export const MIN_DENOMINATOR = 5;
 export const SESSION_BASE_MIN = 30;
 export const SESSION_PER_EXTRA_MIN = 15;
 export const DEFAULT_DIRECTOR_BITRIX_ID = '1860'; // Осипов Сергей (lib/weather/weeklyWeather.ts)
+/** Тренер для задач «Теория» (Будковский), если tasker_settings.trainer не задан. */
+export const DEFAULT_TRAINER_BITRIX_ID = '2054';
+/** Окно замера по умолчанию: контрольная дата = срок + 7 дней (правка 23.11: «смотрим неделя через неделю»). */
+export const DEFAULT_CONTROL_DAYS = 7;
 
 export class TaskerError extends Error {
   constructor(message: string, readonly code: 'not_configured' | 'forbidden' | 'bad_request' | 'limit' | 'bitrix' = 'bad_request', readonly status = 400) {
@@ -43,6 +47,8 @@ export interface TaskerSettings {
   groupId: number | null;
   /** Bitrix ID директора по филиалу; 'default' — для всех остальных. */
   directors: Record<string, string>;
+  /** Bitrix ID тренера — исполнитель задач «Теория». */
+  trainerId: string;
 }
 
 export async function loadSettings(): Promise<TaskerSettings> {
@@ -52,7 +58,8 @@ export async function loadSettings(): Promise<TaskerSettings> {
   const dirs = (map.get('directors') ?? {}) as Record<string, unknown>;
   const directors: Record<string, string> = { default: DEFAULT_DIRECTOR_BITRIX_ID };
   for (const [k, v] of Object.entries(dirs)) if (v != null && String(v).trim()) directors[k] = String(v).trim();
-  return { groupId: Number.isInteger(g) && g > 0 ? g : null, directors };
+  const tr = String(map.get('trainer') ?? '').trim();
+  return { groupId: Number.isInteger(g) && g > 0 ? g : null, directors, trainerId: /^\d+$/.test(tr) ? tr : DEFAULT_TRAINER_BITRIX_ID };
 }
 
 export function directorFor(settings: TaskerSettings, branch: string | null | undefined): string {

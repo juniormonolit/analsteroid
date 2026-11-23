@@ -6,7 +6,7 @@ import { Drawer } from '@/components/ui/Drawer';
 import { SearchSelect, type SearchSelectOption } from '@/components/ui/SearchSelect';
 import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
 import type {
-  Snapshot, TaskerCreateRequest, TaskerCreateResponse, TaskerMetric, TaskerSession,
+  Snapshot, TaskerCreateRequest, TaskerCreateResponse, TaskerMetric, TaskerSession, TaskerTaskKind,
 } from '@/features/tasker/types';
 import {
   createTasks, fetchAssignableManagers, fetchCreators, fetchCustomers, fetchMetrics, fetchSessions, fetchSnapshot,
@@ -40,6 +40,8 @@ export interface CreateTaskDrawerProps {
   managerOptions?: SearchSelectOption[];
   /** Запасные кандидаты на показатель (колонки отчёта по порядку), если metricId не в белом списке. */
   metricCandidates?: string[];
+  /** Тип задачи при открытии: 'theory' — «Отправить на обучение» (исполнитель — тренер). Нет — «Практика». */
+  kind?: TaskerTaskKind;
 }
 
 export function CreateTaskDrawer(props: CreateTaskDrawerProps) {
@@ -104,7 +106,7 @@ const DURATIONS = [15, 30, 45, 60, 90];
 
 // ── форма ───────────────────────────────────────────────────────────────────
 
-function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initialMetric, period, onCreated, managerOptions: extraManagers, metricCandidates }: CreateTaskDrawerProps) {
+function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initialMetric, period, onCreated, managerOptions: extraManagers, metricCandidates, kind: initialKind }: CreateTaskDrawerProps) {
   const today = ymd(new Date());
 
   const metricsQ = useQuery({ queryKey: ['tasker', 'metrics'], queryFn: fetchMetrics, staleTime: 5 * 60_000 });
@@ -134,10 +136,12 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
   const [slot, setSlot] = useState('');
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [newSession, setNewSession] = useState(true);
-  const [controlDate, setControlDate] = useState(addDays(addDays(today, 7), 14));
+  const [controlDate, setControlDate] = useState(addDays(addDays(today, 7), 7));
   const [controlTouched, setControlTouched] = useState(false);
   const [trainingId, setTrainingId] = useState('');
   const [creatorId, setCreatorId] = useState(''); // '' = сам пользователь
+  // Теория / Практика (сессия A, правка 23.11): исполнитель — тренер из настроек или постановщик (РОП).
+  const [kind, setKind] = useState<TaskerTaskKind>(initialKind ?? 'practice');
 
   const [result, setResult] = useState<TaskerCreateResponse | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -250,14 +254,20 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
     staleTime: 60_000,
     retry: false,
   });
+  // Исполнитель задачи: «Теория» — тренер, «Практика» — постановщик (выбранный или сам пользователь).
+  const trainer = metricsQ.data?.trainer ?? null;
+  const executorId = kind === 'theory' ? trainer?.id ?? null : creatorId ? Number(creatorId) : creatorsQ.data?.selfId ?? null;
+  // Сессии — только этого исполнителя: сессия = его встреча с несколькими менеджерами.
   const sessions: TaskerSession[] = useMemo(
-    () => (sessionsQ.data?.sessions ?? []).filter(s => new Date(s.slotStart).getTime() > Date.now()).slice(0, 3),
-    [sessionsQ.data],
+    () => (sessionsQ.data?.sessions ?? [])
+      .filter(s => new Date(s.slotStart).getTime() > Date.now() && (executorId == null || s.rop.id === executorId))
+      .slice(0, 3),
+    [sessionsQ.data, executorId],
   );
-  useEffect(() => { setSessionId(null); }, [metricId]);
+  useEffect(() => { setSessionId(null); }, [metricId, executorId]);
 
-  // Контрольная дата следует за сроком (+14), пока её не правили руками.
-  useEffect(() => { if (!controlTouched && deadline) setControlDate(addDays(deadline, 14)); }, [deadline, controlTouched]);
+  // Контрольная дата следует за сроком (+7: «показатели смотрим неделя через неделю»), пока её не правили руками.
+  useEffect(() => { if (!controlTouched && deadline) setControlDate(addDays(deadline, 7)); }, [deadline, controlTouched]);
 
   const trainings = trainingsQ.data;
   const trainingOptions = useMemo<SearchSelectOption[]>(
@@ -285,6 +295,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
       trainingEventId: trainingId ? Number(trainingId) : null,
       ...(overrideLimits ? { overrideLimits: true } : {}),
       creatorBitrixId: creatorId ? Number(creatorId) : null,
+      kind,
     };
   };
 
@@ -327,8 +338,10 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
         )}
         {metricsQ.error && <Banner tone="error">Не загрузился список показателей: {(metricsQ.error as Error).message}</Banner>}
 
+        <KindSwitch kind={kind} onKind={setKind} trainerName={trainer?.name ?? null} />
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Менеджеры" hint="Можно несколько — снимок у каждого свой">
+          <Field label="Менеджеры" hint="Несколько — у каждого своя задача и свой снимок">
             <SearchMultiSelect options={managerOptions} value={managerIds} onChange={setManagerIds}
               allLabel="Выберите менеджеров" unitLabel="менеджеров" ariaLabel="Менеджеры" className="w-full" />
           </Field>
@@ -343,7 +356,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
         </div>
 
         {creatorOptions.length > 1 && (
-          <Field label="Постановщик" hint={creatorId ? 'Задача — от его имени, вы останетесь в ней наблюдателем' : 'По умолчанию — вы'}>
+          <Field label="Постановщик" hint={`${creatorId ? 'Задача — от его имени, вы останетесь в ней наблюдателем' : 'По умолчанию — вы'}${kind === 'practice' ? '. Он же исполнитель' : ''}`}>
             <SearchSelect options={creatorOptions} value={creatorId} onChange={setCreatorId}
               placeholder="Вы" ariaLabel="Постановщик" className="w-full sm:max-w-[calc(50%-8px)]" />
           </Field>
@@ -420,7 +433,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
           <Field label="Срок">
             <input type="date" value={deadline} min={today} onChange={e => setDeadline(e.target.value)} className={INPUT} />
           </Field>
-          <Field label="Контрольная дата замера" hint="Автозамер показателя и вердикт. По умолчанию срок + 14 дней">
+          <Field label="Контрольная дата замера" hint="Автозамер показателя и вердикт. По умолчанию срок + 7 дней (неделя после работы) — можно поменять">
             <input type="date" value={controlDate} min={deadline || today}
               onChange={e => { setControlDate(e.target.value); setControlTouched(true); }} className={INPUT} />
           </Field>
@@ -443,7 +456,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
           sessions={sessions} sessionId={sessionId} onSession={setSessionId}
           slot={slot} onSlot={setSlot} newSession={newSession} onNewSession={setNewSession}
           metricLabel={metric?.label}
-          availability={slotAvailability(sessions, sessionId, slot, durationMin, managerIdNums, creatorId ? Number(creatorId) : null)}
+          availability={slotAvailability(sessions, sessionId, slot, durationMin, managerIdNums, kind === 'theory' ? trainer?.id ?? null : creatorId ? Number(creatorId) : null)}
         />
 
         {trainings && trainings.length > 0 && (
@@ -580,6 +593,30 @@ function CustomersBlock({ enabled, onToggle, groups, managerName, multi, uncheck
 
 /** Проверка наложения для слота (предупреждение, не запрет): менеджеры + постановщик; выбранная сессия — её время,
  *  сама сессия не конфликтует сама с собой. */
+/** Две кнопки вверху формы вместо поля исполнителя (собрание 23.11: «не надо никого выбирать»). */
+function KindSwitch({ kind, onKind, trainerName }: { kind: TaskerTaskKind; onKind: (k: TaskerTaskKind) => void; trainerName: string | null }) {
+  const opts: { k: TaskerTaskKind; title: string; sub: string }[] = [
+    { k: 'theory', title: `Теория — ${trainerName && !trainerName.startsWith('#') ? trainerName.split(' ')[0] : 'тренер'}`, sub: 'Исполнитель — тренер, он соберёт менеджеров на занятие' },
+    { k: 'practice', title: 'Практика — работаю сам', sub: 'Исполнитель — постановщик (РОП), разбор с менеджером' },
+  ];
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Кто исполняет задачу">
+      {opts.map(o => {
+        const on = kind === o.k;
+        return (
+          <button key={o.k} type="button" role="radio" aria-checked={on} onClick={() => onKind(o.k)}
+            className={`flex min-h-11 min-w-0 flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors ${on
+              ? 'border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]'
+              : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'}`}>
+            <span className={`text-sm font-semibold ${on ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>{o.title}</span>
+            <span className="text-[11px] leading-snug text-[var(--color-text-muted)]">{o.sub}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function slotAvailability(sessions: TaskerSession[], sessionId: number | null, slot: string, durationMin: number, managerIds: number[], creatorId: number | null): TaskerAvailabilityRequest | null {
   const s = sessionId ? sessions.find(x => x.id === sessionId) : null;
   const start = s ? s.slotStart : slot ? new Date(slot).toISOString() : null;

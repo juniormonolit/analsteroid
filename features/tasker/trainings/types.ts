@@ -91,7 +91,7 @@ export interface TrainingEvent {
   attendees: TrainingAttendee[];
   /** Показатели, на которые нацелено обучение (tasker_metrics). */
   metricIds: string[];
-  /** Окно замера «до/после», дней (по умолчанию 14/14). */
+  /** Окно замера «до/после», дней (по умолчанию 7/7). */
   measureBeforeDays: number;
   measureAfterDays: number;
   effect: TrainingEffectSummary;
@@ -127,7 +127,7 @@ export interface TrainingEventInput {
   /** Bitrix id тренера; по умолчанию — создатель. */
   trainerId?: number | null;
   metricIds?: string[];
-  /** 7..90, по умолчанию 14. */
+  /** 7..90, по умолчанию 7. */
   measureBeforeDays?: number;
   measureAfterDays?: number;
 }

@@ -111,9 +111,10 @@ async function monolitikaBusy(want: Set<string>, from: number, to: number, ex: A
     }
   }).catch(ignoreMissing);
 
-  // Слоты задач вне сессий: менеджер + РОП.
+  // Слоты задач вне сессий: менеджер + исполнитель (РОП/тренер; у старых задач — РОП).
   await db.query<{ id: string; manager_bitrix_id: string; rop_bitrix_id: string | null; title: string; slot_start: Date; slot_end: Date | null; duration_min: number }>(
-    `SELECT id, manager_bitrix_id, rop_bitrix_id, title, slot_start, slot_end, duration_min FROM tasker_tasks
+    `SELECT id, manager_bitrix_id, CASE WHEN assignee_bitrix_id IS NULL OR assignee_bitrix_id = manager_bitrix_id THEN rop_bitrix_id
+            ELSE assignee_bitrix_id END AS rop_bitrix_id, title, slot_start, slot_end, duration_min FROM tasker_tasks
       WHERE cancelled_at IS NULL AND session_id IS NULL AND slot_start BETWEEN $1 AND $2`, [fromIso, toIso],
   ).then(r => {
     for (const t of r.rows) {

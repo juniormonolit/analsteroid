@@ -2,8 +2,9 @@
 import { systemDb } from '@/lib/db/clients';
 import type { SessionUser } from '@/lib/auth/session';
 import type { SessionScope } from '@/lib/org/sessionScope';
+import { hasPerm } from '@/lib/auth/perms';
 import type {
-  Snapshot, TaskerChecklistItem, TaskerSession, TaskerStatus, TaskerSyncState, TaskerTask, TaskerTasksQuery, TaskerVerdict,
+  Snapshot, TaskerChecklistItem, TaskerSession, TaskerStatus, TaskerSyncState, TaskerTask, TaskerTaskKind, TaskerTasksQuery, TaskerVerdict,
 } from '../types';
 import { bitrixTaskUrl, loadMetricDefs, loadSettings, mskToday, type TaskerMetricDef } from './config';
 import { loadLiveTasks } from './live';
@@ -19,6 +20,27 @@ export interface TaskRow {
   verdict: TaskerVerdict | null; measured_value: string | null; measured_at: Date | null;
   session_id: string | null; training_event_id: string | null; checklist: TaskerChecklistItem[];
   sync_state: TaskerSyncState; sync_error: string | null; created_at: Date; updated_at: Date;
+  // 279
+  kind: TaskerTaskKind | null; assignee_bitrix_id: string | null; assignee_name: string | null; auditor_ids: string[] | null;
+  done_note: string | null; done_at: Date | null; done_by: string | null;
+  calendar_event_id: string | null; calendar_owner_id: string | null;
+}
+
+/** Кто смотрит (для canChangeStatus): Bitrix ID и право «ставить задачи». */
+export interface TaskViewer { bitrixId: string | null; userId: string; canManage: boolean }
+
+export function viewerOf(session: SessionUser): TaskViewer {
+  return { bitrixId: session.bitrixUserId ? String(session.bitrixUserId) : null, userId: session.id, canManage: hasPerm(session, 'action.tasker.assign') };
+}
+
+/** Менять статус/завершать: исполнитель — всегда; с правом «ставить задачи» — постановщик (кто нажал / от чьего
+ *  имени), РОП и директор менеджера. Менеджер — объект задачи — только смотрит (правка 23.11). */
+export function canChangeStatusOf(r: TaskRow, v: TaskViewer): boolean {
+  if (v.bitrixId && r.assignee_bitrix_id === v.bitrixId) return true;
+  if (!v.canManage) return false;
+  if (r.creator_user_id === v.userId) return true;
+  return !!v.bitrixId && v.bitrixId !== r.manager_bitrix_id
+    && (r.creator_bitrix_id === v.bitrixId || r.rop_bitrix_id === v.bitrixId || r.director_bitrix_id === v.bitrixId);
 }
 
 // Даты как текст — без сдвига часового пояса при чтении date-колонок.
@@ -31,8 +53,8 @@ export const OPEN_TASK_SQL = `t.cancelled_at IS NULL AND t.verdict IS NULL AND $
 export function deriveStatus(bitrixStatus: number | null, verdict: TaskerVerdict | null, controlDate: string, today = mskToday()): TaskerStatus {
   if (verdict) return 'result';
   const s = bitrixStatus ?? 2;
-  if (s === 5 || s === 7) return controlDate > today ? 'measuring' : 'done';
-  if (s === 4) return 'awaiting_control';
+  // 4 «ждёт контроля» — только у старых задач (до TASK_CONTROL='N'): исполнитель уже сдал — считаем завершённой.
+  if (s === 5 || s === 7 || s === 4) return controlDate > today ? 'measuring' : 'done';
   if (s === 3) return 'in_progress';
   return 'new';
 }
@@ -40,7 +62,10 @@ export function deriveStatus(bitrixStatus: number | null, verdict: TaskerVerdict
 const num = (v: string | number | null | undefined): number | null => (v === null || v === undefined || v === '' ? null : Number(v));
 const isoOf = (d: Date | string | null | undefined): string | null => (d ? new Date(d).toISOString() : null);
 
-export function mapTask(r: TaskRow, metrics: Map<string, TaskerMetricDef>, groupId: number | null, live?: { at: number; byId: Map<number, { status: number; closedDate: string | null }> } | null): TaskerTask {
+export function mapTask(
+  r: TaskRow, metrics: Map<string, TaskerMetricDef>, groupId: number | null,
+  live?: { at: number; byId: Map<number, { status: number; closedDate: string | null }> } | null, viewer?: TaskViewer | null,
+): TaskerTask {
   const m = metrics.get(r.metric_id);
   const bxId = num(r.bitrix_task_id);
   const lv = bxId && live ? live.byId.get(bxId) : undefined;
@@ -56,6 +81,8 @@ export function mapTask(r: TaskRow, metrics: Map<string, TaskerMetricDef>, group
     syncError: r.sync_error,
     title: r.title,
     body: r.body,
+    kind: r.kind ?? null,
+    assignee: r.assignee_bitrix_id ? { id: Number(r.assignee_bitrix_id), name: r.assignee_name ?? `#${r.assignee_bitrix_id}` } : null,
     manager: { id: Number(r.manager_bitrix_id), name: r.manager_name ?? `#${r.manager_bitrix_id}` },
     rop: r.rop_bitrix_id ? { id: Number(r.rop_bitrix_id), name: r.rop_name ?? `#${r.rop_bitrix_id}` } : null,
     director: r.director_bitrix_id ? { id: Number(r.director_bitrix_id), name: r.director_name ?? `#${r.director_bitrix_id}` } : null,
@@ -78,6 +105,10 @@ export function mapTask(r: TaskRow, metrics: Map<string, TaskerMetricDef>, group
     status: deriveStatus(bitrixStatus, r.verdict, r.control_date),
     bitrixStatus: bitrixStatus ?? null,
     closedAt,
+    doneNote: r.done_note ?? null,
+    doneAt: isoOf(r.done_at),
+    doneBy: r.done_by ?? null,
+    canChangeStatus: !r.verdict && !!viewer && canChangeStatusOf(r, viewer),
     verdict: r.verdict,
     measuredValue: num(r.measured_value),
     measuredAt: r.verdict ? isoOf(r.measured_at) : null,
@@ -88,7 +119,8 @@ export function mapTask(r: TaskRow, metrics: Map<string, TaskerMetricDef>, group
   };
 }
 
-/** SQL-условие видимости: свой срез менеджеров + то, что поставил сам / где РОП / где наблюдатель. */
+/** SQL-условие видимости: свой срез менеджеров (менеджер видит задачи про себя — на чтение) + то, что поставил
+ *  сам / где исполнитель (РОП, тренер) / РОП / директор / наблюдатель (AUDITORS). */
 function visibilitySql(scope: SessionScope, session: SessionUser, params: unknown[]): string {
   if (scope.kind === 'all') return 'TRUE';
   params.push([...scope.managerIds]);
@@ -98,7 +130,8 @@ function visibilitySql(scope: SessionScope, session: SessionUser, params: unknow
   if (!session.bitrixUserId) return `(${a} OR ${b})`;
   params.push(session.bitrixUserId);
   const me = `$${params.length}`;
-  return `(${a} OR ${b} OR t.rop_bitrix_id = ${me} OR t.director_bitrix_id = ${me})`;
+  return `(${a} OR ${b} OR t.manager_bitrix_id = ${me} OR t.rop_bitrix_id = ${me} OR t.director_bitrix_id = ${me}
+    OR t.assignee_bitrix_id = ${me} OR t.creator_bitrix_id = ${me} OR ${me} = ANY(t.auditor_ids))`;
 }
 
 export async function listTasks(session: SessionUser, scope: SessionScope, q: TaskerTasksQuery & { ids?: number[] }): Promise<TaskerTask[]> {
@@ -111,7 +144,7 @@ export async function listTasks(session: SessionUser, scope: SessionScope, q: Ta
   if (q.mine === 'created') { params.push(session.id); where.push(`t.creator_user_id = $${params.length}`); }
   if (q.mine === 'watch') {
     params.push(session.bitrixUserId ?? '-');
-    where.push(`(t.director_bitrix_id = $${params.length} OR t.rop_bitrix_id = $${params.length})`);
+    where.push(`(t.director_bitrix_id = $${params.length} OR t.rop_bitrix_id = $${params.length} OR t.assignee_bitrix_id = $${params.length} OR $${params.length} = ANY(t.auditor_ids))`);
   }
   // Окно для «Недели»/«Сегодня»: задача попадает, если слот, срок или дата замера — в окне,
   // либо (для «Сегодня») она просрочена и ещё открыта.
@@ -131,7 +164,8 @@ export async function listTasks(session: SessionUser, scope: SessionScope, q: Ta
   const [settings, metrics] = await Promise.all([loadSettings(), loadMetricDefs()]);
   const mm = new Map(metrics.map(m => [m.id, m]));
   const live = r.rows.some(x => x.bitrix_task_id) ? await loadLiveTasks(settings.groupId) : null;
-  return r.rows.map(x => mapTask(x, mm, settings.groupId, live));
+  const viewer = viewerOf(session);
+  return r.rows.map(x => mapTask(x, mm, settings.groupId, live, viewer));
 }
 
 export async function getTaskRow(id: number): Promise<TaskRow | null> {
@@ -139,11 +173,11 @@ export async function getTaskRow(id: number): Promise<TaskRow | null> {
   return r.rows[0] ?? null;
 }
 
-export async function getTask(id: number): Promise<TaskerTask | null> {
+export async function getTask(id: number, viewer?: TaskViewer | null): Promise<TaskerTask | null> {
   const row = await getTaskRow(id);
   if (!row) return null;
   const [settings, metrics] = await Promise.all([loadSettings(), loadMetricDefs()]);
-  return mapTask(row, new Map(metrics.map(m => [m.id, m])), settings.groupId, null);
+  return mapTask(row, new Map(metrics.map(m => [m.id, m])), settings.groupId, null, viewer);
 }
 
 // ── Сессии ──────────────────────────────────────────────────────────────────

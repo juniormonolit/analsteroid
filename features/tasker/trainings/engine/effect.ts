@@ -2,7 +2,8 @@
 import type { TaskerVerdict } from '../../types';
 import type { TrainingEffectSummary, TrainingOutcome, TrainingResult } from '../types';
 
-export const DEFAULT_MEASURE_DAYS = 14;
+/** Окно «до/после» по умолчанию — 7/7 дней (собрание 23.11: «показатели смотрим неделя через неделю»). */
+export const DEFAULT_MEASURE_DAYS = 7;
 
 /** YYYY-MM-DD ± дни (UTC-арифметика по календарной дате). */
 export function addDays(ymd: string, days: number): string {

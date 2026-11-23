@@ -3,6 +3,7 @@
 // ссылка в Битрикс»). Drawer: справа на десктопе, на весь экран на телефоне.
 // «Текущее» — POST /api/tasker/snapshot за период «с постановки по сегодня» (тот же расчёт, что замер).
 // Смена статуса кнопками — для тача, где перетаскивания нет (и как явная альтернатива на десктопе).
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { CheckSquare, CloudOff, ExternalLink, Square } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
@@ -13,6 +14,9 @@ import {
 } from '../../types';
 import { BOARD_COLUMN_LABELS, VERDICT_CLS, boardColumn, fmtD, fmtDT, fmtValue, isOverdue, moveTargets, mskDay, TASK_KIND_LABELS, taskExtras, todayMsk, type MoveTarget } from './format';
 import { ManagerTrainingHistory } from '@/features/tasker/trainings/ui/ManagerTrainingHistory';
+
+/** Минимум символов «Что сделано» — как на сервере (engine/patch.ts MIN_DONE_NOTE). */
+const MIN_DONE_NOTE = 10;
 
 
 function useLiveValue(t: TaskerTask, mock: boolean) {
@@ -52,7 +56,8 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
   task: TaskerTask;
   mock: boolean;
   onClose: () => void;
-  onStatus: (t: TaskerTask, s: MoveTarget) => void;
+  /** doneNote — при s='done' («Что сделано», обязательно). Promise<boolean> — принял ли сервер (форма закрывается). */
+  onStatus: (t: TaskerTask, s: MoveTarget, doneNote?: string) => void | Promise<boolean>;
   busy?: boolean;
 }) {
   const live = useLiveValue(t, mock);
@@ -63,6 +68,14 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
   const targets = moveTargets(t);
   const { kind, assignee, doneNote, doneAt } = taskExtras(t);
   const canChangeStatus = targets.length > 0;
+  const [completing, setCompleting] = useState(false);
+  const [note, setNote] = useState('');
+  const noteOk = note.trim().length >= MIN_DONE_NOTE;
+  const submitDone = async () => {
+    if (!noteOk) return;
+    const ok = await onStatus(t, 'done', note.trim());
+    if (ok !== false) { setCompleting(false); setNote(''); }
+  };
 
   return (
     <Drawer open onOpenChange={o => { if (!o) onClose(); }} title={`${t.metricLabel} · ${t.manager.name}`} desktopWidth="sm:max-w-lg">
@@ -178,12 +191,35 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Перевести в</h3>
             <div className="flex min-w-0 flex-wrap gap-1.5">
               {targets.map(s => (
-                <button key={s} type="button" disabled={busy} onClick={() => onStatus(t, s)}
+                <button key={s} type="button" disabled={busy || (s === 'done' && completing)}
+                  onClick={() => (s === 'done' ? setCompleting(true) : onStatus(t, s))}
                   className="inline-flex min-h-11 items-center rounded-lg border border-[var(--color-border)] px-3 text-sm hover:bg-[var(--color-bg-hover)] disabled:opacity-50">
-                  {(t.status === 'done' || t.status === 'measuring') && s === 'in_progress' ? 'Вернуть в работу' : BOARD_COLUMN_LABELS[s]}
+                  {(t.status === 'done' || t.status === 'measuring') && s === 'in_progress' ? 'Вернуть в работу' : s === 'done' ? 'Завершить' : BOARD_COLUMN_LABELS[s]}
                 </button>
               ))}
             </div>
+            {/* Завершение без контроля директора, но с результатом (собрание 23.11): текст уходит комментарием в Битрикс. */}
+            {completing && (
+              <div className="mt-3 flex min-w-0 flex-col gap-2 rounded-lg border border-[var(--color-border)] p-3">
+                <label htmlFor={`done-note-${t.id}`} className="text-xs font-semibold text-[var(--color-text-muted)]">Что сделано</label>
+                <textarea id={`done-note-${t.id}`} value={note} onChange={e => setNote(e.target.value)} rows={4} autoFocus
+                  placeholder="Например: обработано 14 сделок, выведены из «Созвонился и озвучил», проверены брони…"
+                  className="min-h-[96px] w-full min-w-0 resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2 text-base leading-snug text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] sm:text-sm" />
+                <p className="text-[11px] leading-snug text-[var(--color-text-muted)]">
+                  Уйдёт комментарием в задачу Битрикса и будет видно директору. После завершения — автозамер {fmtD(t.controlDate)}; ошибочно завершили — «Вернуть в работу», пока нет итога.
+                </p>
+                <div className="flex min-w-0 flex-wrap gap-2">
+                  <button type="button" disabled={busy || !noteOk} onClick={submitDone}
+                    className="inline-flex min-h-11 items-center rounded-lg bg-[var(--color-accent)] px-4 text-sm font-semibold text-white disabled:opacity-50">
+                    {busy ? 'Завершаю…' : 'Завершить'}
+                  </button>
+                  <button type="button" disabled={busy} onClick={() => { setCompleting(false); setNote(''); }}
+                    className="inline-flex min-h-11 items-center rounded-lg border border-[var(--color-border)] px-4 text-sm hover:bg-[var(--color-bg-hover)]">
+                    Отмена
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
         )}
 
