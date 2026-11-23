@@ -6,6 +6,7 @@ import { Popover } from '@/components/ui/Popover';
 import { PlansTable } from './PlansTable';
 import { ImportSlide } from './ImportSlide';
 import { ExportSlide } from './ExportSlide';
+import { RepeatSharePopover } from './RepeatSharePopover';
 
 interface DeptNode {
   id: string;
@@ -345,6 +346,9 @@ export function PlansPage({ canEdit }: { canEdit: boolean }) {
             </button>
           )}
         </div>
+
+        {/* Доля повторных продаж в плане отдела → «План продаж (повт.)» (миграция 284) */}
+        <RepeatSharePopover canEdit={canEdit} />
 
         {canEdit && (
           <div className="ml-auto flex items-center gap-2">
