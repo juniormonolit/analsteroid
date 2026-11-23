@@ -13,7 +13,6 @@ import type {
 } from '../types';
 import { TaskerError, loadMetricDefs, publicMetric } from './config';
 
-const FORMATS: TaskerMetric['format'][] = ['percent', 'money', 'number'];
 const LABEL_MAX = 80;
 
 const formatOf = (m: Pick<Metric, 'dataType'>): TaskerMetric['format'] =>
@@ -41,18 +40,42 @@ export function groupOfMetric(m: Pick<Metric, 'category'>, format: TaskerMetric[
 /** Счётчик/сумма (не доля и не среднее): «своё среднее за 6 мес.» приводится к длине периода. */
 const additiveOf = (m: Pick<Metric, 'dataType' | 'aggregationFn'>) => m.dataType !== 'percent' && m.aggregationFn === 'sum';
 
+/**
+ * «Больше/меньше — лучше», которое можно вывести надёжно — дефолт для поля формы (само поле остаётся):
+ *  - уже заведённые темы (tasker_metrics, включая архив) — решение руководителей;
+ *  - узлы диагностики (diag_nodes.higher_is_better по metric_id), только если все узлы метрики согласны.
+ * В каталоге метрик своего признака направления нет — остальным дефолт «больше — лучше» в форме.
+ */
+async function knownDirections(): Promise<Map<string, boolean>> {
+  const out = new Map<string, boolean>();
+  const diag = await systemDb().query<{ metric_id: string; hib: boolean }>(
+    `SELECT metric_id, bool_and(higher_is_better) AS hib FROM diag_nodes
+      WHERE metric_id IS NOT NULL GROUP BY metric_id HAVING bool_and(higher_is_better) = bool_or(higher_is_better)`,
+  ).then(r => r.rows).catch(() => []);
+  for (const d of diag) out.set(d.metric_id, d.hib);
+  const own = await systemDb().query<{ id: string; higher_is_better: boolean }>(
+    `SELECT id, higher_is_better FROM tasker_metrics`,
+  ).then(r => r.rows).catch(() => []);
+  for (const t of own) out.set(t.id, t.higher_is_better);
+  return out;
+}
+
 /** Каталог для конструктора: метрики отчётов (видимые, не тестовые) и активные товарные группы (kc). */
 export async function topicCatalog(): Promise<TaskerTopicCatalogResponse> {
-  const [metrics, pg] = await Promise.all([
+  const [metrics, pg, direction] = await Promise.all([
     loadMetrics(),
     analyticsDb().query<{ id: number; name: string }>(`SELECT id, name FROM sa.product_groups WHERE is_active = true ORDER BY name`)
       .then(r => r.rows).catch(() => [] as { id: number; name: string }[]),
+    knownDirections(),
   ]);
   return {
     metrics: metrics
       .filter(m => m.isActive && !m.isHiddenInUi && !m.isTest)
       .sort((a, b) => (a.category ?? '').localeCompare(b.category ?? '', 'ru') || a.sortOrder - b.sortOrder)
-      .map(m => ({ id: m.id, name: m.nameRu, shortName: m.nameShortRu, category: m.category, format: formatOf(m) })),
+      .map(m => ({
+        id: m.id, name: m.nameRu, shortName: m.nameShortRu, category: m.category, format: formatOf(m),
+        higherIsBetter: direction.get(m.id) ?? null,
+      })),
     productGroups: pg.map(g => ({ id: String(g.id), name: g.name })),
   };
 }
@@ -60,11 +83,10 @@ export async function topicCatalog(): Promise<TaskerTopicCatalogResponse> {
 function cleanCommon(req: TaskerTopicSaveRequest) {
   const label = typeof req.label === 'string' ? req.label.trim().slice(0, LABEL_MAX) : undefined;
   // Группа от клиента не принимается — считается по каталогу (groupOfMetric) / 'product' для товарной группы.
-  const format = req.format !== undefined ? (FORMATS.includes(req.format) ? req.format : null) : undefined;
-  if (format === null) throw new TaskerError('Неизвестный формат');
+  // Формат от клиента не принимается: у показателя — из каталога (dataType), у товарной группы — по замеру.
   const sortOrder = req.sortOrder !== undefined && Number.isFinite(Number(req.sortOrder)) ? Math.round(Number(req.sortOrder)) : undefined;
   return {
-    label, format, sortOrder,
+    label, sortOrder,
     higherIsBetter: typeof req.higherIsBetter === 'boolean' ? req.higherIsBetter : undefined,
     active: typeof req.active === 'boolean' ? req.active : undefined,
   };
@@ -106,7 +128,7 @@ export async function createTopic(session: SessionUser, req: TaskerTopicSaveRequ
   const metricId = String(req.metricId ?? '').trim();
   const m = (await loadMetrics()).find(x => x.id === metricId && x.isActive && !x.isTest);
   if (!m) throw new TaskerError('Выберите показатель из каталога отчётов');
-  const format = c.format ?? formatOf(m);
+  const format = formatOf(m);
   const label = c.label || m.nameShortRu || m.nameRu;
   await db.query(
     `INSERT INTO tasker_metrics (id, label, grp, higher_is_better, format, tag, denominator_ids, additive, sort_order,
@@ -116,7 +138,7 @@ export async function createTopic(session: SessionUser, req: TaskerTopicSaveRequ
        higher_is_better = EXCLUDED.higher_is_better, format = EXCLUDED.format, tag = EXCLUDED.tag,
        updated_by = EXCLUDED.updated_by, updated_at = now()
      WHERE NOT tasker_metrics.active`,
-    [m.id, label, groupOfMetric(m, format), c.higherIsBetter ?? true, format, label.slice(0, 40), additiveOf(m),
+    [m.id, label, groupOfMetric(m, format), c.higherIsBetter ?? (await knownDirections()).get(m.id) ?? true, format, label.slice(0, 40), additiveOf(m),
       c.sortOrder ?? null, session.login],
   ).then(r => { if (!r.rowCount) throw new TaskerError('Такая тема уже есть'); });
   return topicById(m.id);
@@ -127,8 +149,6 @@ export async function updateTopic(session: SessionUser, id: string, req: TaskerT
   if (c.label === '') throw new TaskerError('Нужно название темы');
   const cur = (await loadMetricDefs()).find(x => x.id === id);
   if (!cur) throw new TaskerError('Тема не найдена', 'bad_request', 404);
-  // У товарной группы формат задан способом замера (сумма — ₽, доля — %).
-  const format = cur.kind === 'product_group' ? undefined : c.format;
   await systemDb().query(
     `UPDATE tasker_metrics SET
         label            = COALESCE($2, label),
@@ -142,7 +162,7 @@ export async function updateTopic(session: SessionUser, id: string, req: TaskerT
         updated_by       = $8,
         updated_at       = now()
       WHERE id = $1`,
-    [id, c.label ?? null, null /* группа — только автоматически при создании */, c.higherIsBetter ?? null, format ?? null, c.sortOrder ?? null, c.active ?? null, session.login],
+    [id, c.label ?? null, null /* группа — только автоматически при создании */, c.higherIsBetter ?? null, null /* формат — только из каталога/замера при создании */, c.sortOrder ?? null, c.active ?? null, session.login],
   );
   return topicById(id);
 }

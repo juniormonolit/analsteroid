@@ -432,7 +432,7 @@ export interface TaskerTopicSaveRequest {
   /** Игнорируется сервером: группа считается по категории метрики каталога (product — у товарной группы). */
   group?: TaskerMetricGroup;
   higherIsBetter?: boolean;
-  /** Формат значения; у товарной группы задан способом замера. */
+  /** Игнорируется сервером: формат — из каталога (dataType), у товарной группы — по замеру (сумма ₽ / доля %). */
   format?: TaskerMetric['format'];
   sortOrder?: number;
   /** false — в архив, true — вернуть. */
@@ -441,7 +441,11 @@ export interface TaskerTopicSaveRequest {
 
 /** GET /api/tasker/topics/catalog — из чего собирать темы. */
 export interface TaskerTopicCatalogResponse {
-  metrics: { id: string; name: string; shortName: string | null; category: string | null; format: TaskerMetric['format'] }[];
+  metrics: {
+    id: string; name: string; shortName: string | null; category: string | null; format: TaskerMetric['format'];
+    /** Направление, если его можно вывести надёжно (уже заведённая тема / узлы диагностики); null — неизвестно. */
+    higherIsBetter: boolean | null;
+  }[];
   productGroups: { id: string; name: string }[];
 }
 

@@ -171,7 +171,7 @@ function TemplateCard({ t, first, last, busy, onEdit, onMove, onArchive, onDelet
 
 // ── Тема: создание / правка ─────────────────────────────────────────────────
 
-const FORMAT_OPTIONS = [{ value: 'percent', label: 'Проценты, %' }, { value: 'money', label: 'Деньги, ₽' }, { value: 'number', label: 'Число' }];
+const FORMAT_LABEL: Record<TaskerMetric['format'], string> = { percent: 'Проценты, %', money: 'Деньги, ₽', number: 'Число' };
 
 function Segmented<T extends string>({ value, onChange, options, label }: {
   value: T; onChange: (v: T) => void; options: { value: T; label: string }[]; label: string;
@@ -200,14 +200,15 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
   const [measure, setMeasure] = useState<TaskerPgMeasure>('amount');
   const [label, setLabel] = useState(topic?.label ?? '');
   const [higher, setHigher] = useState<'up' | 'down'>(topic?.higherIsBetter === false ? 'down' : 'up');
-  const [format, setFormat] = useState<TaskerMetric['format'] | ''>(topic?.format ?? '');
   const [err, setErr] = useState<string | null>(null);
 
   const cat = catalogQ.data;
   const picked = cat?.metrics.find(m => m.id === metricId);
   const pickedPg = cat?.productGroups.find(g => g.id === pgId);
   const defaultLabel = kind === 'metric' ? (picked?.shortName || picked?.name || '') : pickedPg ? (measure === 'share' ? `${pickedPg.name}: доля в продажах` : pickedPg.name) : '';
-  const effFormat = kind === 'product_group' ? (measure === 'share' ? 'percent' : 'money') : (format || picked?.format || 'number');
+  // Формат не выбирается: у показателя — из каталога, у товарной группы — по замеру (сервер считает так же).
+  const effFormat: TaskerMetric['format'] | null = topic ? topic.format
+    : kind === 'product_group' ? (measure === 'share' ? 'percent' : 'money') : picked?.format ?? null;
 
   const save = useMutation({
     mutationFn: async () => {
@@ -215,9 +216,9 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
         label: label.trim() || undefined,
         higherIsBetter: higher === 'up',
       };
-      if (topic) return updateTopic(topic.id, { ...common, label: label.trim(), ...(topic.kind !== 'product_group' && format ? { format } : {}) });
+      if (topic) return updateTopic(topic.id, { ...common, label: label.trim() });
       return createTopic(kind === 'metric'
-        ? { ...common, kind, metricId, format: format || undefined }
+        ? { ...common, kind, metricId }
         : { ...common, kind, productGroupId: pgId, pgMeasure: measure });
     },
     onSuccess: r => {
@@ -242,7 +243,12 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
         <div className={FIELD}>
           Показатель из каталога отчётов
           <SearchSelect searchable options={cat.metrics.map(m => ({ value: m.id, label: m.name, hint: m.category }))} value={metricId}
-            onChange={v => { setMetricId(v); setFormat(''); }} placeholder="Выберите показатель" ariaLabel="Показатель из каталога" className="w-full" />
+            onChange={v => {
+              setMetricId(v);
+              // Направление — дефолтом, если оно известно (уже заведённая тема / диагностика); поле можно поменять.
+              const known = cat.metrics.find(m => m.id === v)?.higherIsBetter;
+              if (known != null) setHigher(known ? 'up' : 'down');
+            }} placeholder="Выберите показатель" ariaLabel="Показатель из каталога" className="w-full" />
         </div>
       )}
       {isNew && kind === 'product_group' && cat && (
@@ -277,16 +283,12 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
           <Segmented label="Направление" value={higher} onChange={setHigher}
             options={[{ value: 'up', label: 'Больше — лучше' }, { value: 'down', label: 'Меньше — лучше' }]} />
         </div>
-        <div className={FIELD}>
-          Формат
-          {kind === 'product_group' || topic?.kind === 'product_group' ? (
-            <span className="flex min-h-11 items-center text-[var(--color-text)]">{effFormat === 'percent' ? 'Проценты, %' : 'Деньги, ₽'}</span>
-          ) : (
-            <SearchSelect options={FORMAT_OPTIONS} value={format || effFormat} onChange={v => setFormat(v as TaskerMetric['format'])}
-              ariaLabel="Формат значения" className="w-full" />
-          )}
-        </div>
       </div>
+      {effFormat && (
+        <p className="text-xs text-[var(--color-text-muted)]">
+          Формат значения: {FORMAT_LABEL[effFormat].toLowerCase()} — {kind === 'product_group' || topic?.kind === 'product_group' ? 'по способу замера' : 'из каталога отчётов'}.
+        </p>
+      )}
       {err && <p className="text-sm text-[var(--color-negative)]">{err}</p>}
       <div className="flex flex-wrap justify-end gap-2">
         <button type="button" onClick={onCancel} className={BTN}>Отмена</button>
