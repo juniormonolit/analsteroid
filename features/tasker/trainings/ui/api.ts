@@ -1,4 +1,7 @@
-import type { TrainingEventInput, TrainingEventResponse } from '../types';
+import type {
+  TrainingAssembleRequest, TrainingAssembleResponse, TrainingEventInput, TrainingEventResponse, TrainingSlotsResponse,
+  TrainingSlotsSaveRequest, TrainingSuggestRequest, TrainingSuggestResponse,
+} from '../types';
 
 export const TRAININGS_KEY = ['tasker-trainings'] as const;
 
@@ -33,3 +36,15 @@ export const unenrollManager = (id: number, managerId: number) =>
 
 export const resyncTraining = (id: number) =>
   call<TrainingEventResponse>(`/api/tasker/trainings/${id}/sync`, { method: 'POST' });
+
+export const SLOTS_KEY = ['tasker-training-slots'] as const;
+export const QUEUE_KEY = ['tasker-training-queue'] as const;
+
+export const saveSlots = (req: TrainingSlotsSaveRequest) =>
+  call<TrainingSlotsResponse>('/api/tasker/trainings/slots', { method: 'PUT', body: JSON.stringify(req) });
+
+export const suggestSlots = (req: TrainingSuggestRequest) =>
+  call<TrainingSuggestResponse>('/api/tasker/trainings/queue/suggest', { method: 'POST', body: JSON.stringify(req) });
+
+export const assembleTraining = (req: TrainingAssembleRequest) =>
+  call<TrainingAssembleResponse>('/api/tasker/trainings/queue/assemble', { method: 'POST', body: JSON.stringify(req) });

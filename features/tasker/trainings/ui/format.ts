@@ -69,3 +69,17 @@ export function deltaTone(d: number | null | undefined, higherIsBetter: boolean)
 }
 
 export const fmtShortDate = (ymd: string) => ymd.split('-').reverse().slice(0, 2).join('.');
+
+export const WEEKDAYS_SHORT = ['', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'] as const;
+/** ISO-день недели (1 = Пн) для YYYY-MM-DD. */
+export const isoWeekday = (key: string) => { const d = new Date(`${key}T12:00:00Z`).getUTCDay(); return d === 0 ? 7 : d; };
+/** Понедельник недели, в которую входит key. */
+export const weekStart = (key: string) => addDaysKey(key, 1 - isoWeekday(key));
+/** «23.11» */
+export const ddmm = (key: string) => fmtShortDate(key);
+/** Фамилия из «Имя Фамилия» / «Фамилия Имя Отчество» — как в таблице тренера: берём последнее слово при двух словах. */
+export const surname = (full: string) => {
+  const parts = full.trim().split(/\s+/);
+  if (parts.length === 2) return parts[1];
+  return parts[0] ?? full;
+};

@@ -10,6 +10,14 @@ import type { TaskerAvailabilityRequest } from '../../types';
 const INPUT = 'min-h-11 w-full min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-base sm:text-sm outline-none focus:border-[var(--color-accent)]';
 const LABEL = 'flex min-w-0 flex-col gap-1 text-[13px] text-[var(--color-text-secondary)]';
 
+export interface TrainingFormPreset {
+  startsAt: string;
+  durationMin: number;
+  place: string | null;
+  slotId: number | null;
+  departmentLabel: string | null;
+}
+
 /** Форма создания/правки обучения (внутри Drawer). Время — МСК. */
 export function TrainingForm({
   initial,
@@ -18,8 +26,11 @@ export function TrainingForm({
   onSubmit,
   onCancel,
   metrics,
+  preset,
 }: {
   metrics: TaskerMetric[];
+  /** Создание из пустого слота сетки: время, длительность, место, слот и подпись отдела. */
+  preset?: TrainingFormPreset | null;
   initial?: TrainingEvent | null;
   pending: boolean;
   error: string | null;
@@ -28,10 +39,12 @@ export function TrainingForm({
 }) {
   const [title, setTitle] = useState(initial?.title ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
-  const [date, setDate] = useState(initial ? mskDateKey(initial.startsAt) : addDaysKey(mskDateKey(new Date()), 1));
-  const [time, setTime] = useState(initial ? mskTime(initial.startsAt) : '11:00');
-  const [duration, setDuration] = useState(String(initial?.durationMin ?? 60));
-  const [place, setPlace] = useState(initial?.place ?? '');
+  const start = initial?.startsAt ?? preset?.startsAt ?? null;
+  const [date, setDate] = useState(start ? mskDateKey(start) : addDaysKey(mskDateKey(new Date()), 1));
+  const [time, setTime] = useState(start ? mskTime(start) : '11:00');
+  const [duration, setDuration] = useState(String(initial?.durationMin ?? preset?.durationMin ?? 60));
+  const [place, setPlace] = useState(initial?.place ?? preset?.place ?? '');
+  const [deptLabel, setDeptLabel] = useState(initial?.departmentLabel ?? preset?.departmentLabel ?? '');
   const [capacity, setCapacity] = useState(initial?.capacity ? String(initial.capacity) : '');
   const [metricIds, setMetricIds] = useState<string[]>(initial?.metricIds ?? []);
   const [beforeDays, setBeforeDays] = useState(String(initial?.measureBeforeDays ?? 7));
@@ -72,6 +85,8 @@ export function TrainingForm({
       metricIds,
       measureBeforeDays: bd,
       measureAfterDays: ad,
+      departmentLabel: deptLabel.trim() || null,
+      ...(!initial && preset?.slotId ? { slotId: preset.slotId } : {}),
     });
   };
 
@@ -107,6 +122,10 @@ export function TrainingForm({
       <label className={LABEL}>
         Место или ссылка
         <input className={INPUT} value={place} onChange={e => setPlace(e.target.value)} maxLength={500} placeholder="Переговорная 3 или https://…" />
+      </label>
+      <label className={LABEL}>
+        Отдел (подпись в сетке)
+        <input className={INPUT} value={deptLabel} onChange={e => setDeptLabel(e.target.value)} maxLength={80} placeholder="Москва, Руденко, НЦ…" />
       </label>
       <fieldset className="flex min-w-0 flex-col gap-3 rounded-lg border border-[var(--color-border)] p-3">
         <legend className="px-1 text-[13px] font-medium">Оценка эффективности</legend>

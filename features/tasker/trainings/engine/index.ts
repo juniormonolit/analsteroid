@@ -62,6 +62,7 @@ interface EventRow {
   cancelled_at: Date | null; enrolled_count: string;
   calendar_event_id: string | null; calendar_sync_state: string; calendar_sync_error: string | null;
   metric_ids: string[]; measure_before_days: number; measure_after_days: number;
+  slot_id: string | null; department_label: string | null;
 }
 interface EnrollRow {
   event_id: string; manager_bitrix_user_id: string; enrolled_by_name: string | null;
@@ -96,6 +97,8 @@ export async function listEvents(actor: TrainingActor, p: ListEventsParams = {})
             e.trainer_bitrix_user_id, e.cancelled_at,
             e.calendar_event_id, e.calendar_sync_state, e.calendar_sync_error,
             e.metric_ids, e.measure_before_days, e.measure_after_days,
+            -- колонки 281 через to_jsonb: до наката миграции расписание продолжает работать
+            to_jsonb(e) ->> 'slot_id' AS slot_id, to_jsonb(e) ->> 'department_label' AS department_label,
             (SELECT count(*) FROM tasker_training_enrollments x WHERE x.event_id = e.id) AS enrolled_count
        FROM tasker_training_events e
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
@@ -166,6 +169,8 @@ export async function listEvents(actor: TrainingActor, p: ListEventsParams = {})
     metricIds: r.metric_ids ?? [],
     measureBeforeDays: r.measure_before_days ?? DEFAULT_MEASURE_DAYS,
     measureAfterDays: r.measure_after_days ?? DEFAULT_MEASURE_DAYS,
+    slotId: r.slot_id ? Number(r.slot_id) : null,
+    departmentLabel: r.department_label,
     effect: summarize(
       (byEvent.get(r.id) ?? []).map(a => ({
         attended: a.attended, outcome: a.outcome, resultsComplete: a.outcome !== null,
@@ -264,6 +269,7 @@ interface CleanInput {
   title?: string; description?: string; startAt?: Date; durationMin?: number;
   place?: string | null; capacity?: number | null; trainerId?: string | null;
   metricIds?: string[]; beforeDays?: number; afterDays?: number;
+  slotId?: number | null; departmentLabel?: string | null;
 }
 
 /** Показатели из белого списка Задачника (неизвестные — ошибка, не тихий пропуск). */
@@ -331,6 +337,15 @@ async function cleanInput(raw: unknown, partial: boolean): Promise<CleanInput> {
     }
   }
   if (b.metricIds !== undefined) out.metricIds = await cleanMetricIds(b.metricIds);
+  if (b.slotId !== undefined) {
+    const n = b.slotId == null || b.slotId === '' ? null : Number(b.slotId);
+    if (n !== null && (!Number.isInteger(n) || n <= 0)) throw new TrainingError('Некорректный слот');
+    out.slotId = n;
+  }
+  if (b.departmentLabel !== undefined) {
+    const s = b.departmentLabel == null ? '' : String(b.departmentLabel).trim();
+    out.departmentLabel = s ? s.slice(0, 80) : null;
+  }
   if (b.measureBeforeDays !== undefined) out.beforeDays = cleanDays(b.measureBeforeDays, 'до');
   if (b.measureAfterDays !== undefined) out.afterDays = cleanDays(b.measureAfterDays, 'после');
   return out;
@@ -352,6 +367,11 @@ export async function createEvent(actor: TrainingActor, raw: unknown): Promise<T
       v.metricIds ?? [], v.beforeDays ?? DEFAULT_MEASURE_DAYS, v.afterDays ?? DEFAULT_MEASURE_DAYS],
   );
   const id = Number(r.rows[0].id);
+  // Колонки 281 — отдельным UPDATE и только если заданы: без миграции создание события не ломается.
+  if (v.slotId != null || v.departmentLabel != null) {
+    await systemDb().query('UPDATE tasker_training_events SET slot_id = $2, department_label = $3 WHERE id = $1',
+      [id, v.slotId ?? null, v.departmentLabel ?? null]);
+  }
   await syncTrainingCalendar(id); // не бросает: сбой Битрикса = «не синхронизировано» + повтор
   return getEvent(actor, id);
 }
@@ -363,6 +383,7 @@ export async function updateEvent(actor: TrainingActor, id: number, raw: unknown
     title: v.title, description: v.description, start_at: v.startAt, duration_min: v.durationMin,
     place: v.place, capacity: v.capacity, trainer_bitrix_user_id: v.trainerId,
     metric_ids: v.metricIds, measure_before_days: v.beforeDays, measure_after_days: v.afterDays,
+    slot_id: v.slotId, department_label: v.departmentLabel,
   };
   // Календарь Битрикса трогаем, только если поменялось то, что в нём видно.
   const calendarRelevant = [v.title, v.description, v.startAt, v.durationMin, v.place, v.trainerId].some(x => x !== undefined);

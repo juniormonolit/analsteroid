@@ -11,18 +11,25 @@ import {
 } from './api';
 import { addDaysKey, durationLabel, endOf, mskDateKey, mskDayLabel, mskTime } from './format';
 import { TrainingDetails } from './TrainingDetails';
-import { TrainingForm } from './TrainingForm';
+import { TrainingForm, type TrainingFormPreset } from './TrainingForm';
 import { EffectivenessView } from './EffectivenessView';
+import { WeekGrid } from './WeekGrid';
+import { TrainerQueue } from './TrainerQueue';
+import { SlotSettings } from './SlotSettings';
 
-type Mode = 'upcoming' | 'past' | 'effect';
-type Panel = { kind: 'view'; id: number } | { kind: 'edit'; id: number } | { kind: 'create' } | null;
+type Mode = 'week' | 'queue' | 'upcoming' | 'past' | 'effect' | 'settings';
+type Panel = { kind: 'view'; id: number } | { kind: 'edit'; id: number } | { kind: 'create'; preset?: TrainingFormPreset } | null;
+const MODES: Mode[] = ['week', 'queue', 'upcoming', 'past', 'effect', 'settings'];
+const MODE_LABEL: Record<Mode, string> = {
+  week: 'Неделя', queue: 'Очередь тренера', upcoming: 'Ближайшие', past: 'Прошедшие (90 дней)', effect: 'Эффективность', settings: 'Настройки',
+};
 
 const TAB = 'min-h-11 rounded-lg px-4 text-sm font-medium';
 
 /** Расписание обучений Задачника (/tasker/trainings): видят все, ведёт тренер, РОП записывает своих. */
 export function TrainingsPage() {
   const qc = useQueryClient();
-  const [mode, setMode] = useState<Mode>('upcoming');
+  const [mode, setMode] = useState<Mode>('week');
   const [panel, setPanel] = useState<Panel>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -33,7 +40,8 @@ export function TrainingsPage() {
     const sp = new URLSearchParams(window.location.search);
     const ev = Number(sp.get('event'));
     if (Number.isInteger(ev) && ev > 0) setPanel({ kind: 'view', id: ev });
-    if (sp.get('tab') === 'effect') setMode('effect');
+    const tab = sp.get('tab') as Mode | null;
+    if (tab && MODES.includes(tab)) setMode(tab);
     const m = sp.get('manager');
     if (m && /^\d+$/.test(m)) setLinkManager(m);
   }, []);
@@ -42,7 +50,7 @@ export function TrainingsPage() {
   const url = mode !== 'past'
     ? '/api/tasker/trainings?upcoming=1&includeCancelled=1'
     : `/api/tasker/trainings?from=${addDaysKey(today, -90)}&to=${today}&includeCancelled=1`;
-  const listMode = mode === 'effect' ? 'upcoming' : mode;
+  const listMode = mode === 'past' ? 'past' : 'upcoming';
   const q = useQuery({ queryKey: [...TRAININGS_KEY, listMode], queryFn: () => getJson<TrainingsResponse>(url) });
 
   const events = useMemo(() => {
@@ -91,7 +99,7 @@ export function TrainingsPage() {
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
-      <div className="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-4 px-3 py-4 sm:px-6">
+      <div className={`mx-auto flex w-full ${mode === 'week' || mode === 'settings' ? 'max-w-6xl' : 'max-w-4xl'} min-w-0 flex-col gap-4 px-3 py-4 sm:px-6`}>
         <header className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
             <Link href="/tasker" aria-label="Задачник" className="tap-target flex min-h-9 min-w-9 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
@@ -109,15 +117,21 @@ export function TrainingsPage() {
         </header>
 
         <div className="flex flex-wrap gap-2" role="tablist">
-          {(['upcoming', 'past', 'effect'] as const).map(m => (
+          {MODES.filter(m => (m === 'settings' ? canManage : m === 'queue' ? canManage || canEnroll : true)).map(m => (
             <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setMode(m)}
               className={`${TAB} ${mode === m ? 'bg-[var(--color-accent)] text-white' : 'border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'}`}>
-              {m === 'upcoming' ? 'Ближайшие' : m === 'past' ? 'Прошедшие (90 дней)' : 'Эффективность'}
+              {MODE_LABEL[m]}
             </button>
           ))}
         </div>
 
-        {mode === 'effect' ? (
+        {mode === 'week' ? (
+          <WeekGrid canManage={canManage} onOpen={id => openPanel({ kind: 'view', id })} onCreate={preset => openPanel({ kind: 'create', preset })} />
+        ) : mode === 'queue' ? (
+          <TrainerQueue onOpenEvent={id => openPanel({ kind: 'view', id })} />
+        ) : mode === 'settings' ? (
+          <SlotSettings />
+        ) : mode === 'effect' ? (
           <EffectivenessView canPickManager={canEnroll || canManage} initialManager={linkManager} />
         ) : q.isLoading ? (
           <p className="text-sm text-[var(--color-text-muted)]">Загружаю расписание…</p>
@@ -149,7 +163,7 @@ export function TrainingsPage() {
         title={panel?.kind === 'create' ? 'Новое обучение' : panel?.kind === 'edit' ? 'Изменить обучение' : 'Обучение'}
       >
         {panel?.kind === 'create' && (
-          <TrainingForm metrics={metrics} pending={mut.isPending} error={err} onSubmit={save} onCancel={() => setPanel(null)} />
+          <TrainingForm metrics={metrics} preset={panel.preset} pending={mut.isPending} error={err} onSubmit={save} onCancel={() => setPanel(null)} />
         )}
         {panel?.kind === 'edit' && current && (
           <TrainingForm key={current.id} metrics={metrics} initial={current} pending={mut.isPending} error={err} onSubmit={save}

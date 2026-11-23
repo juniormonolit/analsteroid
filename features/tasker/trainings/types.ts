@@ -94,6 +94,10 @@ export interface TrainingEvent {
   /** Окно замера «до/после», дней (по умолчанию 7/7). */
   measureBeforeDays: number;
   measureAfterDays: number;
+  /** Слот сетки, из которого собрано занятие (281). */
+  slotId: number | null;
+  /** Подпись отдела в сетке («Москва», «Руденко»). */
+  departmentLabel: string | null;
   effect: TrainingEffectSummary;
   /** Событие в календаре тренера в Битриксе (фаза 1b). failed — «не синхронизировано», будет повтор. */
   calendar: {
@@ -130,6 +134,8 @@ export interface TrainingEventInput {
   /** 7..90, по умолчанию 7. */
   measureBeforeDays?: number;
   measureAfterDays?: number;
+  slotId?: number | null;
+  departmentLabel?: string | null;
 }
 
 export interface TrainingEventResponse {
@@ -235,4 +241,140 @@ export interface TrainingManagerOption {
 }
 export interface TrainingManagersResponse {
   managers: TrainingManagerOption[];
+}
+
+// ── Сетка тренера и очередь «Теория» (миграция 281) ─────────────────────────
+
+/** Недельный слот тренера: день × время (Мск). */
+export interface TrainingSlot {
+  id: number;
+  /** null — тренер по умолчанию. */
+  trainerId: number | null;
+  /** 1 = Пн … 7 = Вс */
+  weekday: number;
+  /** ЧЧ:ММ по Москве */
+  startTime: string;
+  durationMin: number;
+  /** «Нулевой цикл» */
+  label: string | null;
+  place: string | null;
+  isOffline: boolean;
+  /** Закреплённые отделы (uuid). Пусто + есть departmentLabel — закреплён, но отделы не выбраны: автоматически не предлагается. */
+  departmentIds: string[];
+  departmentLabel: string | null;
+  active: boolean;
+}
+export type TrainingSlotInput = Omit<TrainingSlot, 'id' | 'trainerId'> & { id: number | null };
+
+export interface TrainingGroupSettings {
+  /** С какого числа человек по теме система предлагает занятие. */
+  min: number;
+  /** Сколько обычно берём в группу. */
+  target: number;
+  /** Больше нельзя. */
+  max: number;
+  /** На сколько дней вперёд искать свободный слот. */
+  horizonDays: number;
+}
+
+/** GET/PUT /api/tasker/trainings/slots */
+export interface TrainingSlotsResponse {
+  slots: TrainingSlot[];
+  group: TrainingGroupSettings;
+  trainer: TaskerPerson;
+  canManage: boolean;
+  /** Отделы продаж для закрепления — только тренеру. */
+  departments: { id: string; name: string; path: string | null }[];
+}
+export interface TrainingSlotsSaveRequest {
+  slots: TrainingSlotInput[];
+  group?: TrainingGroupSettings;
+}
+
+/** Открытая задача «Теория» на тренера — карточка очереди. */
+export interface TrainingQueueItem {
+  taskId: number;
+  bitrixTaskId: number | null;
+  title: string;
+  body: string;
+  manager: TaskerPerson;
+  departmentName: string | null;
+  /** Кто поставил (РОП/директор). */
+  creatorName: string | null;
+  ropName: string | null;
+  metricId: string;
+  snapshot: Snapshot | null;
+  /** ISO */
+  createdAt: string;
+  /** ISO */
+  deadline: string;
+  /** Уже назначено на занятие (ещё не прошедшее). */
+  event: { id: number; title: string; startsAt: string } | null;
+}
+
+/** Предложенный слот под группу. */
+export interface TrainingSuggestion {
+  /** ISO */
+  startsAt: string;
+  durationMin: number;
+  slotId: number;
+  slotLabel: string | null;
+  place: string | null;
+  departmentLabel: string | null;
+  /** Кого берём (taskId) — первые по давности, до target. */
+  taskIds: number[];
+  /** Заняты в это время (кроме тренера — он свободен всегда, иначе слот не предлагается). */
+  busy: { managerId: number; name: string; title: string }[];
+  bitrixChecked: boolean;
+}
+
+/** Группа очереди — по показателю (теме). */
+export interface TrainingQueueGroup {
+  metricId: string;
+  label: string;
+  items: TrainingQueueItem[];
+  /** Сколько ждут (без уже назначенных). */
+  waiting: number;
+}
+
+/** GET /api/tasker/trainings/queue */
+export interface TrainingQueueResponse {
+  groups: TrainingQueueGroup[];
+  group: TrainingGroupSettings;
+  trainer: TaskerPerson;
+  canManage: boolean;
+  metrics: TaskerMetric[];
+  /** false — модель «Теория» в ядре ещё не развёрнута (нет колонки типа задачи). */
+  available: boolean;
+}
+
+/** POST /api/tasker/trainings/queue/suggest */
+export interface TrainingSuggestRequest {
+  metricId: string;
+  /** Выбранные тренером задачи; пусто — первые по давности до target. */
+  taskIds?: number[];
+  /** Сколько вариантов вернуть (1–6). */
+  limit?: number;
+}
+export interface TrainingSuggestResponse {
+  suggestions: TrainingSuggestion[];
+}
+
+/** POST /api/tasker/trainings/queue/assemble — «Собрать занятие». */
+export interface TrainingAssembleRequest {
+  taskIds: number[];
+  startsAt: string;
+  durationMin: number;
+  title: string;
+  description?: string;
+  place?: string | null;
+  slotId?: number | null;
+  departmentLabel?: string | null;
+  /** Показатели события; по умолчанию — показатели задач. */
+  metricIds?: string[];
+}
+export interface TrainingAssembleResponse {
+  event: TrainingEvent;
+  /** Задачи, которые не удалось записать (с причиной). */
+  failed: { taskId: number; reason: string }[];
 }
