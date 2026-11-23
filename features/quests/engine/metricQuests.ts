@@ -21,7 +21,7 @@
 
 import { analyticsDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
-import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
+import { buildCollectedSQL, dateFieldExpr } from '@/lib/metrics/sqlGen';
 import { computeCalculated } from '@/features/reports/engine/calculated';
 import { seriesDeps } from '@/features/reports/engine/metricSeries';
 import { cached } from '@/lib/cache/redis';
@@ -89,7 +89,7 @@ async function sampleMetric(
   for (const dep of deps) {
     const bucketExpr = unit === 'none'
       ? `'all'`
-      : `to_char(date_trunc('${unit}', (d.${dep.dateField} AT TIME ZONE '${MSK}')), 'YYYY-MM-DD')`;
+      : `to_char(date_trunc('${unit}', (${dateFieldExpr(dep.dateField)} AT TIME ZONE '${MSK}')), 'YYYY-MM-DD')`;
     const where = [
       'd.current_manager_id IS NOT NULL',
       mgrIds && mgrIds.length > 0 ? `d.current_manager_id = ANY('{${mgrIds.join(',')}}'::bigint[])` : '',

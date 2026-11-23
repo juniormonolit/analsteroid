@@ -36,7 +36,7 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
-import { buildCollectedSQL, isSqlIdent } from '@/lib/metrics/sqlGen';
+import { buildCollectedSQL, isSqlIdent, dateFieldExpr } from '@/lib/metrics/sqlGen';
 import type { Metric } from '@/lib/metrics/types';
 import { mskMidnightIso, mskTodayStr } from '@/features/tv/engine/feed';
 import { scopeManagerIds, type SessionScope } from '@/lib/org/sessionScope';
@@ -182,7 +182,7 @@ async function loadByManager(group: Metric[], idsNum: number[], keyFmt: 'day' | 
   if (idsNum.length === 0 || group.length === 0) return [];
   const manager = 'd.current_manager_id::text';
   const sql = buildCollectedSQL(group, {
-    idExpr: keyFmt ? `to_char(d.${group[0].dateField} AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') || '|' || ${manager}` : `'|' || ${manager}`,
+    idExpr: keyFmt ? `to_char(${dateFieldExpr(group[0].dateField)} AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') || '|' || ${manager}` : `'|' || ${manager}`,
     groupBy: 'GROUP BY 1',
     notNullWhere: `d.current_manager_id IN (${idsNum.join(',')})`,
   });

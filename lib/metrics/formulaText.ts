@@ -18,6 +18,7 @@ const AGG_RU: Record<string, string> = {
 const DATE_RU: Record<string, string> = {
   created_at: 'дата создания', sold_at: 'дата продажи', delivered_at: 'дата отгрузки',
   reserved_at: 'дата брони', confirmed_at: 'дата подтверждения брони', lost_at: 'дата отказа',
+  _repeat_qualified_at: 'дата квалификации (первый вход в «Созвонился и уточнил материалы» или дальше)',
 };
 // Человеческие подписи типовых фильтров конструктора. Ключ — field или field:value.
 const FILTER_RU: Record<string, string> = {

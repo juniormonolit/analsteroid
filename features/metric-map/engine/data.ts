@@ -10,7 +10,7 @@
 // равна общему COUNT DISTINCT — так же суммирует и «Итого» отчёта).
 import { analyticsDb, ycAnalyticsDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
-import { dealsMetricCond, genDealsExpr } from '@/lib/metrics/sqlGen';
+import { dealsMetricCond, genDealsExpr, dateFieldScope } from '@/lib/metrics/sqlGen';
 import { goodsPositionWhere } from '@/lib/metrics/serviceGroups';
 import type { Metric } from '@/lib/metrics/types';
 import type { Branch } from './tree';
@@ -194,7 +194,7 @@ export async function fetchManagerAggs(opts: FetchOpts): Promise<Map<string, Agg
   }
   const all: Metric[] = [C.total, ...(['p', 'r'] as Branch[]).flatMap(b => SLOTS.map(sl => C.byBranch[b][sl]))];
   const dateFields = [...new Set(all.map(m => m.dateField!))];
-  where.push(`(${dateFields.map(f => `(d.${f} >= $1 AND d.${f} < $2)`).join(' OR ')})`);
+  where.push(`(${dateFields.map(f => dateFieldScope(f)).join(' OR ')})`);
 
   const cols: string[] = [];
   // Колонки — по слотам (b_slot), а не по id каталога: id могут совпасть у синтезированных.
