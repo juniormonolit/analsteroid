@@ -21,7 +21,7 @@ import { fetchClientTypesBulk } from './clientTypes';
 import { fetchTailTable, tailPotential, type PotentialInfo } from './potential';
 import { fetchHideRequests, type HideRequest } from './reviews';
 import { fetchKanbanSettings } from './settings';
-import { fetchOrphanDealClients, fetchWrongFunnelDeals, type WrongFunnelDeal } from './dealFixes';
+import { fetchOrphanDealClients, fetchStrayTaskDeals, fetchWrongFunnelDeals, type WrongFunnelDeal } from './dealFixes';
 import { fetchQueuedByClient } from './queueRead';
 import { fetchRecentReassigns, type Reassign } from './reassigns';
 import { fetchShippedGroups, fetchShippedSums, resolvePeriod } from './shippedGroups';
@@ -633,6 +633,17 @@ export async function buildRepeatBoard(opts: {
   const queuedMap = fold(opts.skipNames ? new Map() : await fetchQueuedByClient(allKeys).catch(() => new Map()));
   const windowFloor = new Date(now - (WINDOW_DAYS + 120) * DAY_MS).toISOString();
   const activeDealIds = [...deals.values()].filter(d => !WON_STAGES.has(d.stageId)).map(d => d.dealId);
+  // Открытые задачи проекта на сделках, которые менеджер увёл из воронок повторных (dealFixes.ts: fetchStrayTaskDeals).
+  const strayP = fetchStrayTaskDeals([...new Set(allKeys.map(refOfKey))]).then(async byRef => {
+    const t = await fetchTasksForDeals([...new Set([...byRef.values()].flat())]).catch(() => new Map<number, RepeatTask>());
+    const out = new Map<string, RepeatTask>();
+    for (const [ref, ids] of byRef) {
+      const open = ids.map(id => t.get(id)).filter((x): x is RepeatTask => !!x && x.state !== 'done' && x.state !== 'deferred')
+        .sort((a, b) => (a.state === 'control' ? 0 : 1) - (b.state === 'control' ? 0 : 1) || b.createdAt.localeCompare(a.createdAt));
+      if (open[0]) out.set(ref, open[0]);
+    }
+    return out;
+  }).catch(() => new Map<string, RepeatTask>());
   const [calls, manual, reviews, tasks, hideReqs, settings, managerLoad] = await Promise.all([
     fetchDealCalls(activeDealIds, windowFloor),
     fetchManualContacts(allKeys, windowFloor).then(m => {
@@ -649,6 +660,7 @@ export async function buildRepeatBoard(opts: {
     fetchKanbanSettings(),
     opts.skipNames ? Promise.resolve({} as Record<string, number>) : fetchManagerLoad(roster.map(m => m.id)),
   ]);
+  const strayTasks = await strayP;
   const aiMarks = await aiMarksP;
   const aiCallsByKey = await aiCallsP;
   const aiReqByRef = await aiReqP;
@@ -703,7 +715,10 @@ export async function buildRepeatBoard(opts: {
   for (const r of rows) {
     const deal = deals.get(r.clientKey) ?? null;
     const mark = marks.get(r.clientKey);
-    const task = deal ? tasks.get(deal.dealId) ?? null : null;
+    const ownTask = deal ? tasks.get(deal.dealId) ?? null : null;
+    // Своя задача закрыта/нет — показываем открытую задачу проекта со сделки, уведённой в другую воронку (её надо принять).
+    const task = ownTask && ownTask.state !== 'done' && ownTask.state !== 'deferred' ? ownTask
+      : membersOf(r).map(k => strayTasks.get(refOfKey(k))).find(Boolean) ?? ownTask;
     const profileType = profileTypes.get(r.clientKey) ?? null;
     const review = deal ? reviews.get(deal.dealId) ?? null : null;
 

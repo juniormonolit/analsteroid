@@ -14,6 +14,7 @@
 //    «Сегодня» → «Не в той воронке».
 import { bx } from '@/lib/bitrix/notify';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
+import { REPEAT_PROJECT_GROUP_ID } from './config';
 
 export interface DealClient { contactId: number | null; companyId: number | null }
 
@@ -139,4 +140,26 @@ export async function fetchWrongFunnelDeals(refs: string[]): Promise<Map<string,
     dealId: Number(x.deal_id), funnelId: x.funnel_id, funnelName: x.funnel_name, stageName: x.stage_name, eventType: x.event_type,
     createdAt: new Date(x.created_at).toISOString(),
   }]));
+}
+
+/** Открытые задачи проекта «Повторные» (вкл. «ждёт приёмки») на сделках ВНЕ воронок повторных: менеджер перенёс
+ *  сделку, поставленную канбаном, в первичную воронку и провёл до отгрузки (23.11, Зианбетова, ОМК-Стандарт k41508:
+ *  сделка 282786 → воронка 0 «Успешно», задача 180575 сдана) — доска видит только сделки 2/3, задача пропала с карточки,
+ *  принять её было негде. Ключ — заказчик и по компании, и по контакту сделки (как fetchLatestRepeatDeals). */
+export async function fetchStrayTaskDeals(refs: string[]): Promise<Map<string, number[]>> {
+  if (!refs.length) return new Map();
+  const r = await analyticsDb().query<{ ref: string; deal_id: string }>(
+    `SELECT DISTINCT r.ref, d.deal_id::text AS deal_id
+       FROM sa.bitrix_task_current t
+       JOIN sa.deals d ON d.deal_id = t.deal_id
+       CROSS JOIN LATERAL unnest(ARRAY[
+         CASE WHEN coalesce(d.company_id, 0) <> 0 THEN 'k' || d.company_id END,
+         CASE WHEN coalesce(d.contact_id, 0) <> 0 THEN 'p' || d.contact_id END]) AS r(ref)
+      WHERE t.group_id = $2 AND NOT t.is_deleted AND t.status IN (1, 2, 3, 4, 6)
+        AND d.funnel_id NOT IN (2, 3) AND r.ref = ANY($1::text[])`,
+    [refs, REPEAT_PROJECT_GROUP_ID],
+  ).catch(e => { console.warn('[repeat-kanban] задачи на сделках вне повторных:', e instanceof Error ? e.message : e); return { rows: [] }; });
+  const out = new Map<string, number[]>();
+  for (const x of r.rows) out.set(x.ref, [...(out.get(x.ref) ?? []), Number(x.deal_id)]);
+  return out;
 }
