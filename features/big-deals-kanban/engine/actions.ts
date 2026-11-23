@@ -127,25 +127,41 @@ class Runner {
   /** Комментарий в чат задачи от имени нажавшего. Не роняет действие: не ушёл — предупреждение. */
   async comment(taskId: number, text: string, files: number[] = [], must = false): Promise<void> {
     // Задача нового вида (с чатом): task.commentitem.add кладёт в чат только текст, UF_FORUM_MESSAGE_DOC Битрикс
-    // молча отбрасывает (18.11, РОП Осипов, задача 176566: скриншот 3100488 загружен на Диск, текст в чате есть,
-    // картинки нет — а Монолитика сказала «отправлено»). Пока нет отправки файла в IM-чат от имени пользователя —
-    // честно: одна картинка без текста не уходит (ошибка), с текстом — текст уходит, плюс предупреждение.
-    if (files.length && !this.dry && await taskHasChat(taskId)) {
-      if (!text.trim()) throw new BigActionError(CHAT_FILES_ERROR, 422);
-      files = [];
-      this.warnings.push(CHAT_FILES_WARNING);
+    // молча отбрасывает (18.11, задача 176566). Осипов 23.10: «фотки так и не добавить, и надо писать 123» —
+    // картинка требовала текст и всё равно не доходила. Теперь: текст (если есть) — как раньше, от имени нажавшего;
+    // файлы — прямо в IM-чат задачи (im.disk.file.commit с DISK_ID, вебхук владельца: у РОПов без OAuth-токена
+    // от их имени файл не отправить), с подписью, от кого. Текст к картинке необязателен.
+    let chatFiles: number[] = [];
+    let chatId = 0;
+    if (files.length && !this.dry) {
+      chatId = await taskChatId(taskId);
+      if (chatId) { chatFiles = files; files = []; }
     }
     const author = this.actor.userId;
-    // Аккаунт не привязан к Битриксу — комментарий уходит от владельца вебхука, имя нажавшего — в тексте.
-    const body = author ? text : `[b]${actorLabel(this.actor)}[/b] (из Монолитики):\n${text}`;
-    this.calls.push({ as: 'chat-comment', method: 'task.commentitem.add', params: { TASKID: taskId, FIELDS: { AUTHOR_ID: author ?? '(вебхук)', POST_MESSAGE: body, files } } });
-    if (this.dry) return;
-    if (!author) this.viaWebhook = true;
-    const ok = await (author ? postToTaskChat(taskId, author, body, files) : postAsWebhook(taskId, body, files)).catch(e => {
-      if (must) throw new BigActionError(`Комментарий не ушёл: ${humanBx(e)}`, 502);
-      return false;
-    });
-    if (!ok) { if (must) throw new BigActionError('Битрикс не принял комментарий', 502); this.warnings.push('Комментарий в задачу не ушёл'); }
+    if (text.trim() || files.length || !chatFiles.length) {
+      // Аккаунт не привязан к Битриксу — комментарий уходит от владельца вебхука, имя нажавшего — в тексте.
+      const body = author ? text : `[b]${actorLabel(this.actor)}[/b] (из Монолитики):\n${text}`;
+      this.calls.push({ as: 'chat-comment', method: 'task.commentitem.add', params: { TASKID: taskId, FIELDS: { AUTHOR_ID: author ?? '(вебхук)', POST_MESSAGE: body, files } } });
+      if (!this.dry) {
+        if (!author) this.viaWebhook = true;
+        const ok = await (author ? postToTaskChat(taskId, author, body, files) : postAsWebhook(taskId, body, files)).catch(e => {
+          if (must) throw new BigActionError(`Комментарий не ушёл: ${humanBx(e)}`, 502);
+          return false;
+        });
+        if (!ok) { if (must) throw new BigActionError('Битрикс не принял комментарий', 502); this.warnings.push('Комментарий в задачу не ушёл'); }
+      }
+    }
+    if (chatFiles.length) {
+      const caption = `Файл от ${author ? `[USER=${author}]${actorLabel(this.actor)}[/USER]` : actorLabel(this.actor)} (из Монолитики)`;
+      this.calls.push({ as: 'webhook', method: 'im.disk.file.commit', params: { CHAT_ID: chatId, DISK_ID: chatFiles, MESSAGE: caption } });
+      this.viaWebhook = true;
+      const ok = await writeOnce<unknown>(taskWebhook(), 'im.disk.file.commit', { CHAT_ID: chatId, DISK_ID: chatFiles, MESSAGE: caption })
+        .then(r => !!r).catch(e => { console.warn('[big-deals] im.disk.file.commit', humanBx(e)); return false; });
+      if (!ok) {
+        if (must && !text.trim()) throw new BigActionError(CHAT_FILES_ERROR, 502);
+        this.warnings.push(CHAT_FILES_WARNING);
+      }
+    }
   }
 
   /** Довести задачу до «завершена»: complete → (контроль постановщика) approve. */
@@ -162,13 +178,13 @@ class Runner {
   }
 }
 
-const CHAT_FILES_ERROR = 'Картинку в чат этой задачи из Монолитики пока не отправить: Битрикс принимает в чат новых задач только текст. Отправьте картинку в чате задачи в Битриксе.';
-const CHAT_FILES_WARNING = 'Текст ушёл, а картинку Битрикс в чат задачи не прикрепил (в задачах нового вида файлы из Монолитики пока не доходят) — отправьте её в чате задачи в Битриксе.';
+const CHAT_FILES_ERROR = 'Битрикс не принял картинку в чат задачи — попробуйте ещё раз или отправьте её в чате задачи в Битриксе.';
+const CHAT_FILES_WARNING = 'Текст ушёл, а картинку Битрикс в чат задачи не принял — отправьте её в чате задачи в Битриксе.';
 
-/** У задачи есть чат (задачи нового вида): комментарии — сообщения IM-чата, файлы через commentitem не доходят. */
-async function taskHasChat(taskId: number): Promise<boolean> {
+/** Чат задачи (задачи нового вида): комментарии — сообщения IM-чата, файлы через commentitem не доходят. 0 — чата нет. */
+async function taskChatId(taskId: number): Promise<number> {
   const t = await fetchBigTask<BxBigTask & { chatId?: number | string | null }>(taskId, ['CHAT_ID']).catch(() => null);
-  return Number(t?.chatId) > 0;
+  return Number(t?.chatId) || 0;
 }
 
 async function postAsWebhook(taskId: number, text: string, files: number[]): Promise<boolean> {

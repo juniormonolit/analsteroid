@@ -2,7 +2,7 @@
 // Чат задачи прямо в канбане (встреча 11.11: «чат задачи прямо в канбане, шаблоны вопросов»).
 // Лента — im.dialog.messages.get чата задачи (taskDetails.ts), отправка — action 'comment' от имени нажавшего.
 import { useEffect, useState } from 'react';
-import { Paperclip, Send } from 'lucide-react';
+import { AtSign, Paperclip, Send } from 'lucide-react';
 import { AttachmentsRow, useAttachments } from '@/features/repeat-kanban/ui/Attachments';
 import type { BigTaskCard } from '../engine/types';
 import type { BigChatMessage } from '../engine/taskDetails';
@@ -25,6 +25,14 @@ export function TaskChat({ card, messages, loading, onSent, questions, rop, inje
   const [err, setErr] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
   const att = useAttachments();
+  // Кого можно отметить: исполнитель, ответственный по сделке (если другой), РОП исполнителя.
+  const mentions: { id: string; name: string; role: string }[] = [];
+  const addM = (p: { id: string; name: string } | null | undefined, role: string) => {
+    if (p?.id && /^\d+$/.test(p.id) && !mentions.some(m => m.id === p.id)) mentions.push({ id: p.id, name: p.name, role });
+  };
+  addM(card.responsible, 'исполнитель');
+  addM(card.deal?.assigned, 'по сделке');
+  addM(rop, 'РОП');
   // Упоминание РОПа — в начало строки через пробел, остальное — с новой строки.
   const insert = (t: string) => setText(prev => (!prev.trim() ? t : t.startsWith('[USER=') ? `${t}${prev.includes('\n') ? '\n' : ''}${prev.trimStart()}` : `${prev.trimEnd()}\n${t}`));
   useEffect(() => { if (inject?.text) insert(inject.text); }, [inject?.key]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -60,11 +68,24 @@ export function TaskChat({ card, messages, loading, onSent, questions, rop, inje
         ))}
       </div>
       <div className="mt-3">
-        <QuestionsBlock questions={questions} rop={rop} deal={card.deal} mock={mock} onInsert={insert} />
+        <QuestionsBlock questions={questions} deal={card.deal} mock={mock} onInsert={insert} />
       </div>
+      {mentions.length > 0 && (
+        // Осипов 23.11: «не пингануть РОПа, если не выбрал шаблон; не ставится ответственный менеджер» — упоминания
+        // отдельной строкой, всегда на виду: Битрикс пришлёт отмеченному уведомление.
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+          <span className="text-[11.5px] text-[var(--color-text-muted)]">Отметить:</span>
+          {mentions.map(m => (
+            <button key={m.id} type="button" onClick={() => insert(`[USER=${m.id}]${m.name}[/USER], `)} title={`Упомянуть: ${m.name} — Битрикс пришлёт уведомление`}
+              className="inline-flex min-h-11 min-w-0 items-center gap-1 rounded-full border border-[var(--color-border)] px-3 text-[12.5px] hover:bg-[var(--color-bg-hover)] sm:min-h-8">
+              <AtSign size={12} className="shrink-0" /><span className="truncate">{m.name}</span><span className="shrink-0 text-[var(--color-text-muted)]">· {m.role}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="mt-2 flex min-w-0 flex-col gap-2" {...att.dropZone}>
         <textarea value={text} onChange={e => setText(e.target.value)} onPaste={att.onPaste} rows={3}
-          placeholder="Вопрос менеджеру — уйдёт в чат задачи от вашего имени"
+          placeholder="Вопрос менеджеру — уйдёт в чат задачи от вашего имени. Картинку можно отправить и без текста."
           onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void send(); }}
           className={`w-full min-w-0 rounded-md border bg-transparent px-2.5 py-2 text-base sm:text-sm ${att.dragOver ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'}`} />
         <AttachmentsRow a={att} />
