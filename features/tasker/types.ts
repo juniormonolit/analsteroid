@@ -457,3 +457,45 @@ export interface TaskerCreatorsResponse {
   /** Bitrix id самого пользователя (дефолт поля); null — аккаунт не связан с Битриксом. */
   selfId: number | null;
 }
+
+// ── Проверка занятости (наложение времени при планировании) ─────────────────────────────
+
+export type TaskerBusySource = 'bitrix' | 'session' | 'training' | 'meeting' | 'task';
+
+export interface TaskerBusyInterval {
+  /** ISO */
+  start: string;
+  /** ISO */
+  end: string;
+  /** Название события; для людей вне зоны пользователя — обобщённое («занят»). */
+  title: string;
+  source: TaskerBusySource;
+  /** Событие на весь день (отпуск, выходной в календаре). */
+  allDay?: boolean;
+}
+
+/** POST /api/tasker/availability. Свои события при правке — в exclude (не конфликт сами с собой). */
+export interface TaskerAvailabilityRequest {
+  bitrixIds?: number[];
+  /** Отделы целиком (uuid, с поддеревом) — для формы собрания. */
+  departmentIds?: string[];
+  /** Добавить текущего пользователя (организатор/тренер по умолчанию). */
+  includeSelf?: boolean;
+  slots: { start: string; end: string }[];
+  exclude?: { meetingId?: number | null; trainingEventId?: number | null; sessionId?: number | null; taskId?: number | null };
+}
+
+export interface TaskerAvailabilityPerson {
+  id: number;
+  name: string;
+  conflicts: (TaskerBusyInterval & { slotIndex: number })[];
+}
+
+export interface TaskerAvailabilityResponse {
+  /** Только занятые (с конфликтами), по алфавиту. */
+  busy: TaskerAvailabilityPerson[];
+  /** Сколько людей проверено. */
+  checkedCount: number;
+  /** false — календарь Битрикса не ответил: показаны только события Монолитики. */
+  bitrixChecked: boolean;
+}

@@ -8,6 +8,7 @@ import type { TaskerMetric } from '../../types';
 import type { TrainingEvent, TrainingManagersResponse } from '../types';
 import { AttendanceBadge, EffectSummaryLine, MetricChips, OutcomeBadge, ResultLines } from './EffectBits';
 import { getJson } from './api';
+import { AvailabilityWarning } from '../../ui/shared/AvailabilityWarning';
 import { durationLabel, endOf, isUrl, mskDayLabel, mskTime, plural } from './format';
 
 /**
@@ -153,6 +154,13 @@ export function TrainingDetails({
               <UserPlus size={15} /> Записать менеджера
             </button>
           </div>
+          {pick && (
+            <AvailabilityWarning req={{
+              bitrixIds: [Number(pick)],
+              slots: [{ start: event.startsAt, end: endOf(event.startsAt, event.durationMin).toISOString() }],
+              exclude: { trainingEventId: event.id },
+            }} />
+          )}
           {pick && (
             <div className="flex min-w-0 flex-col gap-2 rounded-lg bg-[var(--color-bg-hover)] p-2">
               <label className="flex min-w-0 flex-col gap-1 text-[12.5px] text-[var(--color-text-secondary)]">

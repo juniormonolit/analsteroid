@@ -5,7 +5,9 @@ import { useMemo, useState } from 'react';
 import { SearchSelect, type SearchSelectOption } from '@/components/ui/SearchSelect';
 import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
 import type { TaskerMeeting, TaskerMeetingInput, TaskerMeetingOptionsResponse, TaskerRecurrence } from '../../types';
-import { DOW_SHORT, isoDow, recurrenceLabel } from '../engine/recurrence';
+import { DOW_SHORT, isoDow, nextDates, occurrenceStart, recurrenceLabel } from '../engine/recurrence';
+import { AvailabilityWarning } from '../../ui/shared/AvailabilityWarning';
+import type { TaskerAvailabilityRequest } from '../../types';
 import { todayMsk } from '../../ui/shared/format';
 
 const INPUT = 'min-h-11 w-full min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-base text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] disabled:opacity-50 sm:text-sm';
@@ -83,6 +85,24 @@ export function MeetingForm({ initial, options, pending, error, onSubmit, onCanc
     return [...m.values()];
   }, [options, initial]);
 
+  // Наложения: ближайшие 4 встречи серии × организатор, люди и отделы целиком; своя серия при правке — не конфликт.
+  const availabilityReq = useMemo<TaskerAvailabilityRequest | null>(() => {
+    if (!startDate || !/^\d{2}:\d{2}$/.test(startTime) || (!deptIds.length && !personIds.length && !organizer)) return null;
+    if ((kind === 'weekly' || kind === 'biweekly') && !days.length) return null;
+    const from = startDate > today ? startDate : today;
+    const dates = nextDates({ startDate, untilDate: untilDate || null, recurrence }, from, 4);
+    if (!dates.length) return null;
+    const dur = Number(duration) * 60_000;
+    return {
+      bitrixIds: [...(organizer ? [Number(organizer)] : []), ...personIds.map(Number)],
+      departmentIds: deptIds,
+      slots: dates.map(d => { const st = occurrenceStart(d, startTime); return { start: st, end: new Date(Date.parse(st) + dur).toISOString() }; }),
+      exclude: initial ? { meetingId: initial.id } : undefined,
+    };
+    // recurrence собирается из kind/days/monthDay/nth/weekday — они и в зависимостях.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startDate, startTime, duration, kind, days, monthDay, nth, weekday, untilDate, deptIds, personIds, organizer, initial, today]);
+
   const problems: string[] = [];
   if (!title.trim()) problems.push('название');
   if ((kind === 'weekly' || kind === 'biweekly') && days.length === 0) problems.push('дни недели');
@@ -154,6 +174,8 @@ export function MeetingForm({ initial, options, pending, error, onSubmit, onCanc
           </p>
         </div>
       )}
+
+      <AvailabilityWarning req={availabilityReq} multiSlot />
 
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Повторять до (необязательно)">

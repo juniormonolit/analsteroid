@@ -1,9 +1,11 @@
 'use client';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
 import type { TaskerMetric } from '../../types';
 import type { TrainingEvent, TrainingEventInput } from '../types';
 import { addDaysKey, mskDateKey, mskTime, mskToIso } from './format';
+import { AvailabilityWarning } from '../../ui/shared/AvailabilityWarning';
+import type { TaskerAvailabilityRequest } from '../../types';
 
 const INPUT = 'min-h-11 w-full min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-base sm:text-sm outline-none focus:border-[var(--color-accent)]';
 const LABEL = 'flex min-w-0 flex-col gap-1 text-[13px] text-[var(--color-text-secondary)]';
@@ -35,6 +37,19 @@ export function TrainingForm({
   const [beforeDays, setBeforeDays] = useState(String(initial?.measureBeforeDays ?? 14));
   const [afterDays, setAfterDays] = useState(String(initial?.measureAfterDays ?? 14));
   const [localErr, setLocalErr] = useState<string | null>(null);
+
+  // Наложения (предупреждение): тренер (создатель — includeSelf) и уже записанные; само событие при правке — не конфликт.
+  const availabilityReq = useMemo<TaskerAvailabilityRequest | null>(() => {
+    const d = Number(duration);
+    if (!date || !/^\d{2}:\d{2}$/.test(time) || !Number.isInteger(d) || d < 5) return null;
+    const start = mskToIso(date, time);
+    return {
+      bitrixIds: [...(initial?.trainer ? [initial.trainer.id] : []), ...(initial?.attendees ?? []).map(a => a.manager.id)],
+      includeSelf: !initial?.trainer,
+      slots: [{ start, end: new Date(Date.parse(start) + d * 60_000).toISOString() }],
+      exclude: initial ? { trainingEventId: initial.id } : undefined,
+    };
+  }, [date, time, duration, initial]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,6 +103,7 @@ export function TrainingForm({
           <input type="number" inputMode="numeric" min={1} className={INPUT} value={capacity} onChange={e => setCapacity(e.target.value)} placeholder="без лимита" />
         </label>
       </div>
+      <AvailabilityWarning req={availabilityReq} />
       <label className={LABEL}>
         Место или ссылка
         <input className={INPUT} value={place} onChange={e => setPlace(e.target.value)} maxLength={500} placeholder="Переговорная 3 или https://…" />

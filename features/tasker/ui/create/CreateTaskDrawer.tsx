@@ -12,6 +12,9 @@ import {
   createTasks, fetchAssignableManagers, fetchCreators, fetchCustomers, fetchMetrics, fetchSessions, fetchSnapshot,
   fetchTemplates, fetchUpcomingTrainings, TaskerApiError,
 } from './api';
+// Проверка наложения времени у слота сессии (сессия A).
+import { AvailabilityWarning } from '../shared/AvailabilityWarning';
+import type { TaskerAvailabilityRequest } from '@/features/tasker/types';
 
 /**
  * Форма постановки задачи «подтянуть показатель» (Задачник, сессия C; ТЗ —
@@ -423,6 +426,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
           sessions={sessions} sessionId={sessionId} onSession={setSessionId}
           slot={slot} onSlot={setSlot} newSession={newSession} onNewSession={setNewSession}
           metricLabel={metric?.label}
+          availability={slotAvailability(sessions, sessionId, slot, durationMin, managerIdNums)}
         />
 
         {trainings && trainings.length > 0 && (
@@ -557,10 +561,24 @@ function CustomersBlock({ enabled, onToggle, groups, managerName, multi, uncheck
   );
 }
 
-function SessionBlock({ sessions, sessionId, onSession, slot, onSlot, newSession, onNewSession, metricLabel }: {
+/** Проверка наложения для слота (предупреждение, не запрет): менеджеры + постановщик; выбранная сессия — её время,
+ *  сама сессия не конфликтует сама с собой. */
+function slotAvailability(sessions: TaskerSession[], sessionId: number | null, slot: string, durationMin: number, managerIds: number[]): TaskerAvailabilityRequest | null {
+  const s = sessionId ? sessions.find(x => x.id === sessionId) : null;
+  const start = s ? s.slotStart : slot ? new Date(slot).toISOString() : null;
+  if (!start || Number.isNaN(Date.parse(start)) || !managerIds.length) return null;
+  const dur = (s ? s.durationMin : durationMin) * 60_000;
+  return {
+    bitrixIds: managerIds, includeSelf: true,
+    slots: [{ start, end: new Date(Date.parse(start) + dur).toISOString() }],
+    exclude: s ? { sessionId: s.id } : undefined,
+  };
+}
+
+function SessionBlock({ sessions, sessionId, onSession, slot, onSlot, newSession, onNewSession, metricLabel, availability }: {
   sessions: TaskerSession[]; sessionId: number | null; onSession: (id: number | null) => void;
   slot: string; onSlot: (v: string) => void; newSession: boolean; onNewSession: (v: boolean) => void;
-  metricLabel?: string;
+  metricLabel?: string; availability: TaskerAvailabilityRequest | null;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -592,6 +610,7 @@ function SessionBlock({ sessions, sessionId, onSession, slot, onSlot, newSession
           )}
         </Field>
       )}
+      <AvailabilityWarning req={availability} />
     </div>
   );
 }
