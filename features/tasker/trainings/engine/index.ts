@@ -12,7 +12,8 @@ import 'server-only';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
-import { getEmployeeDirectory, getActiveEmployeeRoster, resolveEmployeeNames } from '@/lib/org/employeeDirectory';
+import { getEmployeeDirectory, resolveEmployeeNames } from '@/lib/org/employeeDirectory';
+import { getSalesDepartmentOptions, resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { canSeeManager, getSessionScope, type SessionScope } from '@/lib/org/sessionScope';
 import { retryStaleCalendarSyncs, syncTrainingCalendar } from './calendar';
 import type {
@@ -199,15 +200,19 @@ export async function listEnrollments(
 /** Кого текущий пользователь может записать (SearchSelect «Записать менеджера»). */
 export async function listEnrollableManagers(actor: TrainingActor): Promise<TrainingManagerOption[]> {
   if (!actor.canEnroll) return [];
-  const dir = await getEmployeeDirectory();
-  let list: TrainingManagerOption[];
-  if (actor.canManage || actor.scope.kind === 'all') {
-    list = (await getActiveEmployeeRoster()).map(e => ({ id: e.bitrixId, name: e.name, departmentName: e.departmentName }));
-  } else {
-    list = [...actor.scope.managerIds].map(Number).filter(Number.isFinite).map(id => {
-      const e = dir.get(id);
-      return { id, name: e?.name ?? `Сотрудник #${id}`, departmentName: e?.departmentName ?? null };
-    });
+  // Только сотрудники отделов продаж (дерево «Отдел продаж», как пикеры отчётов) — без бухгалтерии и прочих
+  // (правка 23.11 после выкатки). РОП/директор — дополнительно в пределах своего среза.
+  const [dir, salesDepts] = await Promise.all([getEmployeeDirectory(), getSalesDepartmentOptions()]);
+  const sales = await resolveManagersForDepartments(salesDepts.map(d => d.id));
+  const allowed = actor.canManage || actor.scope.kind === 'all' ? null : actor.scope.managerIds;
+  const list: TrainingManagerOption[] = [];
+  const seen = new Set<string>();
+  for (const m of sales) {
+    if (seen.has(m.managerId) || (allowed && !allowed.has(m.managerId))) continue;
+    seen.add(m.managerId);
+    const id = Number(m.managerId);
+    if (!Number.isFinite(id)) continue;
+    list.push({ id, name: dir.get(id)?.name ?? m.name, departmentName: dir.get(id)?.departmentName ?? null });
   }
   return list.filter(m => !/^User \d+$/.test(m.name)).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 }
