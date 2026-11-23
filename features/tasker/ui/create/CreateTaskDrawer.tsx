@@ -426,7 +426,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
           sessions={sessions} sessionId={sessionId} onSession={setSessionId}
           slot={slot} onSlot={setSlot} newSession={newSession} onNewSession={setNewSession}
           metricLabel={metric?.label}
-          availability={slotAvailability(sessions, sessionId, slot, durationMin, managerIdNums)}
+          availability={slotAvailability(sessions, sessionId, slot, durationMin, managerIdNums, creatorId ? Number(creatorId) : null)}
         />
 
         {trainings && trainings.length > 0 && (
@@ -563,13 +563,14 @@ function CustomersBlock({ enabled, onToggle, groups, managerName, multi, uncheck
 
 /** Проверка наложения для слота (предупреждение, не запрет): менеджеры + постановщик; выбранная сессия — её время,
  *  сама сессия не конфликтует сама с собой. */
-function slotAvailability(sessions: TaskerSession[], sessionId: number | null, slot: string, durationMin: number, managerIds: number[]): TaskerAvailabilityRequest | null {
+function slotAvailability(sessions: TaskerSession[], sessionId: number | null, slot: string, durationMin: number, managerIds: number[], creatorId: number | null): TaskerAvailabilityRequest | null {
   const s = sessionId ? sessions.find(x => x.id === sessionId) : null;
   const start = s ? s.slotStart : slot ? new Date(slot).toISOString() : null;
   if (!start || Number.isNaN(Date.parse(start)) || !managerIds.length) return null;
   const dur = (s ? s.durationMin : durationMin) * 60_000;
   return {
-    bitrixIds: managerIds, includeSelf: true,
+    // Постановщик — выбранный в поле «Постановщик» или сам пользователь.
+    bitrixIds: creatorId ? [...managerIds, creatorId] : managerIds, includeSelf: !creatorId,
     slots: [{ start, end: new Date(Date.parse(start) + dur).toISOString() }],
     exclude: s ? { sessionId: s.id } : undefined,
   };
