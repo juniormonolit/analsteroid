@@ -1,7 +1,7 @@
 // Клиентские обёртки над API Задачника для формы постановки (сессия C).
 // Контракт — features/tasker/types.ts / ai_docs/fresh_docs/TASKER_SPEC.md.
 import type {
-  TaskerCreateRequest, TaskerCreateResponse, TaskerCustomersResponse, TaskerMetricsResponse,
+  TaskerCreateRequest, TaskerCreateResponse, TaskerCustomersResponse, TaskerManagerOption, TaskerManagersResponse, TaskerMetricsResponse,
   TaskerPeriod, TaskerSessionsResponse, TaskerSnapshotResponse, TaskerTemplatesResponse,
 } from '@/features/tasker/types';
 
@@ -39,13 +39,12 @@ export const fetchSessions = (metricId: string, from: string, to: string) =>
 export const createTasks = (req: TaskerCreateRequest) =>
   call<TaskerCreateResponse>('/api/tasker/tasks', json(req));
 
-/** Список менеджеров, которым можно ставить задачи. Эндпоинта в контракте пока нет
- *  (попросили у сессии A) — 404 трактуем как «нет списка», форма берёт его из пропсов. */
-export interface AssignableManager { id: number; name: string; deptName?: string | null }
-export async function fetchAssignableManagers(): Promise<AssignableManager[] | null> {
+/** Кому можно ставить задачи (GET /api/tasker/managers). Ошибка/404 (эндпоинт ещё не
+ *  выкачен) → null: форма берёт список из пропсов (строки отчёта, менеджер карточки). */
+export async function fetchAssignableManagers(): Promise<TaskerManagerOption[] | null> {
   const res = await fetch('/api/tasker/managers');
   if (!res.ok) return null;
-  const body = await res.json().catch(() => null);
+  const body = (await res.json().catch(() => null)) as TaskerManagersResponse | null;
   return Array.isArray(body?.managers) ? body.managers : null;
 }
 
