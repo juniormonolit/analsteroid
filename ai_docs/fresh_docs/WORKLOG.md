@@ -5,6 +5,41 @@
 > изменение кода/конфига/инфраструктуры или принятое решение → запись сюда.
 
 ---
+## 2026-11-23 — «Задачник»: ядро (сессия A) — миграция 274, движок, API
+
+ТЗ — `ai_docs/fresh_docs/TASKER_SPEC.md`. Контракт типов — `features/tasker/types.ts` (+ `TaskerManagersResponse`
+по просьбе сессии C, + `warning` в ответе PATCH). Права: `section.tasker`, `action.tasker.assign`,
+`action.tasker.trainings.manage`; пункт «Ещё → Задачник» → `/tasker`.
+- **Миграция `274_tasker_core.sql`** (system/monolitika, на прод НЕ применена): `tasker_metrics` (белый список 10 метрик:
+  CR перв./повт./все, CR ППП, ср. чек перв./все, исходящие звонки, доля недозвонов (меньше=лучше), сделок/день, доля
+  повторки; знаменатели для «мало данных»; `additive` — счётчик), `tasker_templates` (2–3 на метрику), `tasker_settings`
+  (`group_id` = null, `directors` = {"default":"1860"} — Осипов), `tasker_sessions`, `tasker_tasks`, `tasker_bx_outbox`.
+  Гранты — копией с `repeat_kanban_events` (как 270). Проверена дважды подряд на чистом Postgres 17.
+- **Движок `features/tasker/engine/`**: `snapshot.ts` — два прогона `POST /api/reports/run` (by-managers, dealScope 'all'):
+  период с группировкой по отделам (значение = ячейка, среднее отдела = строка «Итого» отдела `__team__…`), 6 полных
+  месяцев до периода (своё среднее; для счётчиков приведено к длине периода); `enoughData` — сумма знаменателей ≥ 5.
+  `reportRunner.ts`: в запросе — роут в процессе (cookie текущего), в фоне — loopback на свой сервер
+  (`TASKER_INTERNAL_URL` или `http://127.0.0.1:$PORT`) с короткой сессией постановщика (создаётся и удаляется).
+  `bitrix.ts` — outbox по образцу логистов: create_task (идемпотентно, `findCreated` по маркеру `TSK-xxxxxxxx` в описании),
+  checklist (`task.checklistitem.add`, без дублей при повторе), status (цепочка start/pause/complete/approve/renew/
+  disapprove), update (слот/срок), comment (вердикт). Постановщик — `callAsUser` с откатом на вебхук.
+  `live.ts` — живой `tasks.task.list` по GROUP_ID (открытые + закрытые за 120 дн.), SWR 3 мин, статусы пишутся в БД.
+  `create.ts` — лимиты (≤ 3 открытых — директор/админ обходит `overrideLimits`; дубль метрики — никогда), сессии
+  (новая по слоту на РОПа / существующая той же темы; длительность 30 + 15 на следующего менеджера), чек-лист из
+  `buildRepeatBoard({shipCounts:['1']})` колонки `pool_hot` + привязка UF_CRM_TASK (C_/CO_). Соисполнитель — РОП
+  (`ropOfManager`), наблюдатель — директор филиала из настроек. `measure.ts` — автозамер: окно от постановки до дня
+  перед контрольной датой (≥ 7 дней), вердикт achieved / improved (> 2% к исходному) / no_change / not_enough_data,
+  комментарий в задачу.
+- **Пока `group_id` не задан** — POST /api/tasker/tasks отвечает 409 `{code:'not_configured'}`; GET metrics отдаёт
+  `bitrixConfigured:false`; остальное работает. Задать: `UPDATE tasker_settings SET value='<ID>'::jsonb WHERE key='group_id'`.
+- **API `app/api/tasker/*`**: tasks (GET/POST), tasks/[id] (PATCH), snapshot, metrics, templates, customers, sessions,
+  managers. Гейт `section.tasker`, создание — `action.tasker.assign`, менеджеры — `canSeeManager`.
+- **Фоновая задача: имя `tasker`** (instrumentation.ts → `scheduleTasker`): досылка outbox раз в минуту + автозамер
+  раз в 15 мин, advisory lock `tasker_job`. На проде добавить `tasker` в `BACKGROUND_JOBS_ALLOW`.
+- `trainings` в ответе GET /tasks — `listEnrollments` сессии D (фильтр managerId/from/to; сбой обучений не ломает доску).
+- Не сделано (фаза 1b/2): событие календаря Битрикса для сессии РОПа (ждём право `calendar`).
+
+---
 ## 2026-11-23 — Обучения: «Записать менеджера» — только отделы продаж
 
 После выкатки: у админа/тренера в списке были все сотрудники (бухгалтерия и пр.). `listEnrollableManagers` теперь берёт

@@ -275,6 +275,8 @@ export interface TaskerPatchRequest {
 
 export interface TaskerPatchResponse {
   task: TaskerTask;
+  /** Изменение сохранено, но Битрикс пока не принял — повторим автоматически. */
+  warning?: string | null;
 }
 
 /** POST /api/tasker/snapshot */

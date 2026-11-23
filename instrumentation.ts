@@ -76,6 +76,7 @@ export async function register() {
     if (allow.has('repeatTaskStatus')) scheduleRepeatTaskStatus();
     if (allow.has('repeatAutoBrak')) scheduleRepeatAutoBrak();
     if (allow.has('metricMapNightly')) scheduleMetricMapNightly();
+    if (allow.has('tasker')) scheduleTasker();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
@@ -106,6 +107,7 @@ export async function register() {
   scheduleLogistQueueMembers();
   scheduleLogistBxSync();
   scheduleLogistRequests();
+  scheduleTasker();
   scheduleRepeatQueueIssue();
   scheduleRepeatMorning();
   scheduleRepeatAutoBrak();
@@ -950,6 +952,26 @@ function scheduleLogistQueueMembers() {
 
 // Канбан запросов логистам, S4: повтор записи в дубль-задачи Битрикса (очередь logist_bx_outbox, бэкофф 1…60 мин).
 // Сама запись за флагом LOGIST_BX_WRITE (по умолчанию выключена) — без него тик ничего не делает.
+// «Задачник» (TASKER_SPEC.md): досылка в Битрикс (outbox) каждую минуту + автозамер задач с
+// наступившей контрольной датой раз в 15 мин (features/tasker/engine/job.ts). На проде — имя
+// «tasker» в BACKGROUND_JOBS_ALLOW. 42P01 — миграция 274 ещё не накачена: молчим.
+function scheduleTasker() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const { taskerTick } = await import('./features/tasker/engine/job');
+      const r = await taskerTick();
+      if (r && (r.drained || r.measured || r.failed)) console.log(`[tasker] досылка: ${r.drained}, замеров: ${r.measured}, сбоев замера: ${r.failed}`);
+    } catch (err) {
+      if ((err as { code?: string }).code !== '42P01') console.error('[tasker] не удалось:', err instanceof Error ? err.message : err);
+    } finally { running = false; }
+  };
+  setTimeout(() => { void tick(); }, 90 * 1000);
+  setInterval(() => { void tick(); }, 60 * 1000);
+}
+
 function scheduleLogistBxSync() {
   let running = false;
   const tick = async () => {
