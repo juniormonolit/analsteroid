@@ -23,10 +23,16 @@ function useLiveValue(t: TaskerTask, mock: boolean) {
   const from = mskDay(t.createdAt);
   const to = todayMsk();
   const enabled = t.status !== 'result' && from <= to;
+  // Прогретое значение из ответа /tasks (фоновая задача) — показываем сразу, без запроса.
+  const warm = t.current && t.current.from === from && t.current.to === to ? t.current : null;
   return useQuery<Snapshot | null>({
     queryKey: ['tasker-live', t.id, from, to, mock],
     enabled,
-    staleTime: 5 * 60_000,
+    staleTime: 15 * 60_000,
+    ...(warm ? {
+      initialData: { ...t.snapshot, value: warm.value, enoughData: warm.enoughData, denominator: warm.denominator },
+      initialDataUpdatedAt: Date.parse(warm.at),
+    } : {}),
     queryFn: async () => {
       if (mock) {
         const v = t.snapshot.value;
@@ -34,7 +40,7 @@ function useLiveValue(t: TaskerTask, mock: boolean) {
       }
       const r = await fetch('/api/tasker/snapshot', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ managerIds: [t.manager.id], metricId: t.metricId, period: { from, to } }),
+        body: JSON.stringify({ managerIds: [t.manager.id], metricId: t.metricId, period: { from, to }, withOwnAvg: false }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.error) throw new Error(j.error ?? `Ошибка ${r.status}`);

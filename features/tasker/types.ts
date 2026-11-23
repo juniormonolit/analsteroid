@@ -137,6 +137,18 @@ export interface TaskerChecklistItem {
   done?: boolean;
 }
 
+/** Значение менеджера за период «с постановки по сегодня» (прогретый кэш). */
+export interface TaskerCurrent {
+  value: number | null;
+  enoughData: boolean;
+  denominator: number | null;
+  /** YYYY-MM-DD */
+  from: string;
+  to: string;
+  /** ISO — когда посчитано. */
+  at: string;
+}
+
 export interface TaskerTask {
   id: number;
   bitrixTaskId: number | null;
@@ -189,6 +201,9 @@ export interface TaskerTask {
   doneNote: string | null;
   doneAt: string | null;
   doneBy: string | null;
+  /** «Сейчас» для карточки — из прогретого кэша (фоновая задача, warm.ts); нет — карточка считает сама
+   *  (POST /api/tasker/snapshot с withOwnAvg:false). Период — с дня постановки по сегодня (МСК). */
+  current?: TaskerCurrent | null;
   /** Может ли текущий пользователь менять статус/завершать (исполнитель или постановщик с правом). Менеджер — только чтение. */
   canChangeStatus: boolean;
 
@@ -349,6 +364,8 @@ export interface TaskerSnapshotRequest {
   managerIds: number[];
   metricId: string;
   period: TaskerPeriod;
+  /** false — без «своего среднего за 6 мес.» (карточке нужно только значение; прогон за полгода — самый дорогой). */
+  withOwnAvg?: boolean;
 }
 
 /** Ключ — managerId строкой (JSON). */

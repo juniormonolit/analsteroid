@@ -162,9 +162,10 @@ function memo<T>(key: string, ttlSec: number, producer: () => Promise<T>): Promi
   return p;
 }
 
-/** Период ещё «живой» (включает последние 2 дня — синк доносит задним числом) — короткий TTL. */
+/** Период ещё «живой» (включает последние 2 дня — синк доносит задним числом) — короткий TTL. 20 мин — дольше
+ *  интервала прогрева (15 мин, warm.ts), иначе прогретый снимок формы протухал бы до прихода РОПа. */
 function ttlFor(to: string): number {
-  return to >= addDaysYmd(mskToday(), -2) ? 5 * 60 : 6 * 3600;
+  return to >= addDaysYmd(mskToday(), -2) ? 20 * 60 : 6 * 3600;
 }
 
 /**

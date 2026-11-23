@@ -8,6 +8,7 @@ import type {
 } from '../types';
 import { bitrixTaskUrl, directorFor, loadMetricDefs, loadSettings, mskToday, type TaskerMetricDef, type TaskerSettings } from './config';
 import { loadLiveTasks } from './live';
+import { readCurrent } from './warm';
 import { getEmployeeDirectory } from '@/lib/org/employeeDirectory';
 import { hasFullManagerAccess } from '@/lib/org/managerAccess';
 
@@ -184,7 +185,11 @@ export async function listTasks(session: SessionUser, scope: SessionScope, q: Ta
   const mm = new Map(metrics.map(m => [m.id, m]));
   const live = r.rows.some(x => x.bitrix_task_id) ? await loadLiveTasks(settings.groupId) : null;
   const viewer = viewerOf(session);
-  return r.rows.map(x => mapTask(x, mm, settings.groupId, live, viewer));
+  const tasks = r.rows.map(x => mapTask(x, mm, settings.groupId, live, viewer));
+  // «Сейчас» для карточки — из прогретого кэша (warm.ts), без ожидания отчёта.
+  const cur = await readCurrent(tasks.filter(t => !t.verdict).map(t => ({ id: t.id, createdAt: t.createdAt }))).catch(() => new Map());
+  for (const t of tasks) t.current = cur.get(t.id) ?? null;
+  return tasks;
 }
 
 export async function getTaskRow(id: number): Promise<TaskRow | null> {

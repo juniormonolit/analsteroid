@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     if (!visible.length) return NextResponse.json({ error: 'Эти менеджеры вам недоступны', code: 'forbidden' }, { status: 403 });
     const metric = await metricDef(b.metricId);
     const snaps = await computeSnapshots(inRequestRunner, visible.map(String), metric, { from: b.period.from, to: b.period.to },
-      { cacheScope: snapshotCacheScope(auth.scope.kind, auth.session.id) });
+      { cacheScope: snapshotCacheScope(auth.scope.kind, auth.session.id), withOwnAvg: b.withOwnAvg !== false });
     const out: TaskerSnapshotResponse = {};
     for (const id of visible) out[String(id)] = stripMeta(snaps[String(id)]);
     return NextResponse.json(out);
