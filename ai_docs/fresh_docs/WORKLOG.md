@@ -29,9 +29,9 @@
 код пишет в новые колонки `tasker_tasks`, без них создание задач и доска упадут.
 
 **Миграция 279** (`migrations/279_tasker_assignee.sql`, идемпотентна, новых таблиц нет):
-- `tasker_tasks`: `kind` (theory|practice), `assignee_bitrix_id/name`, `auditor_ids text[]`, `done_note/done_at/done_by`,
+- `tasker_tasks`: `kind` (theory|practice, NOT NULL DEFAULT practice), `executor_bitrix_id/executor_name` (= RESPONSIBLE_ID; контракт с D), `auditor_ids text[]`, `done_note/done_at/done_by`,
   `calendar_event_id/owner_id`;
-- старые задачи: исполнитель = менеджер (так и было в Битриксе), `auditor_ids` = директор;
+- старые задачи: исполнитель = менеджер (так и было в Битриксе), kind = practice, `auditor_ids` = директор;
 - `tasker_settings.trainer = "2054"` (Будковский);
 - дефолт окна обучений `measure_before/after_days` → 7.
 

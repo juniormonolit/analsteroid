@@ -134,9 +134,11 @@ export interface TaskerTask {
 
   title: string;
   body: string;
-  /** Тип: теория/практика; null — старые задачи (до 23.11, исполнитель — менеджер). */
-  kind: TaskerTaskKind | null;
-  /** Исполнитель (RESPONSIBLE_ID в Битриксе): РОП или тренер. У старых задач — менеджер. */
+  /** Тип: теория (исполнитель — тренер) / практика (РОП/постановщик). Старые задачи (до 23.11) — 'practice'. */
+  kind: TaskerTaskKind;
+  /** Bitrix ID исполнителя (= RESPONSIBLE_ID; tasker_tasks.executor_bitrix_id). У старых задач — менеджер. */
+  executorBitrixId: string | null;
+  /** Исполнитель с именем (то же лицо, что executorBitrixId). */
   assignee: TaskerPerson | null;
   /** Менеджер — объект задачи (о встрече узнаёт из календаря), не исполнитель. */
   manager: TaskerPerson;

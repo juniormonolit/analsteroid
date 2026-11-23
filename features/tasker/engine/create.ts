@@ -251,7 +251,7 @@ export async function createTasks(
       `INSERT INTO tasker_tasks (marker, manager_bitrix_id, manager_name, rop_bitrix_id, rop_name, director_bitrix_id, director_name,
           creator_bitrix_id, creator_user_id, creator_name, dept_name, metric_id, period_from, period_to, snapshot, target, template_id,
           title, body, deadline, duration_min, slot_start, slot_end, control_date, session_id, training_event_id, checklist,
-          kind, assignee_bitrix_id, assignee_name, auditor_ids)
+          kind, executor_bitrix_id, executor_name, auditor_ids)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27::jsonb,
           $28,$29,$30,$31::text[])
        RETURNING id`,

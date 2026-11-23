@@ -21,7 +21,7 @@ export interface TaskRow {
   session_id: string | null; training_event_id: string | null; checklist: TaskerChecklistItem[];
   sync_state: TaskerSyncState; sync_error: string | null; created_at: Date; updated_at: Date;
   // 279
-  kind: TaskerTaskKind | null; assignee_bitrix_id: string | null; assignee_name: string | null; auditor_ids: string[] | null;
+  kind: TaskerTaskKind | null; executor_bitrix_id: string | null; executor_name: string | null; auditor_ids: string[] | null;
   done_note: string | null; done_at: Date | null; done_by: string | null;
   calendar_event_id: string | null; calendar_owner_id: string | null;
 }
@@ -36,7 +36,7 @@ export function viewerOf(session: SessionUser): TaskViewer {
 /** Менять статус/завершать: исполнитель — всегда; с правом «ставить задачи» — постановщик (кто нажал / от чьего
  *  имени), РОП и директор менеджера. Менеджер — объект задачи — только смотрит (правка 23.11). */
 export function canChangeStatusOf(r: TaskRow, v: TaskViewer): boolean {
-  if (v.bitrixId && r.assignee_bitrix_id === v.bitrixId) return true;
+  if (v.bitrixId && r.executor_bitrix_id === v.bitrixId) return true;
   if (!v.canManage) return false;
   if (r.creator_user_id === v.userId) return true;
   return !!v.bitrixId && v.bitrixId !== r.manager_bitrix_id
@@ -81,8 +81,9 @@ export function mapTask(
     syncError: r.sync_error,
     title: r.title,
     body: r.body,
-    kind: r.kind ?? null,
-    assignee: r.assignee_bitrix_id ? { id: Number(r.assignee_bitrix_id), name: r.assignee_name ?? `#${r.assignee_bitrix_id}` } : null,
+    kind: r.kind ?? 'practice',
+    executorBitrixId: r.executor_bitrix_id ?? null,
+    assignee: r.executor_bitrix_id ? { id: Number(r.executor_bitrix_id), name: r.executor_name ?? `#${r.executor_bitrix_id}` } : null,
     manager: { id: Number(r.manager_bitrix_id), name: r.manager_name ?? `#${r.manager_bitrix_id}` },
     rop: r.rop_bitrix_id ? { id: Number(r.rop_bitrix_id), name: r.rop_name ?? `#${r.rop_bitrix_id}` } : null,
     director: r.director_bitrix_id ? { id: Number(r.director_bitrix_id), name: r.director_name ?? `#${r.director_bitrix_id}` } : null,
@@ -131,7 +132,7 @@ function visibilitySql(scope: SessionScope, session: SessionUser, params: unknow
   params.push(session.bitrixUserId);
   const me = `$${params.length}`;
   return `(${a} OR ${b} OR t.manager_bitrix_id = ${me} OR t.rop_bitrix_id = ${me} OR t.director_bitrix_id = ${me}
-    OR t.assignee_bitrix_id = ${me} OR t.creator_bitrix_id = ${me} OR ${me} = ANY(t.auditor_ids))`;
+    OR t.executor_bitrix_id = ${me} OR t.creator_bitrix_id = ${me} OR ${me} = ANY(t.auditor_ids))`;
 }
 
 export async function listTasks(session: SessionUser, scope: SessionScope, q: TaskerTasksQuery & { ids?: number[] }): Promise<TaskerTask[]> {
@@ -144,7 +145,7 @@ export async function listTasks(session: SessionUser, scope: SessionScope, q: Ta
   if (q.mine === 'created') { params.push(session.id); where.push(`t.creator_user_id = $${params.length}`); }
   if (q.mine === 'watch') {
     params.push(session.bitrixUserId ?? '-');
-    where.push(`(t.director_bitrix_id = $${params.length} OR t.rop_bitrix_id = $${params.length} OR t.assignee_bitrix_id = $${params.length} OR $${params.length} = ANY(t.auditor_ids))`);
+    where.push(`(t.director_bitrix_id = $${params.length} OR t.rop_bitrix_id = $${params.length} OR t.executor_bitrix_id = $${params.length} OR $${params.length} = ANY(t.auditor_ids))`);
   }
   // Окно для «Недели»/«Сегодня»: задача попадает, если слот, срок или дата замера — в окне,
   // либо (для «Сегодня») она просрочена и ещё открыта.

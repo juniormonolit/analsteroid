@@ -39,6 +39,7 @@ function task(i: number, status: TaskerStatus, opts: { day: string; hm?: string;
     body: 'Разобрать 5 последних проигранных сделок на сессии.\nПерезвонить клиентам без КП в течение 2 дней.\nСверить скрипт презентации с эталоном отдела.',
     manager: man, rop, director: DIRECTOR, creator: rop,
     kind: i % 4 === 1 ? 'theory' : 'practice',
+    executorBitrixId: i % 4 === 1 ? '2054' : String(rop.id),
     assignee: i % 4 === 1 ? { id: 2054, name: 'Будковский Андрей' } : rop,
     doneNote: status === 'done' || status === 'measuring' || status === 'result' ? 'Разобрали 6 сделок, проверили брони, перезвонили трём клиентам.' : null,
     doneAt: null, doneBy: null, canChangeStatus: true,

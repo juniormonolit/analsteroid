@@ -19,7 +19,7 @@ export function canTouchTask(session: SessionUser, scope: SessionScope, row: Tas
   const me = session.bitrixUserId ? String(session.bitrixUserId) : null;
   return canSeeManager(scope, row.manager_bitrix_id) || row.creator_user_id === session.id
     || (!!me && (row.rop_bitrix_id === me || row.director_bitrix_id === me || row.manager_bitrix_id === me
-      || row.assignee_bitrix_id === me || row.creator_bitrix_id === me || (row.auditor_ids ?? []).includes(me)));
+      || row.executor_bitrix_id === me || row.creator_bitrix_id === me || (row.auditor_ids ?? []).includes(me)));
 }
 
 const isClosed = (row: TaskRow) => row.done_at !== null || [4, 5, 7].includes(Number(row.bitrix_status ?? 0));
@@ -59,7 +59,7 @@ export async function patchTask(session: SessionUser, scope: SessionScope, id: n
 
   const fields: Record<string, unknown> = {};
   if (b.slot !== undefined || b.deadline !== undefined) {
-    if (!viewer.canManage && row.assignee_bitrix_id !== me) throw new TaskerError('Переносить сроки может исполнитель или постановщик', 'forbidden', 403);
+    if (!viewer.canManage && row.executor_bitrix_id !== me) throw new TaskerError('Переносить сроки может исполнитель или постановщик', 'forbidden', 403);
     if (b.slot !== undefined) {
       if (b.slot === null) {
         sets.push('slot_start = NULL', 'slot_end = NULL');

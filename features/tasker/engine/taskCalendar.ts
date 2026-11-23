@@ -16,7 +16,7 @@ export const taskMarker = (taskId: number) => `Задачник · задача 
 
 interface Row {
   id: string; slot_start: Date | null; slot_end: Date | null; duration_min: number; session_id: string | null; cancelled_at: Date | null;
-  assignee_bitrix_id: string | null; manager_bitrix_id: string; manager_name: string | null; metric_id: string; kind: TaskerTaskKind | null;
+  executor_bitrix_id: string | null; manager_bitrix_id: string; manager_name: string | null; metric_id: string; kind: TaskerTaskKind | null;
   bitrix_task_id: string | null; calendar_event_id: string | null; calendar_owner_id: string | null;
 }
 
@@ -31,11 +31,11 @@ export async function syncTaskCalendar(taskId: number): Promise<{ eventId: numbe
     await client.query('BEGIN');
     await client.query(`SET LOCAL lock_timeout = '20s'`);
     const t = (await client.query<Row>(
-      `SELECT id, slot_start, slot_end, duration_min, session_id, cancelled_at, assignee_bitrix_id, manager_bitrix_id, manager_name,
+      `SELECT id, slot_start, slot_end, duration_min, session_id, cancelled_at, executor_bitrix_id, manager_bitrix_id, manager_name,
               metric_id, kind, bitrix_task_id, calendar_event_id, calendar_owner_id
          FROM tasker_tasks WHERE id = $1 FOR UPDATE`, [taskId])).rows[0];
     if (!t) { await client.query('ROLLBACK'); return { eventId: null, skipped: 'задачи нет' }; }
-    const owner = t.assignee_bitrix_id && /^\d+$/.test(t.assignee_bitrix_id) ? t.assignee_bitrix_id : null;
+    const owner = t.executor_bitrix_id && /^\d+$/.test(t.executor_bitrix_id) ? t.executor_bitrix_id : null;
     const want = !!t.slot_start && !t.session_id && !t.cancelled_at && !!owner;
     let calId = t.calendar_event_id ? Number(t.calendar_event_id) : null;
 
