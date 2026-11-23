@@ -225,6 +225,7 @@ export const NO_DEAL_LIST_METRIC_IDS: string[] = [
   'plan_sales_current_day', 'plan_shipments_current_day',
   'plan_sales_current_week_day', 'plan_shipments_current_week_day',
   'plan_sales_target_mtd', 'plan_shipments_target_mtd',
+  'plan_repeat_sales_month', 'plan_repeat_sales_today', 'plan_repeat_sales_current_day',
   'manager_worked_days_count', 'manager_deals_per_worked_day',
   'manager_rating', 'manager_login',
   'rop_first_touch_median', 'rop_first_touch_median_repeat', 'rop_first_touch_median_all',

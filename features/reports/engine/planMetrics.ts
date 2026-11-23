@@ -2,6 +2,7 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { getWorkingDaysByMonthInRange } from '@/lib/plans/dailyPlan';
+import { getRepeatShareByManagerId } from '@/lib/plans/repeatShare';
 import { getCalendarWorkingDaysInPeriod } from './managerActivity';
 import { buildCommonDealWhere, type CommonDealFilterOpts } from './commonDealWhere';
 import { fromZonedTime } from 'date-fns-tz';
@@ -18,6 +19,9 @@ import type { Metric, ReportRow, AccountType } from '@/lib/metrics/types';
 // при заданных планах (жалоба владельца 07.09). Теперь оба роута зовут одну функцию —
 // цифры совпадают по построению. Семантика окон, переопределения 10.07/14.07/31.08
 // и все комментарии сохранены как были.
+
+/** Метрики «План продаж (повт., …)» — миграция 285. */
+const REPEAT_PLAN_METRIC_IDS = ['plan_repeat_sales_month', 'plan_repeat_sales_today', 'plan_repeat_sales_current_day'];
 
 export interface PeriodPlanEntry { planSales: number; planShipments: number }
 
@@ -105,7 +109,7 @@ async function fetchPlanFactWindow(
   // разрезе групп/типов клиентов не существует) — процент честно показывает,
   // какую долю ПОЛНОГО плана дал выбранный срез.
   filters: CommonDealFilterOpts = {},
-): Promise<Map<string, { sales: number; shipments: number }>> {
+): Promise<Map<string, { sales: number; shipments: number; repeatSales: number }>> {
   const IDS = ['primary_sales_amount', 'repeat_sales_amount', 'primary_shipments_amount', 'repeat_shipments_amount'];
   const all = await loadMetrics();
   const metrics = all.filter(m => IDS.includes(m.id));
@@ -115,7 +119,7 @@ async function fetchPlanFactWindow(
     groupBy: 'GROUP BY d.current_manager_id',
     notNullWhere: `d.current_manager_id IS NOT NULL${cw.sql ? ` AND ${cw.sql}` : ''}`,
   });
-  const out = new Map<string, { sales: number; shipments: number }>();
+  const out = new Map<string, { sales: number; shipments: number; repeatSales: number }>();
   if (!sql) return out;
 
   const fromIso = fromZonedTime(`${fromDateStr} 00:00:00`, 'Europe/Moscow').toISOString();
@@ -129,6 +133,8 @@ async function fetchPlanFactWindow(
     out.set(row.dimension_id, {
       sales: num(row.primary_sales_amount) + num(row.repeat_sales_amount),
       shipments: num(row.primary_shipments_amount) + num(row.repeat_shipments_amount),
+      // Факт для «Выполнение плана продаж (повт.)» (миграция 285) — повторные по воронке.
+      repeatSales: num(row.repeat_sales_amount),
     });
   }
   return out;
@@ -167,6 +173,9 @@ export async function enrichPlanMetrics(o: PlanEnrichOptions): Promise<{ current
     'plan_sales_month', 'plan_shipments_month',
     'plan_sales_today', 'plan_shipments_today',
     'plan_sales_current_day', 'plan_shipments_current_day',
+    // План (повт.) = план продаж × доля повторных отдела менеджера (миграции 284/285,
+    // lib/plans/repeatShare.ts). Считается в том же enrichRow, что и обычные планы.
+    ...REPEAT_PLAN_METRIC_IDS,
   ];
   const hasAnyPlanMetric = withDeps.some(m => planMetricIds.includes(m.id));
 
@@ -252,7 +261,8 @@ export async function enrichPlanMetrics(o: PlanEnrichOptions): Promise<{ current
     });
     const workdaysOf = (fromStr: string, toStr: string): Promise<number | null> =>
       fromStr > mskTodayStr ? Promise.resolve(0) : getCalendarWorkingDaysInPeriod(clampToToday(fromStr, toStr));
-    const [planByLoginCurrent, planByLoginComp, workdayNumCurrent, workdayNumComp, weekWorkdayNum] = await Promise.all([
+    const needRepeatShare = withDeps.some(m => REPEAT_PLAN_METRIC_IDS.includes(m.id));
+    const [planByLoginCurrent, planByLoginComp, workdayNumCurrent, workdayNumComp, weekWorkdayNum, repeatShareByMgr] = await Promise.all([
       loadPlanByLogin(periodFromStr, periodToStr),
       loadPlanByLogin(compPeriodFromStr, compPeriodToStr),
       workdaysOf(periodFromStr, periodToStr),
@@ -261,6 +271,7 @@ export async function enrichPlanMetrics(o: PlanEnrichOptions): Promise<{ current
         from: new Date(`${mskWeekStartStr}T00:00:00.000Z`),
         to: new Date(`${mskTodayStr}T23:59:59.999Z`),
       }),
+      needRepeatShare ? getRepeatShareByManagerId() : Promise.resolve(new Map<string, number>()),
     ]);
 
     const enrichRow = (
@@ -275,6 +286,9 @@ export async function enrichPlanMetrics(o: PlanEnrichOptions): Promise<{ current
       const planShipmentsMonth = plan.plan_shipments;
       const dailySales = planSalesMonth / 20;
       const dailyShipments = planShipmentsMonth / 20;
+      // Доля повторных отдела менеджера; нет доли — план (повт.) пустой (не 0).
+      const share = repeatShareByMgr.get(row.dimensionId);
+      const salesCurrentDay = workdayNum == null ? null : dailySales * workdayNum;
       return {
         ...row,
         metrics: {
@@ -288,6 +302,11 @@ export async function enrichPlanMetrics(o: PlanEnrichOptions): Promise<{ current
           // «(на текущий день недели)» — та же формула, окно [понедельник, сегодня]
           plan_sales_current_week_day: weekWorkdayNum == null ? null : dailySales * weekWorkdayNum,
           plan_shipments_current_week_day: weekWorkdayNum == null ? null : dailyShipments * weekWorkdayNum,
+          ...(share === undefined ? {} : {
+            plan_repeat_sales_month: planSalesMonth * share,
+            plan_repeat_sales_today: dailySales * share,
+            plan_repeat_sales_current_day: salesCurrentDay == null ? null : salesCurrentDay * share,
+          }),
         }
       };
     };
@@ -390,6 +409,7 @@ export async function enrichPlanMetrics(o: PlanEnrichOptions): Promise<{ current
     'plan_exec_pct_shipments_daily', 'plan_exec_pct_shipments_current_day',
     'plan_execution_pct', 'plan_execution_pct_shipments_month',
     'plan_exec_pct_sales_current_week_day', 'plan_exec_pct_shipments_current_week_day',
+    'plan_exec_pct_repeat_sales_daily', 'plan_exec_pct_repeat_sales_current_day',
   ];
   const hasPeriodRelativePlanMetric = withDeps.some(m => periodRelativePlanMetricIds.includes(m.id));
 
@@ -456,6 +476,8 @@ export async function enrichPlanMetrics(o: PlanEnrichOptions): Promise<{ current
           shipments_fact_month: m?.shipments ?? 0,
           sales_fact_week: w?.sales ?? 0,
           shipments_fact_week: w?.shipments ?? 0,
+          repeat_sales_fact_today: t?.repeatSales ?? 0,
+          repeat_sales_fact_month: m?.repeatSales ?? 0,
         },
       };
     };
