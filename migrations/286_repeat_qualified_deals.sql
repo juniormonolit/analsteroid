@@ -1,6 +1,7 @@
--- Миграция 284: «Кол-во квал. сделок (повт.)»
--- БД: analytics (таблица metrics). Накат на проде — как 229:
---   ssh … docker exec -i analsteroid-sys-pg psql -U $POSTGRES_USER -d analytics -1 < migrations/284_repeat_qualified_deals.sql
+-- 286: «Кол-во квал. сделок (повт.)» — метрика каталога repeat_qualified_count.
+-- БД: monolitika (YC-кластер c9qbif7n00ct1h39qd43, таблица metrics). Накат — psql под monolitik,
+-- одной транзакцией (-1). Новых таблиц нет — грантов не нужно. Идемпотентна (ON CONFLICT DO UPDATE).
+-- Откат: DELETE FROM metrics WHERE id = 'repeat_qualified_count';
 --
 -- ПОРЯДОК: СНАЧАЛА выкатить код (виртуальная дата _repeat_qualified_at в
 -- lib/metrics/sqlGen.ts → VIRTUAL_DATE_FIELDS), ПОТОМ накатывать. Старый код склеит
