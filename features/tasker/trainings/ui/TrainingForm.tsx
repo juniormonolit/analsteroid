@@ -1,5 +1,7 @@
 'use client';
 import { useState } from 'react';
+import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
+import type { TaskerMetric } from '../../types';
 import type { TrainingEvent, TrainingEventInput } from '../types';
 import { addDaysKey, mskDateKey, mskTime, mskToIso } from './format';
 
@@ -13,7 +15,9 @@ export function TrainingForm({
   error,
   onSubmit,
   onCancel,
+  metrics,
 }: {
+  metrics: TaskerMetric[];
   initial?: TrainingEvent | null;
   pending: boolean;
   error: string | null;
@@ -27,6 +31,9 @@ export function TrainingForm({
   const [duration, setDuration] = useState(String(initial?.durationMin ?? 60));
   const [place, setPlace] = useState(initial?.place ?? '');
   const [capacity, setCapacity] = useState(initial?.capacity ? String(initial.capacity) : '');
+  const [metricIds, setMetricIds] = useState<string[]>(initial?.metricIds ?? []);
+  const [beforeDays, setBeforeDays] = useState(String(initial?.measureBeforeDays ?? 14));
+  const [afterDays, setAfterDays] = useState(String(initial?.measureAfterDays ?? 14));
   const [localErr, setLocalErr] = useState<string | null>(null);
 
   const submit = (e: React.FormEvent) => {
@@ -37,6 +44,8 @@ export function TrainingForm({
     if (!Number.isInteger(d) || d < 5 || d > 600) return setLocalErr('Длительность — от 5 до 600 минут');
     const cap = capacity.trim() ? Number(capacity) : null;
     if (cap !== null && (!Number.isInteger(cap) || cap < 1)) return setLocalErr('Лимит мест — целое число от 1 или пусто');
+    const bd = Number(beforeDays), ad = Number(afterDays);
+    if (![bd, ad].every(n => Number.isInteger(n) && n >= 7 && n <= 90)) return setLocalErr('Окна замера — от 7 до 90 дней');
     setLocalErr(null);
     onSubmit({
       title: title.trim(),
@@ -45,6 +54,9 @@ export function TrainingForm({
       durationMin: d,
       place: place.trim() || null,
       capacity: cap,
+      metricIds,
+      measureBeforeDays: bd,
+      measureAfterDays: ad,
     });
   };
 
@@ -80,6 +92,29 @@ export function TrainingForm({
         Место или ссылка
         <input className={INPUT} value={place} onChange={e => setPlace(e.target.value)} maxLength={500} placeholder="Переговорная 3 или https://…" />
       </label>
+      <fieldset className="flex min-w-0 flex-col gap-3 rounded-lg border border-[var(--color-border)] p-3">
+        <legend className="px-1 text-[13px] font-medium">Оценка эффективности</legend>
+        <label className={LABEL}>
+          Какие показатели должно подтянуть обучение
+          <SearchMultiSelect options={metrics.map(m => ({ value: m.id, label: m.label }))} value={metricIds} onChange={setMetricIds}
+            allLabel="Не выбраны" unitLabel="показателя" searchPlaceholder="Поиск показателя" ariaLabel="Показатели обучения"
+            className="min-h-11 w-full min-w-0" />
+        </label>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className={LABEL}>
+            Окно «до», дней
+            <input type="number" inputMode="numeric" min={7} max={90} className={INPUT} value={beforeDays} onChange={e => setBeforeDays(e.target.value)} />
+          </label>
+          <label className={LABEL}>
+            Окно «после», дней
+            <input type="number" inputMode="numeric" min={7} max={90} className={INPUT} value={afterDays} onChange={e => setAfterDays(e.target.value)} />
+          </label>
+        </div>
+        <p className="text-[12px] text-[var(--color-text-muted)]">
+          Через {afterDays || '…'} дн. после обучения система сравнит показатели посетивших с теми же днями до него и с отделом.
+          Смена показателей или окон сбрасывает уже сделанные замеры.
+        </p>
+      </fieldset>
       {(localErr || error) && <p className="text-[13px] text-[var(--color-negative)]">{localErr ?? error}</p>}
       <div className="flex flex-wrap justify-end gap-2 pt-1">
         <button type="button" onClick={onCancel} disabled={pending}

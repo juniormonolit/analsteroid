@@ -1,13 +1,19 @@
 'use client';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { CalendarClock, CalendarCheck, CalendarX, MapPin, Pencil, RefreshCw, UserPlus, Users, X, Ban, ExternalLink } from 'lucide-react';
+import { CalendarClock, CalendarCheck, CalendarX, MapPin, Pencil, RefreshCw, UserPlus, Users, X, Ban, ExternalLink, Target } from 'lucide-react';
 import { SearchSelect } from '@/components/ui/SearchSelect';
+import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
+import type { TaskerMetric } from '../../types';
 import type { TrainingEvent, TrainingManagersResponse } from '../types';
+import { AttendanceBadge, EffectSummaryLine, MetricChips, OutcomeBadge, ResultLines } from './EffectBits';
 import { getJson } from './api';
 import { durationLabel, endOf, isUrl, mskDayLabel, mskTime, plural } from './format';
 
-/** Содержимое карточки обучения (в Drawer): детали, записанные, запись/отписка, действия тренера. */
+/**
+ * Содержимое карточки обучения (в Drawer): детали, показатели и сводка эффективности, записанные (цель, посещение,
+ * замер), запись с целью / отписка, действия тренера (правка, отмена, посещаемость, календарь).
+ */
 export function TrainingDetails({
   event,
   canManage,
@@ -19,19 +25,28 @@ export function TrainingDetails({
   onEdit,
   onCancelEvent,
   onResync,
+  onAttendance,
+  metrics,
 }: {
   event: TrainingEvent;
   canManage: boolean;
   canEnroll: boolean;
   busy: boolean;
   error: string | null;
-  onEnroll: (managerId: number) => void;
+  onEnroll: (managerId: number, goalMetricIds: string[], goalNote: string) => void;
+  onAttendance: (managerId: number, attended: boolean | null) => void;
+  metrics: TaskerMetric[];
   onUnenroll: (managerId: number) => void;
   onEdit: () => void;
   onCancelEvent: () => void;
   onResync: () => void;
 }) {
   const [pick, setPick] = useState('');
+  const [goals, setGoals] = useState<string[]>(event.metricIds);
+  const [note, setNote] = useState('');
+  const metricMap = useMemo(() => new Map(metrics.map(m => [m.id, m])), [metrics]);
+  const metricOptions = useMemo(() => metrics.map(m => ({ value: m.id, label: m.label })), [metrics]);
+  const started = new Date(event.startsAt).getTime() <= Date.now();
   const ended = endOf(event.startsAt, event.durationMin).getTime() <= Date.now();
   const cancelled = !!event.cancelledAt;
   const full = event.capacity != null && event.enrolledCount >= event.capacity;
@@ -72,6 +87,19 @@ export function TrainingDetails({
 
       {event.description && <p className="whitespace-pre-wrap break-words rounded-lg bg-[var(--color-bg-hover)] px-3 py-2 leading-relaxed">{event.description}</p>}
 
+      {(event.metricIds.length > 0 || (started && !cancelled)) && (
+        <section className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-2">
+          <h3 className="flex items-center gap-2 text-[13px] font-semibold"><Target size={15} /> Эффективность</h3>
+          {event.metricIds.length > 0
+            ? <p className="flex min-w-0 flex-wrap items-center gap-1.5 text-[12.5px] text-[var(--color-text-secondary)]">Показатели: <MetricChips ids={event.metricIds} metrics={metricMap} /></p>
+            : <p className="text-[12.5px] text-[var(--color-text-muted)]">Показатели не привязаны — замеряются только цели записанных.</p>}
+          <p className="text-[12px] text-[var(--color-text-muted)]">
+            Замер: {event.measureBeforeDays} дн. до обучения против {event.measureAfterDays} дн. после; считается только у тех, кто был.
+          </p>
+          {!cancelled && <EffectSummaryLine s={event.effect} started={started} />}
+        </section>
+      )}
+
       {canManage && (
         <div className={`flex min-w-0 flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-[13px] ${event.calendar.state === 'failed' ? 'border-[var(--color-negative)]' : 'border-[var(--color-border)]'}`}>
           {event.calendar.state === 'synced' ? <CalendarCheck size={15} className="shrink-0 text-[var(--color-positive)]" /> : <CalendarX size={15} className="shrink-0" />}
@@ -106,6 +134,7 @@ export function TrainingDetails({
         </h3>
 
         {canEnroll && open && (
+          <div className="flex min-w-0 flex-col gap-2">
           <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
             <SearchSelect
               options={options}
@@ -119,10 +148,26 @@ export function TrainingDetails({
               className="min-h-11 min-w-0 flex-1"
             />
             <button type="button" disabled={!pick || full || busy}
-              onClick={() => { onEnroll(Number(pick)); setPick(''); }}
+              onClick={() => { onEnroll(Number(pick), goals, note); setPick(''); setNote(''); setGoals(event.metricIds); }}
               className="inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-4 font-medium text-white disabled:opacity-50">
               <UserPlus size={15} /> Записать менеджера
             </button>
+          </div>
+          {pick && (
+            <div className="flex min-w-0 flex-col gap-2 rounded-lg bg-[var(--color-bg-hover)] p-2">
+              <label className="flex min-w-0 flex-col gap-1 text-[12.5px] text-[var(--color-text-secondary)]">
+                Цель — какие показатели подтянуть
+                <SearchMultiSelect options={metricOptions} value={goals} onChange={setGoals} allLabel="Без показателя"
+                  unitLabel="показателя" searchPlaceholder="Поиск показателя" ariaLabel="Показатели цели" className="min-h-11 w-full min-w-0" />
+              </label>
+              <label className="flex min-w-0 flex-col gap-1 text-[12.5px] text-[var(--color-text-secondary)]">
+                Зачем отправляете
+                <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} maxLength={2000}
+                  placeholder="Например: просел CR ППП, теряет клиентов после КП"
+                  className="min-h-11 w-full min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base sm:text-sm outline-none focus:border-[var(--color-accent)]" />
+              </label>
+            </div>
+          )}
           </div>
         )}
         {error && <p className="text-[13px] text-[var(--color-negative)]">{error}</p>}
@@ -132,12 +177,36 @@ export function TrainingDetails({
         ) : (
           <ul className="flex min-w-0 flex-col divide-y divide-[var(--color-border)] rounded-lg border border-[var(--color-border)]">
             {event.attendees.map(a => (
-              <li key={a.manager.id} className="flex min-w-0 items-center justify-between gap-2 px-3 py-2">
-                <span className="min-w-0">
-                  <span className="block truncate font-medium">{a.manager.name}</span>
+              <li key={a.manager.id} className="flex min-w-0 items-start justify-between gap-2 px-3 py-2">
+                <span className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span className="min-w-0 truncate font-medium">{a.manager.name}</span>
+                    {started && !cancelled && <AttendanceBadge attended={a.attended} />}
+                    {a.outcome && <OutcomeBadge outcome={a.outcome} />}
+                  </span>
                   <span className="block truncate text-[12px] text-[var(--color-text-muted)]">
                     {[a.departmentName, a.enrolledBy ? `записал(а) ${a.enrolledBy}` : null, a.taskerTaskId ? 'из задачи' : null].filter(Boolean).join(' · ')}
                   </span>
+                  {(a.goalMetricIds.length > 0 || a.goalNote) && (
+                    <span className="flex min-w-0 flex-col gap-0.5 text-[12px] text-[var(--color-text-secondary)]">
+                      {a.goalMetricIds.length > 0 && <span className="flex min-w-0 flex-wrap items-center gap-1">Цель: <MetricChips ids={a.goalMetricIds} metrics={metricMap} /></span>}
+                      {a.goalNote && <span className="break-words">«{a.goalNote}»</span>}
+                    </span>
+                  )}
+                  {canManage && started && !cancelled && (
+                    <span className="flex flex-wrap gap-1.5" role="group" aria-label={`Посещение: ${a.manager.name}`}>
+                      {([true, false] as const).map(v => (
+                        <button key={String(v)} type="button" disabled={busy} aria-pressed={a.attended === v}
+                          onClick={() => onAttendance(a.manager.id, a.attended === v ? null : v)}
+                          className={`min-h-11 rounded-lg border px-3 text-[13px] ${a.attended === v
+                            ? v ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white' : 'border-[var(--color-negative)] text-[var(--color-negative)]'
+                            : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'}`}>
+                          {v ? 'Был' : 'Не был'}
+                        </button>
+                      ))}
+                    </span>
+                  )}
+                  <ResultLines results={a.results} metrics={metricMap} />
                 </span>
                 {a.canUnenroll && open && (
                   <button type="button" aria-label={`Отписать ${a.manager.name}`} title="Отписать" disabled={busy}

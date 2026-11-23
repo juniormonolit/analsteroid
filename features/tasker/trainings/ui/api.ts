@@ -20,8 +20,13 @@ export const updateTraining = (id: number, input: Partial<TrainingEventInput>) =
 export const cancelTraining = (id: number) =>
   call<TrainingEventResponse>(`/api/tasker/trainings/${id}`, { method: 'DELETE' });
 
-export const enrollManager = (id: number, managerId: number) =>
-  call<TrainingEventResponse>(`/api/tasker/trainings/${id}/enroll`, { method: 'POST', body: JSON.stringify({ managerId }) });
+export const enrollManager = (id: number, managerId: number, goalMetricIds?: string[], goalNote?: string) =>
+  call<TrainingEventResponse>(`/api/tasker/trainings/${id}/enroll`, {
+    method: 'POST', body: JSON.stringify({ managerId, goalMetricIds, goalNote: goalNote?.trim() || null }),
+  });
+
+export const setAttendance = (id: number, managerId: number, attended: boolean | null) =>
+  call<TrainingEventResponse>(`/api/tasker/trainings/${id}/attendance`, { method: 'POST', body: JSON.stringify({ managerId, attended }) });
 
 export const unenrollManager = (id: number, managerId: number) =>
   call<TrainingEventResponse>(`/api/tasker/trainings/${id}/enroll`, { method: 'DELETE', body: JSON.stringify({ managerId }) });

@@ -1,6 +1,7 @@
 // Фоновая задача Задачника (instrumentation.ts → scheduleTasker, имя для BACKGROUND_JOBS_ALLOW: «tasker»):
 //  - каждую минуту — дослать в Битрикс всё, что не ушло с первого раза (outbox);
-//  - раз в 15 минут — автозамер задач с наступившей контрольной датой.
+//  - раз в 15 минут — автозамер задач с наступившей контрольной датой;
+//  - обучения (features/tasker/trainings/engine/measure.ts → trainingsTick): запись из задач, замер эффективности.
 // Один исполнитель на кластер — advisory lock на отдельном соединении.
 import { systemDb } from '@/lib/db/clients';
 import { drainAll } from './bitrix';
@@ -21,7 +22,10 @@ export async function taskerTick(): Promise<{ drained: number; measured: number;
         lastMeasure = Date.now();
         m = await measureDue();
       }
-      return { drained: d.done, ...m };
+      // Обучения (сессия D): запись «из формы задачи» + замер эффективности (свой интервал внутри).
+      const { trainingsTick } = await import('../trainings/engine/measure');
+      const t = await trainingsTick();
+      return { drained: d.done, measured: m.measured + t.measured, failed: m.failed + t.failed };
     } finally {
       await client.query(`SELECT pg_advisory_unlock(hashtext('tasker_job'))`).catch(() => {});
     }

@@ -17,6 +17,11 @@ export async function withTrainingActor(
     if (e instanceof TrainingError) {
       return NextResponse.json({ error: e.message, code: e.status === 403 ? 'forbidden' : 'bad_request' }, { status: e.status });
     }
+    // Миграция ещё не накачена (нет таблицы/колонки обучений) — понятный ответ вместо 500.
+    const code = (e as { code?: string })?.code;
+    if ((code === '42P01' || code === '42703') && /tasker_/.test(e instanceof Error ? e.message : '')) {
+      return NextResponse.json({ error: 'Обучения ещё не развёрнуты: не применена миграция 275/277' }, { status: 503 });
+    }
     console.error(`[tasker/trainings ${tag}]`, e instanceof Error ? e.message : e);
     return NextResponse.json({ error: 'Не удалось выполнить запрос' }, { status: 500 });
   }

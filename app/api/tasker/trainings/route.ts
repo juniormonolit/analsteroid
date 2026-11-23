@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createEvent, listEvents } from '@/features/tasker/trainings/engine';
+import { createEvent, listEvents, publicMetrics } from '@/features/tasker/trainings/engine';
 import type { TrainingEventResponse, TrainingsResponse } from '@/features/tasker/trainings/types';
 import { dateParam, NO_STORE, withTrainingActor } from './_shared';
 
@@ -11,13 +11,13 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   return withTrainingActor('GET', async actor => {
     const sp = req.nextUrl.searchParams;
-    const events = await listEvents(actor, {
+    const [events, metrics] = await Promise.all([listEvents(actor, {
       from: dateParam(sp.get('from')),
       to: dateParam(sp.get('to')),
       upcoming: sp.get('upcoming') === '1',
       includeCancelled: sp.get('includeCancelled') === '1',
-    });
-    const body: TrainingsResponse = { events, canManage: actor.canManage, canEnroll: actor.canEnroll };
+    }), publicMetrics()]);
+    const body: TrainingsResponse = { events, canManage: actor.canManage, canEnroll: actor.canEnroll, metrics };
     return NextResponse.json(body, { headers: NO_STORE });
   });
 }

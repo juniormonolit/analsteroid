@@ -41,3 +41,31 @@ export function plural(n: number, one: string, few: string, many: string): strin
   if (b === 1) return one;
   return many;
 }
+
+type MetricFormat = 'percent' | 'money' | 'number';
+
+/** Значение показателя (как fmtValue ядра). */
+export function fmtMetric(v: number | null | undefined, format: MetricFormat): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  if (format === 'percent') return `${v.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`;
+  if (format === 'money') return `${Math.round(v).toLocaleString('ru-RU')} ₽`;
+  return v.toLocaleString('ru-RU', { maximumFractionDigits: 1 });
+}
+
+/** Изменение «после − до»: проценты — в п.п., со знаком. */
+export function fmtDelta(d: number | null | undefined, format: MetricFormat): string {
+  if (d === null || d === undefined || !Number.isFinite(d)) return '—';
+  const sign = d > 0 ? '+' : d < 0 ? '−' : '±';
+  const a = Math.abs(d);
+  if (format === 'percent') return `${sign}${a.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} п.п.`;
+  if (format === 'money') return `${sign}${Math.round(a).toLocaleString('ru-RU')} ₽`;
+  return `${sign}${a.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}`;
+}
+
+/** Цвет изменения с учётом направления показателя. */
+export function deltaTone(d: number | null | undefined, higherIsBetter: boolean): string {
+  if (d === null || d === undefined || !Number.isFinite(d) || d === 0) return 'text-[var(--color-text-muted)]';
+  return (d > 0) === higherIsBetter ? 'text-[var(--color-positive)]' : 'text-[var(--color-negative)]';
+}
+
+export const fmtShortDate = (ymd: string) => ymd.split('-').reverse().slice(0, 2).join('.');

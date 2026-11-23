@@ -12,6 +12,7 @@ import {
   type Snapshot, type TaskerPatchableStatus, type TaskerSnapshotResponse, type TaskerTask,
 } from '../../types';
 import { VERDICT_CLS, fmtD, fmtDT, fmtValue, isOverdue, mskDay, todayMsk } from './format';
+import { ManagerTrainingHistory } from '@/features/tasker/trainings/ui/ManagerTrainingHistory';
 
 export const PATCHABLE: TaskerPatchableStatus[] = ['new', 'in_progress', 'awaiting_control', 'done'];
 
@@ -151,6 +152,14 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
               ))}
             </ul>
             <p className="mt-1 text-xs text-[var(--color-text-muted)]">Отмечает менеджер в чек-листе задачи Битрикса.</p>
+          </section>
+        )}
+
+        {/* Обучения менеджера (сессия D): на что, зачем, кто отправил, был ли, что изменилось. */}
+        {!mock && (
+          <section aria-label="Обучения менеджера" className="min-w-0">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Обучения менеджера</h3>
+            <ManagerTrainingHistory managerId={t.manager.id} compact />
           </section>
         )}
 

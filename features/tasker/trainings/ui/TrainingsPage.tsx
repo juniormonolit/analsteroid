@@ -1,19 +1,20 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, CalendarPlus, GraduationCap, MapPin, Users } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import type { TrainingEvent, TrainingEventInput, TrainingsResponse } from '../types';
+import type { TrainingEvent, TrainingEventInput, TrainingEventResponse, TrainingsResponse } from '../types';
 import {
-  TRAININGS_KEY, cancelTraining, createTraining, enrollManager, getJson, resyncTraining, unenrollManager, updateTraining,
+  TRAININGS_KEY, cancelTraining, createTraining, enrollManager, getJson, resyncTraining, setAttendance, unenrollManager, updateTraining,
 } from './api';
 import { addDaysKey, durationLabel, endOf, mskDateKey, mskDayLabel, mskTime } from './format';
 import { TrainingDetails } from './TrainingDetails';
 import { TrainingForm } from './TrainingForm';
+import { EffectivenessView } from './EffectivenessView';
 
-type Mode = 'upcoming' | 'past';
+type Mode = 'upcoming' | 'past' | 'effect';
 type Panel = { kind: 'view'; id: number } | { kind: 'edit'; id: number } | { kind: 'create' } | null;
 
 const TAB = 'min-h-11 rounded-lg px-4 text-sm font-medium';
@@ -25,16 +26,28 @@ export function TrainingsPage() {
   const [panel, setPanel] = useState<Panel>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [linkManager, setLinkManager] = useState<string | null>(null);
+
+  // Ссылки: ?event=ID (из описания задачи Битрикса), ?tab=effect&manager=ID (история из карточки задачи).
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const ev = Number(sp.get('event'));
+    if (Number.isInteger(ev) && ev > 0) setPanel({ kind: 'view', id: ev });
+    if (sp.get('tab') === 'effect') setMode('effect');
+    const m = sp.get('manager');
+    if (m && /^\d+$/.test(m)) setLinkManager(m);
+  }, []);
 
   const today = mskDateKey(new Date());
-  const url = mode === 'upcoming'
+  const url = mode !== 'past'
     ? '/api/tasker/trainings?upcoming=1&includeCancelled=1'
     : `/api/tasker/trainings?from=${addDaysKey(today, -90)}&to=${today}&includeCancelled=1`;
-  const q = useQuery({ queryKey: [...TRAININGS_KEY, mode], queryFn: () => getJson<TrainingsResponse>(url) });
+  const listMode = mode === 'effect' ? 'upcoming' : mode;
+  const q = useQuery({ queryKey: [...TRAININGS_KEY, listMode], queryFn: () => getJson<TrainingsResponse>(url) });
 
   const events = useMemo(() => {
     const list = q.data?.events ?? [];
-    if (mode === 'upcoming') return list;
+    if (mode !== 'past') return list;
     const now = Date.now();
     return list.filter(e => endOf(e.startsAt, e.durationMin).getTime() <= now).reverse();
   }, [q.data, mode]);
@@ -49,7 +62,17 @@ export function TrainingsPage() {
 
   const canManage = q.data?.canManage ?? false;
   const canEnroll = q.data?.canEnroll ?? false;
-  const current = panel && panel.kind !== 'create' ? events.find(e => e.id === panel.id) ?? null : null;
+  const panelId = panel && panel.kind !== 'create' ? panel.id : null;
+  const inList = panelId !== null ? events.find(e => e.id === panelId) ?? null : null;
+  // Событие не из текущего списка (прошедшее, отменённое, по ссылке) — грузим отдельно.
+  const single = useQuery({
+    queryKey: [...TRAININGS_KEY, 'one', panelId],
+    queryFn: () => getJson<TrainingEventResponse>(`/api/tasker/trainings/${panelId}`),
+    enabled: panelId !== null && !inList && !q.isLoading,
+    retry: false,
+  });
+  const current = inList ?? single.data?.event ?? null;
+  const metrics = q.data?.metrics ?? [];
 
   const refresh = () => qc.invalidateQueries({ queryKey: TRAININGS_KEY });
   const mut = useMutation({
@@ -86,15 +109,17 @@ export function TrainingsPage() {
         </header>
 
         <div className="flex flex-wrap gap-2" role="tablist">
-          {(['upcoming', 'past'] as const).map(m => (
+          {(['upcoming', 'past', 'effect'] as const).map(m => (
             <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setMode(m)}
               className={`${TAB} ${mode === m ? 'bg-[var(--color-accent)] text-white' : 'border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'}`}>
-              {m === 'upcoming' ? 'Ближайшие' : 'Прошедшие (90 дней)'}
+              {m === 'upcoming' ? 'Ближайшие' : m === 'past' ? 'Прошедшие (90 дней)' : 'Эффективность'}
             </button>
           ))}
         </div>
 
-        {q.isLoading ? (
+        {mode === 'effect' ? (
+          <EffectivenessView canPickManager={canEnroll || canManage} initialManager={linkManager} />
+        ) : q.isLoading ? (
           <p className="text-sm text-[var(--color-text-muted)]">Загружаю расписание…</p>
         ) : q.isError ? (
           <p className="text-sm text-[var(--color-negative)]">{(q.error as Error).message}</p>
@@ -124,10 +149,10 @@ export function TrainingsPage() {
         title={panel?.kind === 'create' ? 'Новое обучение' : panel?.kind === 'edit' ? 'Изменить обучение' : 'Обучение'}
       >
         {panel?.kind === 'create' && (
-          <TrainingForm pending={mut.isPending} error={err} onSubmit={save} onCancel={() => setPanel(null)} />
+          <TrainingForm metrics={metrics} pending={mut.isPending} error={err} onSubmit={save} onCancel={() => setPanel(null)} />
         )}
         {panel?.kind === 'edit' && current && (
-          <TrainingForm key={current.id} initial={current} pending={mut.isPending} error={err} onSubmit={save}
+          <TrainingForm key={current.id} metrics={metrics} initial={current} pending={mut.isPending} error={err} onSubmit={save}
             onCancel={() => openPanel({ kind: 'view', id: current.id })} />
         )}
         {panel?.kind === 'view' && current && (
@@ -137,7 +162,9 @@ export function TrainingsPage() {
             canEnroll={canEnroll}
             busy={mut.isPending}
             error={err}
-            onEnroll={id => run(() => enrollManager(current.id, id))}
+            metrics={metrics}
+            onEnroll={(id, goals, note) => run(() => enrollManager(current.id, id, goals, note))}
+            onAttendance={(id, attended) => run(() => setAttendance(current.id, id, attended))}
             onUnenroll={id => run(() => unenrollManager(current.id, id))}
             onEdit={() => openPanel({ kind: 'edit', id: current.id })}
             onCancelEvent={() => setConfirmCancel(true)}
@@ -145,7 +172,7 @@ export function TrainingsPage() {
           />
         )}
         {panel && panel.kind !== 'create' && !current && (
-          <p className="text-sm text-[var(--color-text-muted)]">{q.isFetching ? 'Загружаю…' : 'Обучение не найдено в текущем списке.'}</p>
+          <p className="text-sm text-[var(--color-text-muted)]">{q.isFetching || single.isFetching ? 'Загружаю…' : 'Обучение не найдено.'}</p>
         )}
       </Drawer>
 
