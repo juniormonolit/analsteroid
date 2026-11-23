@@ -27,7 +27,9 @@ export function useTaskChecks(taskIds: number[], enabled: boolean) {
       const out: Record<string, TaskCheckState> = {};
       for (let i = 0; i < taskIds.length; i += 300) {
         const r = await fetch(`/api/ai-analysis/task-check?taskIds=${taskIds.slice(i, i + 300).join(',')}`);
-        if (r.ok) Object.assign(out, await r.json());
+        // Сбой — ошибка запроса (react-query повторит), а не пустой ответ: пустой рисовался как «звонков нет» (23.11).
+        if (!r.ok) throw new Error(`task-check ${r.status}`);
+        Object.assign(out, await r.json());
       }
       return out;
     },
@@ -40,7 +42,8 @@ export function useTaskChecks(taskIds: number[], enabled: boolean) {
 /** Подписи меняет канбан больших чеков (там чек-лист большой сделки, а не проверка пунктов задачи). */
 export interface TaskCheckLabels { title?: string; empty?: string; run?: string }
 /** onAsk — канбан больших чеков (собрание РОПов 18.11): «все красные и жёлтые — одной кнопкой требованием менеджеру». */
-export function TaskCheckPanel({ taskId, state, labels, onAsk }: { taskId: number; state: TaskCheckState | undefined; labels?: TaskCheckLabels; onAsk?: (items: string[]) => void }) {
+/** failed — состояние не загрузилось (сбой БД): не писать «звонков нет», а честно «не загрузилось». */
+export function TaskCheckPanel({ taskId, state, labels, onAsk, failed = false, onRetry }: { taskId: number; state: TaskCheckState | undefined; labels?: TaskCheckLabels; onAsk?: (items: string[]) => void; failed?: boolean; onRetry?: () => void }) {
   const qc = useQueryClient();
   const [runId, setRunId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -70,7 +73,10 @@ export function TaskCheckPanel({ taskId, state, labels, onAsk }: { taskId: numbe
         {v && <span className="rounded px-1.5 py-0.5 text-[11.5px] font-semibold" style={{ background: v.bg, color: v.fg }}>{v.label}</span>}
         {row?.status === 'done' && <span className="text-[11px] text-[var(--color-text-muted)]">проверено {new Date(row.createdAt).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Moscow' })}</span>}
       </div>
-      {!state?.hasCall && !res && <p className="text-[var(--color-text-muted)]">{labels?.empty ?? 'После постановки задачи звонков с расшифровкой нет — проверять нечего.'}</p>}
+      {!state && !res && (failed
+        ? <p className="flex flex-wrap items-center gap-2 text-[var(--color-text-muted)]">Не удалось проверить звонки — база не ответила.{onRetry && <button type="button" onClick={onRetry} className="tap-target underline">Повторить</button>}</p>
+        : <p className="text-[var(--color-text-muted)]">Проверяю звонки по сделке…</p>)}
+      {state && !state.hasCall && !res && <p className="text-[var(--color-text-muted)]">{labels?.empty ?? 'После постановки задачи звонков с расшифровкой нет — проверять нечего.'}</p>}
       {res && res.items.length > 0 && (
         <ul className="flex flex-col gap-1">
           {res.items.map((it, i) => (

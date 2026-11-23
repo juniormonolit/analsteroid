@@ -129,7 +129,9 @@ export function CallsTab({ taskId, contactId, companyId, mock }: { taskId: numbe
   const list = useQuery<{ calls: CallListItem[] }>({
     queryKey: [...listKey, mockTranscribed],
     enabled: !!mock || !!qs,
-    retry: false,
+    // Сбой БД (таймауты пула 23.11 — Осипов: «звонки в большие не подсасываются») — повторить дважды; 4xx — сразу.
+    retry: (n, e) => n < 2 && ((e as { status?: number }).status ?? 500) >= 500,
+    retryDelay: n => 1500 * (n + 1),
     staleTime: 60_000,
     queryFn: () => (mock ? Promise.resolve({ calls: mockCalls(mockTranscribed) }) : getJson(`/api/big-deals-kanban/task/${taskId}/calls`)),
   });
@@ -211,8 +213,13 @@ export function CallsTab({ taskId, contactId, companyId, mock }: { taskId: numbe
   if (!mock && !qs) return <div className="p-4 text-[14px] text-[var(--color-text-muted)]">У задачи нет заказчика — звонков не найти.</div>;
   if (list.isLoading) return <div className="flex items-center gap-2 p-4 text-[14px] text-[var(--color-text-muted)]"><Loader2 size={16} className="animate-spin" /> Загружаем звонки…</div>;
   if (list.isError) {
-    const status = (list.error as { status?: number }).status;
-    return <div className="p-4 text-[14px] text-[var(--color-text-muted)]">{(list.error as Error).message}</div>;
+    const status = (list.error as { status?: number }).status ?? 500;
+    return (
+      <div className="flex flex-wrap items-center gap-2 p-4 text-[14px] text-[var(--color-text-muted)]">
+        <span>{status >= 500 ? 'Звонки не загрузились — база не ответила. Это не значит, что звонков нет.' : (list.error as Error).message}</span>
+        {status >= 500 && <button type="button" onClick={() => void list.refetch()} className="min-h-11 rounded-md border border-[var(--color-border)] px-3 text-[13px] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] sm:min-h-8">Повторить</button>}
+      </div>
+    );
   }
   if (!calls.length) return <div className="p-4 text-[14px] text-[var(--color-text-muted)]">Звонков по заказчику нет.</div>;
 

@@ -28,7 +28,7 @@ import type { BigPerson, BigRelatedTask, BigTaskCard } from '../engine/types';
 import type { BigChatMessage, BigTaskDetails } from '../engine/taskDetails';
 import { CallsTab } from './CallsTab';
 import { STATE_META, cardAmount, fmtDT, money } from './format';
-import { TaskChat } from './TaskDrawerChat';
+import { ChatFileLink, TaskChat } from './TaskDrawerChat';
 import { TaskActions } from './TaskDrawerActions';
 import { Section } from './TaskDrawerShared';
 import { ParticipantsField } from './ParticipantsField';
@@ -124,6 +124,7 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
             <span className="flex flex-wrap gap-1.5 sm:ml-auto">
               {d?.phone && <PhoneLink phone={d.phone} />}
               <a href={card.url} target="_blank" rel="noreferrer" className={linkBtn} title="Задача в Битриксе"><ExternalLink size={12} /> Задача № {card.id}</a>
+              <CopyCardLink taskId={card.id} />
               {deal && <a href={deal.url} target="_blank" rel="noreferrer" className={linkBtn} title="Сделка в Битриксе"><ExternalLink size={12} /> Сделка № {deal.id}</a>}
             </span>
           </div>
@@ -167,7 +168,7 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
                 </Section>
               )}
               {canManage && !mock && (
-                <TaskCheckPanel taskId={card.id} state={checks.data?.[String(card.id)]} labels={BIG_CHECK_LABELS} onAsk={askItems} />
+                <TaskCheckPanel taskId={card.id} state={checks.data?.[String(card.id)]} labels={BIG_CHECK_LABELS} onAsk={askItems} failed={checks.isError} onRetry={() => void checks.refetch()} />
               )}
               {card.related.length > 0 && (
                 <button type="button" onClick={() => setPane('tasks')} className="inline-flex min-h-11 items-center gap-1.5 self-start rounded-md border border-[var(--color-border)] px-3 text-[12.5px] hover:bg-[var(--color-bg-hover)]">
@@ -255,7 +256,7 @@ function RelatedChat({ taskId, rel, mock }: { taskId: number; rel: BigRelatedTas
         <div key={m.id} className="min-w-0 rounded-lg bg-[var(--color-bg-hover)] px-2.5 py-1.5">
           <div className="text-[11px] text-[var(--color-text-muted)]">{m.author ?? m.authorId} · {fmtDT(m.at)}</div>
           {m.text && <div className="whitespace-pre-wrap break-words">{m.text}</div>}
-          {m.files?.map((f, i) => <div key={i} className="truncate text-[12px] text-[var(--color-text-secondary)]">📎 {f}</div>)}
+          {m.files?.map((f, i) => <ChatFileLink key={i} file={f} />)}
         </div>
       ))}
       <a href={rel.url} target="_blank" rel="noreferrer" className={`${linkBtn} self-start`}><ExternalLink size={12} /> Открыть в Битриксе — ответить</a>
@@ -280,5 +281,20 @@ function PhoneLink({ phone }: { phone: string }) {
         {copied ? <Check size={13} className="text-[var(--color-positive)]" /> : <Copy size={13} />}
       </button>
     </span>
+  );
+}
+
+/** Ссылка на эту карточку в Монолитике (Осипов 23.11: «надо копировать ссылку на карточку») — переслать в чат / себе. */
+function CopyCardLink({ taskId }: { taskId: number }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    const url = `${window.location.origin}/big-deals-kanban?task=${taskId}`;
+    try { await navigator.clipboard.writeText(url); } catch { window.prompt('Скопируйте ссылку на карточку', url); return; }
+    setCopied(true); setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <button type="button" onClick={copy} className={linkBtn} title="Скопировать ссылку на эту карточку в Монолитике">
+      {copied ? <Check size={12} className="text-[var(--color-positive)]" /> : <Link2 size={12} />} {copied ? 'Скопировано' : 'Ссылка на карточку'}
+    </button>
   );
 }

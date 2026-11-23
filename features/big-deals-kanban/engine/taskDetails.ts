@@ -1,11 +1,14 @@
 // Открытая карточка задачи канбана больших чеков: описание, товары сделки, чат задачи.
 // Всё — чтение Битрикса по запросу (открыли карточку), на доску не влияет.
 import { bx } from '@/lib/bitrix/notify';
-import { read } from '@/features/repeat-kanban/engine/createDeal';
+import { read, taskWebhook } from '@/features/repeat-kanban/engine/createDeal';
 import { stripBb } from '@/features/repeat-kanban/engine/taskNotes';
 import type { BxBigTask } from './actions';
 
-export interface BigChatMessage { id: number; author: string | null; authorId: string; at: string; text: string; system: boolean; /** Имена вложенных файлов (картинки и т.п.). */ files?: string[] }
+export interface BigChatMessage { id: number; author: string | null; authorId: string; at: string; text: string; system: boolean; /** Вложенные файлы (картинки и т.п.): имя и ссылка на просмотр в Битриксе. */ files?: BigChatFile[] }
+/** Файл из чата задачи. Вебхуку Битрикс не отдаёт ни имя, ни сам файл (disk.file.get — «нет доступа», проверено 23.11),
+ *  поэтому ссылка ведёт в Битрикс (/disk/showFile/{id}/) — откроется у того, кто залогинен в Битриксе и видит чат. */
+export interface BigChatFile { name: string; url: string | null }
 export interface BigDealProduct { name: string; qty: number; price: number; sum: number; unit: string | null }
 export interface BigTaskDetails {
   taskId: number;
@@ -131,6 +134,12 @@ interface ImMessage { id: number; author_id: number; date: string; text: string;
 interface ImUser { id: number; name: string }
 interface ImFile { id: number | string; name?: string }
 
+/** Просмотр файла Диска в Битриксе (портал — из вебхука задач). Нет портала — без ссылки. */
+function fileUrl(id: number | string): string | null {
+  if (!/^\d{1,12}$/.test(String(id))) return null;
+  try { return `${new URL(taskWebhook()).origin}/disk/showFile/${id}/?&ncc=1`; } catch { return null; }
+}
+
 export async function fetchChat(chatId: number): Promise<BigChatMessage[]> {
   const r = await read<{ messages?: ImMessage[]; users?: ImUser[]; files?: ImFile[] | Record<string, ImFile> }>('im.dialog.messages.get', { DIALOG_ID: `chat${chatId}`, LIMIT: 50 });
   const users = new Map((r?.users ?? []).map(u => [Number(u.id), u.name]));
@@ -140,7 +149,7 @@ export async function fetchChat(chatId: number): Promise<BigChatMessage[]> {
   // Сообщение с одной картинкой — пустой текст + params.FILE_ID. Раньше такие отбрасывались, и фото в ленте
   // Монолитики не было вовсе (18.11, РОП Осипов: «фотка не отправилась»).
   return (r?.messages ?? [])
-    .map(m => ({ m, text: stripBb(m.text ?? ''), files: (m.params?.FILE_ID ?? []).map(id => fileNames.get(Number(id)) ?? 'файл') }))
+    .map(m => ({ m, text: stripBb(m.text ?? ''), files: (m.params?.FILE_ID ?? []).map(id => ({ name: fileNames.get(Number(id)) ?? 'файл', url: fileUrl(id) })) }))
     .filter(x => x.text.length > 0 || x.files.length > 0)
     .sort((a, b) => a.m.date.localeCompare(b.m.date))
     .map(({ m, text, files }) => ({

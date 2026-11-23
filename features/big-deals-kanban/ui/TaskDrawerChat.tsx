@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { AtSign, Paperclip, Send } from 'lucide-react';
 import { AttachmentsRow, useAttachments } from '@/features/repeat-kanban/ui/Attachments';
 import type { BigTaskCard } from '../engine/types';
-import type { BigChatMessage } from '../engine/taskDetails';
+import type { BigChatFile, BigChatMessage } from '../engine/taskDetails';
 import { fmtDT } from './format';
 import { QuestionsBlock } from './QuestionsBlock';
 import { Section, postBigAction } from './TaskDrawerShared';
@@ -59,11 +59,7 @@ export function TaskChat({ card, messages, loading, onSent, questions, rop, inje
           <div key={m.id} className={`min-w-0 max-w-[90%] rounded-lg px-2.5 py-1.5 ${m.authorId === card.responsible.id ? 'self-start bg-[var(--color-bg-hover)]' : 'self-end bg-[var(--color-accent-soft)]'}`}>
             <div className="text-[11px] text-[var(--color-text-muted)]">{m.author ?? m.authorId} · {fmtDT(m.at)}</div>
             {m.text && <div className="whitespace-pre-wrap break-words">{m.text}</div>}
-            {m.files?.map((f, i) => (
-              <div key={i} className="flex min-w-0 items-center gap-1 text-[12.5px] text-[var(--color-text-secondary)]">
-                <Paperclip size={12} className="shrink-0" aria-hidden /><span className="min-w-0 truncate">{f}</span>
-              </div>
-            ))}
+            {m.files?.map((f, i) => <ChatFileLink key={i} file={f} />)}
           </div>
         ))}
       </div>
@@ -97,5 +93,20 @@ export function TaskChat({ card, messages, loading, onSent, questions, rop, inje
         </button>
       </div>
     </Section>
+  );
+}
+
+/** Файл в ленте чата (Осипов 23.11: «не открыть файл из чата») — ссылка в Битрикс, имя вебхуку неизвестно. */
+export function ChatFileLink({ file }: { file: BigChatFile }) {
+  const label = file.name === 'файл' ? 'Файл — открыть в Битриксе' : file.name;
+  return file.url ? (
+    <a href={file.url} target="_blank" rel="noreferrer" title="Откроется в Битриксе (нужен вход в Битрикс)"
+      className="flex min-h-8 min-w-0 items-center gap-1 text-[12.5px] text-[var(--color-accent)] underline">
+      <Paperclip size={12} className="shrink-0" aria-hidden /><span className="min-w-0 truncate">{label}</span>
+    </a>
+  ) : (
+    <div className="flex min-w-0 items-center gap-1 text-[12.5px] text-[var(--color-text-secondary)]">
+      <Paperclip size={12} className="shrink-0" aria-hidden /><span className="min-w-0 truncate">{file.name}</span>
+    </div>
   );
 }
