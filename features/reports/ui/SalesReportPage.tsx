@@ -54,6 +54,7 @@ import { RESPONSE_SLUG, RESPONSE_CATEGORIES_SLUG, RESPONSE_SLUGS, spPickKey } fr
 import { SupplyTasksDrill } from '@/features/realizations/ui/SupplyTasksDrill';
 import { LogistCallsDrill } from '@/features/realizations/ui/LogistCallsDrill';
 import { isCallMetric } from '@/lib/realizations/callMetrics';
+import { CreateTaskDrawer } from '@/features/tasker/ui/create/CreateTaskDrawer';
 import { REALIZATION_SLUGS, REGIONS_SLUG, LOGIST_DRILL_STATUS, LOGIST_METRICS, needsCallUpgrade, upgradeLogistView } from '@/lib/realizations/logistMetrics';
 
 
@@ -1308,6 +1309,25 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     [router, period]
   );
 
+  // «Поставить задачу» (Задачник, ТЗ ai_docs/fresh_docs/TASKER_SPEC.md): иконка у строки
+  // менеджера → форма. Только отчёт «по менеджерам» и право action.tasker.assign.
+  // Период — период отчёта; показатель — колонка сортировки, иначе первая колонка
+  // отчёта из белого списка (форма сама проверяет белый список). Мульти — в форме.
+  const canAssignTasks = hasPerm(currentUser ?? null, 'action.tasker.assign');
+  const [taskFor, setTaskFor] = useState<string | null>(null);
+  const handleCreateTask = useCallback((id: string) => setTaskFor(id), []);
+  const taskManagerOptions = useMemo(() => {
+    if (taskFor === null) return [];
+    const seen = new Set<string>();
+    const out: { value: string; label: string; hint: string | null }[] = [];
+    for (const r of (data?.rows as MergedRow[] | undefined) ?? []) {
+      if (r.dimensionId.startsWith('__') || seen.has(r.dimensionId)) continue;
+      seen.add(r.dimensionId);
+      out.push({ value: r.dimensionId, label: r.dimensionName, hint: r.teamName });
+    }
+    return out;
+  }, [taskFor, data]);
+
   const applyCellClick = useCallback(
     (id: string, name: string, metricId: string) => {
       const m = catalogMetrics.find((x: { id: string }) => x.id === metricId)
@@ -2113,6 +2133,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
               }),
             } : undefined}
             onSubtitleClick={dimensionType === 'manager' ? handleSubtitleClick : undefined}
+            onCreateTask={dimensionType === 'manager' && canAssignTasks ? handleCreateTask : undefined}
             // «Обычная» скрывает настройки колонок и drag-перетаскивание (п.3а спеки) —
             // не передаём обработчики вовсе, ReportTable сам не рендерит соответствующий UI.
             // Перемещение (←/→) и удаление метрики (onMetricRemove/MoveLeft/MoveRight) больше
@@ -2176,6 +2197,17 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
           без кнопки «Подробнее»): breakdownCtx собран из среза ОСНОВНОГО отчёта,
           а дровер живёт на своих local*-фильтрах/периоде — разбор сверял бы не
           ту ячейку, рядом с которой стояла кнопка (ревью 03.09). */}
+      {canAssignTasks && dimensionType === 'manager' && (
+        <CreateTaskDrawer
+          open={taskFor !== null}
+          onClose={() => setTaskFor(null)}
+          managerIds={taskFor ? [taskFor] : undefined}
+          metricId={sortBy ?? undefined}
+          metricCandidates={orderedMetrics.map((m: { id: string }) => m.id)}
+          period={period}
+          managerOptions={taskManagerOptions}
+        />
+      )}
       {clientMode && clientCardParam && /^[1-9]\d*$/.test(clientCardParam) && (
         <ClientCardDrawer contactId={clientCardParam} onClose={() => patchUrl({ client: null })} />
       )}

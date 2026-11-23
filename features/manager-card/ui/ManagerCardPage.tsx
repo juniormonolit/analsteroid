@@ -28,6 +28,7 @@ import { PlanFactStrip, usePlanFact } from './PlanFactStrip';
 import { LeaderSkills } from './LeaderSkills';
 import { ManagerDailySalesCard } from './ManagerDailySalesCard';
 import { Check, Eye, Lock } from 'lucide-react';
+import { CreateTaskButton } from '@/features/tasker/ui/create/CreateTaskButton';
 import type { CardSegment, ManagerCardResult, AxisUnit } from '@/features/manager-card/engine/managerCard';
 
 // Ответ карточки: у отдела к нему добавляется deptComparison (peerCount/
@@ -625,6 +626,16 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
               Поэтому на мобильном блок занимает всю ширину и переносится, а с sm —
               прежнее поведение (нерастяжимая группа справа). */}
           <div className="flex items-center gap-3 sm:gap-4 flex-wrap w-full sm:w-auto sm:shrink-0">
+            {/* «Поставить задачу» (Задачник) — только чужая карточка реального менеджера
+                (числовой Bitrix id; свой ЛК — managerId='my'/showBadges) и при праве
+                action.tasker.assign (проверяет сама кнопка). */}
+            {mode === 'manager' && !showBadges && /^\d+$/.test(managerId) && (
+              <CreateTaskButton
+                managerIds={[managerId]}
+                managerOptions={[{ value: managerId, label: data?.profile.name ?? managerName ?? `#${managerId}`, hint: data?.profile.department ?? null }]}
+                period={period}
+              />
+            )}
             {/* Кнопка «Копировать для отчёта» убрана (правка владельца 06.08:
                 «убери оттуда, у нас есть спец раздел для этого»): сборка отчёта
                 живёт в /profile/report, где для неё есть шаблоны, период и выбор

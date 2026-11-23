@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { ArrowUp, ArrowDown, ChartLine, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter, IdCard, Search, HelpCircle } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChartLine, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter, IdCard, ListPlus, Search, HelpCircle } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import { MetricInfoBody } from './MetricInfoBody';
 import { NO_DEAL_LIST_METRIC_IDS } from '@/features/reports/engine/drillRules';
@@ -140,6 +140,10 @@ interface Props {
   // мини-отчёт дрилл-дауна (MiniReport) переиспользует ReportTable, но кладёт в
   // dimensionSubtitle «· N сд.» — там этот проп не передаётся.
   onSubtitleClick?: (dimensionId: string, dimensionName: string) => void;
+  // «Поставить задачу» (Задачник, features/tasker/ui/create) — иконка рядом с карточкой
+  // менеджера. SalesReportPage передаёт ТОЛЬКО в отчёте «по менеджерам» и только при
+  // праве action.tasker.assign; рисуется лишь у реальных менеджеров (не у __-агрегатов).
+  onCreateTask?: (dimensionId: string, dimensionName: string) => void;
   // Быстрая кнопка «сравнение» в заголовке (п. Н5б спеки): включает/выключает режим
   // 'full' для ОДНОЙ метрики без похода в «Настроить». Владелец состояния
   // (SalesReportPage) должен запомнить, в какой режим возвращаться при повторном клике
@@ -307,7 +311,7 @@ export function ReportTable({
   dimensionLabel = 'Менеджер',
   secondColumn,
   highlights = {},
-  onRowClick, onCellClick, onSubtitleClick, onMetricChart,
+  onRowClick, onCellClick, onSubtitleClick, onCreateTask, onMetricChart,
   onMetricQuickCompareToggle,
   onMetricReorder,
   onMetricConfigure,
@@ -1218,6 +1222,8 @@ export function ReportTable({
     // SalesReportPage): у реальных менеджеров dimensionId — числовой bitrix id.
     const subtitleClick = onSubtitleClick && !row.dimensionId.startsWith('__')
       ? onSubtitleClick : undefined;
+    const createTaskClick = onCreateTask && !row.dimensionId.startsWith('__')
+      ? onCreateTask : undefined;
 
     return (
       <React.Fragment key={row.dimensionId}>
@@ -1334,6 +1340,16 @@ export function ReportTable({
                         className="hover-reveal report-card-icon flex-shrink-0 inline-flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors"
                       >
                         <IdCard size={18} />
+                      </button>
+                    )}
+                    {createTaskClick && (
+                      <button
+                        onClick={e => { e.stopPropagation(); createTaskClick(row.dimensionId, row.dimensionName); }}
+                        title="Поставить задачу"
+                        aria-label="Поставить задачу"
+                        className="hover-reveal tap-target report-card-icon flex-shrink-0 inline-flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors"
+                      >
+                        <ListPlus size={18} />
                       </button>
                     )}
                   </span>
