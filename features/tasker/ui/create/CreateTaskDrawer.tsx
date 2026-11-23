@@ -364,14 +364,21 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
           </Field>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Период снимка: с">
-            <input type="date" value={periodFrom} max={periodTo} onChange={e => setPeriodFrom(e.target.value)} className={INPUT} />
-          </Field>
-          <Field label="по">
-            <input type="date" value={periodTo} min={periodFrom} onChange={e => setPeriodTo(e.target.value)} className={INPUT} />
-          </Field>
-        </div>
+        {/* Период снимка нужен редко — свёрнут в строку под заголовком блока цифр (аудит 23.11: два поля дат
+            перед цифрами выглядели как обязательный технический шаг). */}
+        <details className="-mb-2 text-[13px] text-[var(--color-text-secondary)]">
+          <summary className="min-h-11 cursor-pointer content-center">
+            Цифры за {fmtPeriod(periodFrom)} – {fmtPeriod(periodTo)} · <span className="text-[var(--color-accent)]">изменить период</span>
+          </summary>
+          <div className="grid grid-cols-2 gap-3 pb-2">
+            <Field label="С">
+              <input type="date" value={periodFrom} max={periodTo} onChange={e => setPeriodFrom(e.target.value)} className={INPUT} />
+            </Field>
+            <Field label="По">
+              <input type="date" value={periodTo} min={periodFrom} onChange={e => setPeriodTo(e.target.value)} className={INPUT} />
+            </Field>
+          </div>
+        </details>
 
         <SnapshotBlock
           managerIds={managerIds} managerName={managerName} metric={metric}
@@ -503,6 +510,9 @@ function Banner({ tone, children }: { tone: 'warn' | 'error' | 'info'; children:
     </div>
   );
 }
+
+/** «2026-11-01» → «01.11» */
+const fmtPeriod = (ymd: string) => (/^\d{4}-\d{2}-\d{2}$/.test(ymd) ? `${ymd.slice(8)}.${ymd.slice(5, 7)}` : ymd || '…');
 
 function SnapshotBlock({ managerIds, managerName, metric, loading, error, data, ready }: {
   managerIds: string[]; managerName: (id: string) => string; metric: TaskerMetric | undefined;

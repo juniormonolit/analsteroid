@@ -20,8 +20,10 @@ import { SlotSettings } from './SlotSettings';
 type Mode = 'week' | 'queue' | 'upcoming' | 'past' | 'effect' | 'settings';
 type Panel = { kind: 'view'; id: number } | { kind: 'edit'; id: number } | { kind: 'create'; preset?: TrainingFormPreset } | null;
 const MODES: Mode[] = ['week', 'queue', 'upcoming', 'past', 'effect', 'settings'];
+// «Ближайшие» и «Прошедшие» — одна вкладка «Список» с переключателем периода (аудит 23.11, п.20).
+const TAB_MODES: Mode[] = ['week', 'queue', 'upcoming', 'effect', 'settings'];
 const MODE_LABEL: Record<Mode, string> = {
-  week: 'Неделя', queue: 'Очередь тренера', upcoming: 'Ближайшие', past: 'Прошедшие', effect: 'Эффективность', settings: 'Настройки',
+  week: 'Неделя', queue: 'Очередь тренера', upcoming: 'Список', past: 'Список', effect: 'Эффективность', settings: 'Настройки',
 };
 
 // Второй уровень вкладок (под вкладками Задачника) — лёгкий, с подчёркиванием, перенос строки вместо ленты (CLAUDE.md, п.12).
@@ -115,17 +117,26 @@ export function TrainingsPage() {
         <header className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
           <h1 className="text-xl font-semibold text-[var(--color-text)]">Задачник</h1>
           {canManage && (
+            <button type="button" onClick={() => setMode('settings')} aria-label="Настройки сетки" aria-pressed={mode === 'settings'}
+              className={`ml-auto inline-flex size-11 items-center justify-center rounded-lg border sm:hidden ${mode === 'settings' ? 'border-[var(--color-accent)] text-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text-secondary)]'}`}>
+              <Settings size={18} />
+            </button>
+          )}
+          {canManage && (
             <button type="button" onClick={() => openPanel({ kind: 'create' })}
-              className="ml-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-medium text-white hover:bg-[var(--color-accent-hover)]">
-              <CalendarPlus size={16} aria-hidden /> Новое обучение
+              className="inline-flex sm:ml-auto min-h-11 items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-medium text-white hover:bg-[var(--color-accent-hover)]">
+              <CalendarPlus size={16} aria-hidden /><span className="sm:hidden">Занятие</span><span className="hidden sm:inline">Новое обучение</span>
             </button>
           )}
         </header>
         <TaskerTabs active="trainings" />
 
         <div className="flex min-w-0 flex-wrap items-center gap-x-1 border-b border-[var(--color-border)]" role="tablist" aria-label="Обучения">
-          {MODES.filter(m => (m === 'settings' ? canManage : m === 'queue' ? canManage || canEnroll : true)).map(m => (
-            <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setMode(m)} className={subTab(mode === m)}>
+          {TAB_MODES.filter(m => (m === 'settings' ? canManage : m === 'queue' ? canManage || canEnroll : true)).map(m => {
+            const on = mode === m || (m === 'upcoming' && mode === 'past');
+            return (
+            // Телефон: «Настройки» — шестерёнкой в шапке, иначе она одна уезжала во второй ряд.
+            <button key={m} type="button" role="tab" aria-selected={on} onClick={() => { if (!on) setMode(m); }} className={`${subTab(on)} ${m === 'settings' ? 'max-sm:hidden' : ''}`}>
               {m === 'settings' && <Settings size={14} aria-hidden />}
               {/* На телефоне — короткие подписи, чтобы второй ряд вкладок не занимал полэкрана. */}
               {m === 'settings' ? <span className="sr-only sm:not-sr-only">{MODE_LABEL[m]}</span>
@@ -136,14 +147,27 @@ export function TrainingsPage() {
                 <span className="rounded-full bg-[var(--color-accent)] px-1.5 text-[11px] font-medium tabular-nums text-white">{queueCount}</span>
               )}
             </button>
-          ))}
+            );
+          })}
         </div>
 
-        {(mode === 'upcoming' || mode === 'past') && cancelledCount > 0 && (
+        {(mode === 'upcoming' || mode === 'past') && (
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <div className="inline-flex rounded-lg border border-[var(--color-border)] p-0.5" role="group" aria-label="Период">
+              {(['upcoming', 'past'] as const).map(m => (
+                <button key={m} type="button" aria-pressed={mode === m} onClick={() => setMode(m)}
+                  className={`min-h-10 rounded-md px-3 text-sm ${mode === m ? 'bg-[var(--color-accent)] text-white' : 'hover:bg-[var(--color-bg-hover)]'}`}>
+                  {m === 'upcoming' ? 'Ближайшие' : 'Прошедшие · 90 дней'}
+                </button>
+              ))}
+            </div>
+            {cancelledCount > 0 && (
           <label className="inline-flex min-h-11 items-center gap-2 self-start text-[13px] text-[var(--color-text-secondary)]">
             <input type="checkbox" checked={showCancelled} onChange={e => setShowCancelled(e.target.checked)} className="size-4 accent-[var(--color-accent)]" />
             показать отменённые ({cancelledCount})
           </label>
+            )}
+          </div>
         )}
 
         {mode === 'week' ? (

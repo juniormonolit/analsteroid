@@ -178,22 +178,31 @@ export function MeetingsPage({ canAssign }: { canAssign: boolean }) {
             </button>
           )}
         </header>
+        <TaskerTabs active="meetings" />
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <TaskerTabs active="meetings" />
           <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 text-sm text-[var(--color-text-secondary)]">
             <input type="checkbox" checked={showCancelled} onChange={e => setShowCancelled(e.target.checked)} className="size-4" />
             показать отменённые
           </label>
         </div>
-        <p className="text-sm text-[var(--color-text-muted)]">
-          Регулярные планёрки и разборы: серия встаёт одним повторяющимся событием в календарь организатора в Битриксе, встречи видны в «Неделе» и «Сегодня».
-        </p>
 
-        {q.error && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-negative)]">{q.error.message}</div>}
+        {q.error && (
+          <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-negative)]">
+            {q.error.message}<button type="button" onClick={() => q.refetch()} className="ml-2 underline">Повторить</button>
+          </div>
+        )}
         {q.isLoading && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">Загружаю собрания…</div>}
         {q.data && meetings.length === 0 && (
-          <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">
-            {canAssign ? 'Собраний пока нет — создайте первое кнопкой «Новое собрание».' : 'Собраний с вашим участием пока нет.'}
+          // Пояснение «что такое собрание» — здесь, в пустом состоянии, а не абзацем над списком (аудит 23.11, п.42).
+          <div className="flex min-w-0 flex-col items-center gap-3 rounded-xl border border-dashed border-[var(--color-border)] px-4 py-8 text-center text-sm text-[var(--color-text-muted)]">
+            <p className="font-medium text-[var(--color-text)]">{canAssign ? 'Собраний пока нет' : 'Собраний с вашим участием пока нет'}</p>
+            <p className="max-w-xl">Регулярные планёрки и разборы: серия встаёт одним повторяющимся событием в календарь организатора в Битриксе, встречи видны в «Неделе» и «Сегодня».</p>
+            {canAssign && (
+              <button type="button" onClick={() => { setErr(null); setOpenParam(''); setCreating(true); }}
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-4 font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">
+                <Plus size={16} aria-hidden /> Создать первое собрание
+              </button>
+            )}
           </div>
         )}
         <div className="grid min-w-0 grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">

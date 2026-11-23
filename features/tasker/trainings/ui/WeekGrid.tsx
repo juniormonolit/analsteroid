@@ -1,7 +1,7 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Lock, Plus, Users } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Lock, Plus, Users, X } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import type { TrainingEvent, TrainingQueueResponse, TrainingSlot, TrainingSlotsResponse, TrainingsResponse } from '../types';
 import { QUEUE_KEY, SLOTS_KEY, TRAININGS_KEY, getJson } from './api';
@@ -30,6 +30,10 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
   const today = mskDateKey(new Date());
   const [monday, setMonday] = useState(() => weekStart(today));
   const [pick, setPick] = useState<SlotPick | null>(null);
+  // Режим «тема выбрана»: свободные слоты подсвечены, клик — сборка с людьми этой темы.
+  const [focusTheme, setFocusTheme] = useState<string | null>(null);
+  // Телефон: показываем один день (лента дней сверху).
+  const [phoneDay, setPhoneDay] = useState<string | null>(null);
   const sunday = addDaysKey(monday, 6);
   const slotsQ = useQuery({ queryKey: SLOTS_KEY, queryFn: () => getJson<TrainingSlotsResponse>('/api/tasker/trainings/slots') });
   const evQ = useQuery({
@@ -82,8 +86,17 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
     return slot && !grid.evAt.has(`${d}|${t}`) && startMsOf(d, t) > nowMs;
   }).length, 0);
 
+  const queue = queueQ.data;
+  const waitingGroups = (queue?.groups ?? [])
+    .map(g => ({ id: g.metricId, label: g.label, items: g.items.filter(i => !i.event) }))
+    .filter(g => g.items.length > 0);
+  const waiting = waitingGroups.reduce((s, g) => s + g.items.length, 0);
+  const theme = waitingGroups.find(g => g.id === focusTheme) ?? null;
+
   const openSlot = (day: string, time: string, slot: TrainingSlot) => setPick({
     meta: slotMeta(slot),
+    // Тема выбрана — первые по давности из неё (до «обычно берём»).
+    preselect: theme ? theme.items.slice(0, queue?.group.target ?? 4).map(i => i.taskId) : undefined,
     preset: {
       startsAt: new Date(startMsOf(day, time)).toISOString(), durationMin: slot.durationMin, place: slot.place,
       slotId: slot.id, departmentLabel: slot.departmentLabel,
@@ -108,10 +121,16 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
           </span>
         )}
         {canManage ? (
+          // Свободный слот визуально пустой (20 одинаковых кнопок — шум): на мыши «+ Собрать занятие» проявляется
+          // по наведению/фокусу ячейки (hover-reveal), на таче виден только бледный «+», тап по ячейке — сборка.
+          // В режиме выбранной темы — подсвечен всегда.
           <button type="button" onClick={() => openSlot(day, time, slot)}
-            aria-label={`Собрать занятие: ${WEEKDAYS_SHORT[isoWeekday(day)]} ${ddmm(day)}, ${time}`}
-            className="inline-flex min-h-11 w-full min-w-0 items-center justify-center gap-1 rounded-lg border border-dashed border-[var(--color-border-strong,var(--color-border))] px-2 text-[12.5px] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)]">
-            <Plus size={14} className="shrink-0" /><span className="truncate">Собрать занятие</span>
+            aria-label={`Собрать занятие: ${WEEKDAYS_SHORT[isoWeekday(day)]} ${ddmm(day)}, ${time}${theme ? ` · ${theme.label}` : ''}`}
+            className={`group inline-flex min-h-11 w-full min-w-0 cursor-pointer items-center justify-center gap-1 rounded-lg px-2 text-[12.5px] text-[var(--color-accent)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${theme ? 'border border-dashed border-[var(--color-accent)] bg-[var(--color-bg)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
+            <span className={`inline-flex min-w-0 items-center gap-1 ${theme ? '' : 'hover-reveal'}`}>
+              <Plus size={14} className="shrink-0 opacity-70" />
+              <span className={`truncate ${theme ? '' : 'hidden pointer-fine:inline'}`}>{theme ? 'Собрать сюда' : 'Собрать занятие'}</span>
+            </span>
           </button>
         ) : (
           <span className="text-[12px] text-[var(--color-text-muted)]">свободно</span>
@@ -121,17 +140,30 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
   };
 
   // Полоса «что делать» над сеткой.
-  const queue = queueQ.data;
-  const waitingGroups = (queue?.groups ?? []).map(g => ({ label: g.label, n: g.items.filter(i => !i.event).length })).filter(g => g.n > 0);
-  const waiting = waitingGroups.reduce((s, g) => s + g.n, 0);
   const banner = !loading && !error && grid.rows.length > 0 && (
-    waiting > 0 ? (
+    theme ? (
+      <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-3 py-2 text-[13px]">
+        <span className="min-w-0 flex-1"><b>{theme.label}</b> — ждут {theme.items.length}. Выберите подсвеченный свободный слот: люди подставятся.</span>
+        <button type="button" onClick={() => setFocusTheme(null)} className="inline-flex min-h-11 items-center gap-1 rounded-lg px-3 text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">
+          <X size={14} /> Отменить
+        </button>
+      </div>
+    ) : waiting > 0 ? (
       <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-3 py-2.5 text-[13px] sm:flex-row sm:items-center sm:justify-between">
-        <span className="min-w-0">
-          <b>В очереди {waiting} {plural(waiting, 'человек', 'человека', 'человек')}</b>
-          {' '}по {waitingGroups.length} {plural(waitingGroups.length, 'теме', 'темам', 'темам')}: {waitingGroups.map(g => `${g.label} (${g.n})`).join(' · ')}.
-          {canManage && ' Нажмите «Собрать занятие» в свободном слоте и отметьте людей.'}
-        </span>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span><b>В очереди {waiting} {plural(waiting, 'человек', 'человека', 'человек')}</b>
+            {canManage ? ' — выберите тему, затем свободный слот:' : ` по ${waitingGroups.length} ${plural(waitingGroups.length, 'теме', 'темам', 'темам')}.`}</span>
+          <div className="flex min-w-0 flex-wrap gap-1.5">
+            {waitingGroups.map(g => canManage ? (
+              <button key={g.id} type="button" onClick={() => setFocusTheme(g.id)}
+                className="inline-flex min-h-9 max-w-full items-center gap-1.5 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-bg)] px-3 text-[12.5px] hover:border-[var(--color-accent)]">
+                <span className="truncate">{g.label}</span><span className="tabular-nums text-[var(--color-accent)]">{g.items.length}</span>
+              </button>
+            ) : (
+              <span key={g.id} className="max-w-full truncate rounded-full bg-[var(--color-bg)] px-3 py-1 text-[12.5px]">{g.label} · {g.items.length}</span>
+            ))}
+          </div>
+        </div>
         <button type="button" onClick={onOpenQueue} className="min-h-11 shrink-0 self-start rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-bg)] px-3 font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)] sm:self-auto">
           Открыть очередь
         </button>
@@ -140,13 +172,15 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
       <div className="min-w-0 rounded-xl border border-dashed border-[var(--color-border)] px-3 py-2.5 text-[13px] text-[var(--color-text-secondary)]">
         <b className="text-[var(--color-text)]">На этой неделе занятий нет.</b>{' '}
         {canManage
-          ? `Очередь тренера пуста: люди попадают туда, когда РОП ставит задачу «Теория». Занятие можно собрать и вручную — кнопкой «Собрать занятие» в любом из ${freeFuture} свободных слотов.`
+          ? `Очередь тренера пуста: люди попадают туда, когда РОП ставит задачу «Теория». Занятие можно собрать и вручную — нажмите на любой из ${freeFuture} свободных слотов.`
           : canEnroll
             ? 'Записать менеджера на обучение — задачей с типом «Теория» (попадёт в очередь тренера) или в карточке занятия во вкладке «Ближайшие».'
             : 'Когда тренер назначит занятие, оно появится здесь.'}
       </div>
     ) : null
   );
+
+  const shownPhone = phoneDay && grid.cols.includes(phoneDay) ? phoneDay : grid.cols.includes(today) ? today : grid.cols[0];
 
   const dayHead = (d: string) => {
     const isToday = d === today;
@@ -168,7 +202,7 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
             className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]">
             <ChevronLeft size={16} />
           </button>
-          <span className="min-w-0 px-2 text-sm font-medium tabular-nums">{ddmm(monday)} – {ddmm(addDaysKey(monday, grid.cols.length > 5 ? 6 : 4))}</span>
+          <span className="min-w-0 px-2 text-sm font-medium tabular-nums">{ddmm(monday)}–{ddmm(addDaysKey(monday, grid.cols.length > 5 ? 6 : 4))}</span>
           <button type="button" aria-label="Следующая неделя" onClick={() => setMonday(addDaysKey(monday, 7))}
             className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]">
             <ChevronRight size={16} />
@@ -237,14 +271,32 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
             </table>
           </div>
 
-          {/* Телефон и планшет — по дням */}
+          {/* Телефон — лента дней (без скролла: 5–7 равных ячеек), показан один день. */}
+          <div className="grid min-w-0 gap-1 sm:hidden" style={{ gridTemplateColumns: `repeat(${grid.cols.length}, minmax(0, 1fr))` }} role="tablist" aria-label="День недели">
+            {grid.cols.map(d => {
+              const on = d === shownPhone;
+              const n = events.filter(e => mskDateKey(e.startsAt) === d).length;
+              return (
+                <button key={d} type="button" role="tab" aria-selected={on} onClick={() => setPhoneDay(d)}
+                  className={`flex min-h-12 min-w-0 flex-col items-center justify-center rounded-lg text-[12px] ${on ? 'bg-[var(--color-accent)] text-white' : d === today ? 'text-[var(--color-accent)] ring-1 ring-[var(--color-accent)]' : d < today ? 'text-[var(--color-text-muted)]' : 'bg-[var(--color-bg-surface)]'}`}>
+                  <span className="font-semibold">{WEEKDAYS_SHORT[isoWeekday(d)]}</span>
+                  <span className="tabular-nums">{d.slice(8)}</span>
+                  <span aria-label={`${n} занятий`} className="flex h-1.5 gap-0.5">
+                    {Array.from({ length: Math.min(n, 3) }, (_, i) => <span key={i} className={`size-1.5 rounded-full ${on ? 'bg-white' : 'bg-[var(--color-accent)]'}`} />)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Телефон (выбранный день) и планшет (все дни в 2 колонки) */}
           <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:hidden">
             {grid.cols.map(d => {
               const dayRows = grid.rows.filter(t => grid.evAt.has(`${d}|${t}`) || grid.slotAt.has(`${isoWeekday(d)}|${t}`));
               const shown = dayRows.filter(t => grid.evAt.has(`${d}|${t}`) || startMsOf(d, t) > nowMs);
               const hiddenPast = dayRows.length - shown.length;
               return (
-                <div key={d} className={`flex min-w-0 flex-col gap-1.5 rounded-xl bg-[var(--color-bg-surface)] p-2.5 ${d === today ? 'ring-2 ring-[var(--color-accent)]' : ''}`}>
+                <div key={d} className={`${d === shownPhone ? 'flex' : 'hidden sm:flex'} min-w-0 flex-col gap-1.5 rounded-xl bg-[var(--color-bg-surface)] p-2.5 ${d === today ? 'sm:ring-2 sm:ring-[var(--color-accent)]' : ''}`}>
                   <h3 className="text-[13px]">{dayHead(d)}</h3>
                   {shown.length === 0 && (
                     <p className="text-[12.5px] text-[var(--color-text-muted)]">{d < today || hiddenPast ? 'Занятий не было' : 'Слотов нет'}</p>
@@ -270,7 +322,7 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
       <Drawer open={pick !== null} onOpenChange={o => { if (!o) setPick(null); }} title="Собрать занятие">
         {pick && (
           <SlotAssemble key={pick.preset.startsAt} pick={pick}
-            onDone={id => { setPick(null); onOpen(id); }}
+            onDone={id => { setPick(null); setFocusTheme(null); onOpen(id); }}
             onManual={() => { const p = pick.preset; setPick(null); onCreate(p); }}
             onCancel={() => setPick(null)} />
         )}

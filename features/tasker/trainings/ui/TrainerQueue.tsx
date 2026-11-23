@@ -33,19 +33,20 @@ export function TrainerQueue({ onOpenEvent }: { onOpenEvent: (id: number) => voi
 
   return (
     <section className="flex min-w-0 flex-col gap-3">
-      <p className="text-[13px] text-[var(--color-text-secondary)]">
-        Задачи «Теория» на тренера ({data.trainer.name}) от всех РОПов, по темам. Отметьте {data.group.min}–{data.group.max} человек
-        и нажмите «Собрать занятие» — менеджеры запишутся, задачи свяжутся с занятием, в календаре появится встреча.
-      </p>
       {!data.available ? (
         <Empty text="Тип задачи «Теория / Практика» ещё не развёрнут в Задачнике — очередь появится, когда РОПы начнут ставить задачи на тренера." />
       ) : data.groups.length === 0 ? (
-        <Empty text="Очередь пуста: открытых задач «Теория» нет." />
+        <Empty title="Очередь пуста" text={`Люди попадают сюда, когда РОП ставит менеджеру задачу с типом «Теория» — она уходит на тренера (${data.trainer.name}). Набралось ${data.group.min}+ человек по теме — система предложит свободный слот.`} />
       ) : (
-        data.groups.map(g => (
+        <>
+        <p className="text-[13px] text-[var(--color-text-secondary)]">
+          Отметьте {data.group.min}–{data.group.max} человек по теме и нажмите «Собрать занятие» — менеджеры запишутся, в календаре появится встреча.
+        </p>
+        {data.groups.map(g => (
           <QueueGroup key={g.metricId} g={g} metric={metrics.get(g.metricId)} settings={data.group} canManage={data.canManage}
             onOpenEvent={onOpenEvent} onAssemble={(items, suggestion) => setAssembling({ group: g, items, suggestion })} />
-        ))
+        ))}
+        </>
       )}
       <Drawer open={assembling !== null} onOpenChange={o => { if (!o) setAssembling(null); }} title="Собрать занятие">
         {assembling && (
@@ -57,15 +58,24 @@ export function TrainerQueue({ onOpenEvent }: { onOpenEvent: (id: number) => voi
   );
 }
 
-function Empty({ text }: { text: string }) {
-  return <div className="rounded-xl border border-dashed border-[var(--color-border)] px-4 py-8 text-center text-sm text-[var(--color-text-muted)]">{text}</div>;
+function Empty({ title, text }: { title?: string; text: string }) {
+  return (
+    <div className="rounded-xl border border-dashed border-[var(--color-border)] px-4 py-8 text-center text-sm text-[var(--color-text-muted)]">
+      {title && <p className="mb-1 font-medium text-[var(--color-text)]">{title}</p>}
+      <p className="mx-auto max-w-xl">{text}</p>
+    </div>
+  );
 }
+
+/** Сколько дней ждёт задача (с постановки). */
+const waitDays = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
 
 function QueueGroup({ g, metric, settings, canManage, onAssemble, onOpenEvent }: {
   g: TrainingQueueGroup; metric: TaskerMetric | undefined; settings: TrainingGroupSettings; canManage: boolean;
   onAssemble: (items: TrainingQueueItem[], suggestion: TrainingSuggestion | null) => void; onOpenEvent: (id: number) => void;
 }) {
-  const waiting = useMemo(() => g.items.filter(i => !i.event), [g.items]);
+  // Дольше ждущие — первыми.
+  const waiting = useMemo(() => g.items.filter(i => !i.event).sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [g.items]);
   const planned = g.items.filter(i => i.event);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   // Ничего не отмечено — предложение считается для первых по давности (до target).
@@ -123,6 +133,7 @@ function QueueGroup({ g, metric, settings, canManage, onAssemble, onOpenEvent }:
               <span className="flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-[var(--color-text-muted)]">
                 {i.departmentName && <span className="min-w-0 truncate">{i.departmentName}</span>}
                 {i.snapshot && <span>сейчас {fmtMetric(i.snapshot.value, fmt)}{i.snapshot.deptAvg != null ? ` (отдел ${fmtMetric(i.snapshot.deptAvg, fmt)})` : ''}</span>}
+                <span className={waitDays(i.createdAt) >= 7 ? 'font-medium text-[var(--color-warning)]' : ''}>ждёт {waitDays(i.createdAt)} дн.</span>
                 <span>поставил {i.creatorName ?? i.ropName ?? '—'} {ddmm(mskDateKey(i.createdAt))}</span>
               </span>
             </div>

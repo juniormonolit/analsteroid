@@ -45,7 +45,8 @@ export function TaskerTabs({ active, onSelect }: { active: TaskerView | 'trainin
       })}
       <Link href="/tasker/meetings" aria-current={active === 'meetings' ? 'page' : undefined} className={tabCls(active === 'meetings')}>Собрания</Link>
       <Link href="/tasker/trainings" aria-current={active === 'trainings' ? 'page' : undefined} className={tabCls(active === 'trainings')}>Обучения</Link>
-      {canTemplates && <Link href="/tasker/templates" aria-current={active === 'templates' ? 'page' : undefined} className={tabCls(active === 'templates')}>Шаблоны</Link>}
+      {/* На самой странице шаблонов вкладка видна сразу — иначе она «впрыгивала» после загрузки сессии. */}
+      {(canTemplates || active === 'templates') && <Link href="/tasker/templates" aria-current={active === 'templates' ? 'page' : undefined} className={tabCls(active === 'templates')}>Шаблоны</Link>}
     </nav>
   );
 }
@@ -133,8 +134,10 @@ export function TaskerPage({ canAssign }: { canAssign: boolean }) {
           )}
         </header>
 
+        <TaskerTabs active={view} onSelect={v => setView(v)} />
+
+        {/* Неделя — в строке фильтров, а не рядом с вкладками: вкладки не прыгают при переключении вида (аудит 23.11, п.35). */}
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <TaskerTabs active={view} onSelect={v => setView(v)} />
           {view === 'week' && (
             <div className="flex min-w-0 items-center gap-1" role="group" aria-label="Неделя">
               <button type="button" onClick={() => setWeek(addDays(monday, -7))} aria-label="Предыдущая неделя" className={BTN}><ChevronLeft size={16} /></button>
@@ -144,9 +147,8 @@ export function TaskerPage({ canAssign }: { canAssign: boolean }) {
               <button type="button" onClick={() => setWeek(addDays(monday, 7))} aria-label="Следующая неделя" className={BTN}><ChevronRight size={16} /></button>
             </div>
           )}
+          <TaskerFilters f={f} data={data} metrics={metrics.data?.metrics ?? []} />
         </div>
-
-        <TaskerFilters f={f} data={data} metrics={metrics.data?.metrics ?? []} />
 
         {error && (
           <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-negative)]">

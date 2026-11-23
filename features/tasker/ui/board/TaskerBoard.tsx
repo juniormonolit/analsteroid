@@ -56,22 +56,44 @@ export function TaskerBoard({ tasks, dragEnabled, onOpen, onMove }: {
     return () => ro.disconnect();
   }, [measure, tasks]);
 
+  // Лента чипов (телефон): затухание по краям и автоскролл к активному статусу.
+  const chipsRef = useRef<HTMLDivElement>(null);
+  const [chipEdges, setChipEdges] = useState({ left: false, right: false });
+  const measureChips = useCallback(() => {
+    const el = chipsRef.current;
+    if (!el) return;
+    setChipEdges({ left: el.scrollLeft > 4, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4 });
+  }, []);
+  const firstChipScroll = useRef(true);
+  useEffect(() => {
+    const el = chipsRef.current;
+    if (!el) return;
+    el.querySelector<HTMLElement>(`[data-tab-key="${shownPhone}"]`)?.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: firstChipScroll.current ? 'auto' : 'smooth' });
+    firstChipScroll.current = false;
+    measureChips();
+  }, [shownPhone, measureChips]);
+
   const canDrop = (s: BoardColumn) => !!drag && (moveTargets(drag) as BoardColumn[]).includes(s);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-2 px-4 pb-4 pt-3 sm:min-h-0 sm:px-6">
-      {/* Переключатель колонок — только телефон. */}
-      <div className="flex min-w-0 flex-wrap gap-1.5 sm:hidden" role="tablist" aria-label="Статус">
-        {BOARD_COLUMNS.map(s => {
-          const on = s === shownPhone;
-          return (
-            <button key={s} type="button" role="tab" aria-selected={on} onClick={() => setPhoneCol(s)}
-              className={`inline-flex min-h-11 items-center gap-1.5 rounded-full border px-3 text-sm ${on ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text)]'}`}>
-              <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: STATUS_COLOR[s] }} />
-              {BOARD_COLUMN_LABELS[s]}<span className="tabular-nums opacity-70">{byStatus.get(s)?.length ?? 0}</span>
-            </button>
-          );
-        })}
+      {/* Переключатель колонок — только телефон: одна лента вместо трёх рядов чипов (аудит 23.11, п.30).
+          CLAUDE.md, правило 12: min-w-0 у родителя, затухание у края, scrollbar-none, автоскролл к активной. */}
+      <div className="relative min-w-0 sm:hidden">
+        <div ref={chipsRef} onScroll={measureChips} className="scrollbar-none flex min-w-0 gap-1.5 overflow-x-auto" role="tablist" aria-label="Статус">
+          {BOARD_COLUMNS.map(s => {
+            const on = s === shownPhone;
+            return (
+              <button key={s} type="button" role="tab" aria-selected={on} data-tab-key={s} onClick={() => setPhoneCol(s)}
+                className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm ${on ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text)]'}`}>
+                <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: STATUS_COLOR[s] }} />
+                {BOARD_COLUMN_LABELS[s]}<span className="tabular-nums opacity-70">{byStatus.get(s)?.length ?? 0}</span>
+              </button>
+            );
+          })}
+        </div>
+        {chipEdges.left && <div aria-hidden className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-[var(--color-bg)] to-transparent" />}
+        {chipEdges.right && <div aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-[var(--color-bg)] to-transparent" />}
       </div>
 
       <div className="relative min-w-0 flex-1 sm:min-h-0">
@@ -81,12 +103,22 @@ export function TaskerBoard({ tasks, dragEnabled, onOpen, onMove }: {
               const list = byStatus.get(s) ?? [];
               const dropOk = canDrop(s);
               const dim = !!drag && !dropOk && s !== boardColumn(drag);
+              // Пустая колонка на sm+ — узкая полоса с названием и нулём (во время перетаскивания, если сюда можно, раскрывается).
+              const slim = list.length === 0 && !(drag && dropOk);
               return (
                 <section key={s} data-column={s} aria-label={BOARD_COLUMN_LABELS[s]}
                   onDragOver={e => { if (dropOk) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (over !== s) setOver(s); } }}
                   onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(o => (o === s ? null : o)); }}
                   onDrop={e => { e.preventDefault(); const c = drag; setDrag(null); setOver(null); if (!c || !dropOk) return; if (s === 'done') onOpen(c); else onMove(c, s as MoveTarget); }}
-                  className={`${s === shownPhone ? 'flex' : 'hidden'} w-full min-w-0 shrink-0 flex-col overflow-hidden rounded-xl bg-[var(--color-bg-surface)] transition-opacity sm:flex sm:h-full sm:w-72 ${dim ? 'opacity-40' : ''} ${over === s ? 'ring-2 ring-[var(--color-accent)]' : ''}`}>
+                  className={`${s === shownPhone ? 'flex' : 'hidden'} w-full min-w-0 shrink-0 flex-col overflow-hidden rounded-xl bg-[var(--color-bg-surface)] transition-opacity sm:flex sm:h-full ${slim ? 'sm:w-12' : 'sm:w-72'} ${dim ? 'opacity-40' : ''} ${over === s ? 'ring-2 ring-[var(--color-accent)]' : ''}`}>
+                  {slim && (
+                    <div className="hidden h-full flex-col items-center gap-2 py-3 sm:flex" title={`${BOARD_COLUMN_LABELS[s]}: пусто · ${HINT[s]}`}>
+                      <span aria-hidden className="h-[3px] w-4 shrink-0 rounded-full" style={{ background: STATUS_COLOR[s] }} />
+                      <span className="text-xs tabular-nums text-[var(--color-text-muted)]">0</span>
+                      <span className="text-sm font-semibold text-[var(--color-text-secondary)] [writing-mode:vertical-rl]">{BOARD_COLUMN_LABELS[s]}</span>
+                    </div>
+                  )}
+                  <div className={`${slim ? 'flex sm:hidden' : 'flex'} min-h-0 flex-1 flex-col`}>
                   <header className="flex shrink-0 items-center gap-2 px-3 pb-1 pt-2.5" title={HINT[s]}>
                     <span aria-hidden className="h-4 w-[3px] shrink-0 rounded-full" style={{ background: STATUS_COLOR[s] }} />
                     <h2 className="min-w-0 truncate text-sm font-semibold text-[var(--color-text)]">{BOARD_COLUMN_LABELS[s]}</h2>
@@ -101,7 +133,8 @@ export function TaskerBoard({ tasks, dragEnabled, onOpen, onMove }: {
                         onDragStart={setDrag}
                         onDragEnd={() => { setDrag(null); setOver(null); }} />
                     ))}
-                    {list.length === 0 && <div className="px-1 py-3 text-center text-xs text-[var(--color-text-muted)]">пусто</div>}
+                    {list.length === 0 && <div className="px-1 py-3 text-center text-xs text-[var(--color-text-muted)]">Здесь пока ничего — {HINT[s].toLowerCase()}.</div>}
+                  </div>
                   </div>
                 </section>
               );

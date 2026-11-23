@@ -3,7 +3,7 @@
 // сессии внутри), задачи по плановому слоту (нет слота — по сроку), записи на обучения и встречи
 // регулярных собраний (features/tasker/meetings).
 // Десктоп — 5 колонок; планшет — 2; телефон — дни списком сверху вниз.
-import { GraduationCap, Users } from 'lucide-react';
+import { CalendarClock, GraduationCap, Users } from 'lucide-react';
 import type { TaskerMeetingOccurrence, TaskerSession, TaskerTask, TrainingEnrollment } from '../../types';
 import { MeetingBlock } from '../../meetings/ui/MeetingBlock';
 import { addDays, fmtDayLong, fmtTime, mskDay, shortName, todayMsk } from '../shared/format';
@@ -118,6 +118,8 @@ export function TaskerWeek({ monday, tasks, sessions, trainings, meetings = [], 
       {days.map(d => {
         const items = byDay.get(d) ?? [];
         const isToday = d === today;
+        // Замеры дня — как в «Сегодня» (аудит 23.11, п.36): мелкими чипами внизу, клик — карточка задачи.
+        const measures = tasks.filter(t => t.controlDate === d && !t.verdict);
         return (
           <section key={d} aria-label={fmtDayLong(d)}
             className={`flex min-w-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2 ${isToday ? 'ring-2 ring-[var(--color-accent)]' : ''}`}>
@@ -125,7 +127,21 @@ export function TaskerWeek({ monday, tasks, sessions, trainings, meetings = [], 
               {fmtDayLong(d)}{isToday ? ' · сегодня' : ''}
             </h2>
             <DayItems items={items} onOpen={onOpen} />
-            {items.length === 0 && <div className="px-1 pb-2 text-xs text-[var(--color-text-muted)]">—</div>}
+            {items.length === 0 && measures.length === 0 && <div className="px-1 pb-2 text-xs text-[var(--color-text-muted)]">—</div>}
+            {measures.length > 0 && (
+              <div className="mt-auto flex min-w-0 flex-col gap-1 border-t border-[var(--color-border)] px-1 pt-1.5">
+                <span className="text-[11px] text-[var(--color-text-muted)]">Замер</span>
+                <div className="flex min-w-0 flex-wrap gap-1">
+                  {measures.map(t => (
+                    <button key={t.id} type="button" onClick={() => onOpen(t)} title={`Автозамер: ${t.metricLabel} · ${t.manager.name}`}
+                      className="inline-flex min-h-9 max-w-full items-center gap-1 rounded-md bg-[var(--color-bg)] px-2 text-[11.5px] hover:bg-[var(--color-bg-hover)]">
+                      <CalendarClock size={12} className="shrink-0 text-[var(--color-text-muted)]" aria-hidden />
+                      <span className="truncate">{shortName(t.manager.name)} · {t.metricLabel}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
         );
       })}

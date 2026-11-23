@@ -55,14 +55,14 @@ export function TaskerFilters({ f, data, metrics }: { f: TaskerFilterState; data
       className={`inline-flex min-h-11 items-center gap-1.5 self-start rounded-lg border px-3 text-sm sm:hidden ${activeCount ? 'border-[var(--color-accent)] text-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text)]'}`}>
       <SlidersHorizontal size={15} aria-hidden /> Фильтры{activeCount ? ` · ${activeCount}` : ''}
     </button>
-    <div className={`${open ? 'flex' : 'hidden'} min-w-0 flex-wrap items-center gap-1.5 sm:flex`} role="group" aria-label="Фильтр задач">
+    <div className={`${open ? 'flex' : 'hidden'} min-w-0 basis-full flex-wrap sm:basis-auto items-center gap-1.5 sm:flex`} role="group" aria-label="Фильтр задач">
       {ropOptions.length > 1 || f.rop ? (
         <SearchSelect ariaLabel="РОП" value={f.rop} onChange={f.setRop} allLabel="Все РОПы" options={ropOptions} searchPlaceholder="Поиск РОПа" className={cls} />
       ) : null}
       <SearchSelect ariaLabel="Менеджер" value={f.manager} onChange={f.setManager} allLabel="Все менеджеры" options={managerOptions}
         searchable searchPlaceholder="Поиск менеджера" className={cls} />
       <SearchSelect ariaLabel="Тема" value={f.metric} onChange={f.setMetric} allLabel="Все темы" options={metricOptions} searchPlaceholder="Поиск темы" className={cls} />
-      <SearchSelect ariaLabel="Чьи задачи" value={f.mine} onChange={v => f.setMine(v as TaskerFilterState['mine'])} allLabel="Все видимые" options={MINE_OPTIONS} className={cls} />
+      <SearchSelect ariaLabel="Чьи задачи" value={f.mine} onChange={v => f.setMine(v as TaskerFilterState['mine'])} allLabel="Все задачи" options={MINE_OPTIONS} className={cls} />
       {f.active && (
         <button type="button" onClick={f.reset}
           className="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">

@@ -16,6 +16,8 @@ export interface SlotPick {
   preset: TrainingFormPreset;
   /** «Нулевой цикл · Питер · НЦ · очно» — для шапки. */
   meta: string;
+  /** Заранее отмеченные задачи (выбрана тема в полосе очереди над сеткой). */
+  preselect?: number[];
 }
 
 export function SlotAssemble({ pick, onDone, onManual, onCancel }: {
@@ -27,18 +29,27 @@ export function SlotAssemble({ pick, onDone, onManual, onCancel }: {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: QUEUE_KEY, queryFn: () => getJson<TrainingQueueResponse>('/api/tasker/trainings/queue') });
   const groups = useMemo(
-    () => (q.data?.groups ?? []).map(g => ({ ...g, waitingItems: g.items.filter(i => !i.event) })).filter(g => g.waitingItems.length > 0),
-    [q.data],
+    () => (q.data?.groups ?? [])
+      .map(g => ({ ...g, waitingItems: g.items.filter(i => !i.event).sort((a, b) => a.createdAt.localeCompare(b.createdAt)) }))
+      .filter(g => g.waitingItems.length > 0)
+      // Группа с заранее отмеченными людьми (выбрана тема над сеткой) — первой.
+      .sort((a, b) => Number(b.waitingItems.some(i => pick.preselect?.includes(i.taskId))) - Number(a.waitingItems.some(i => pick.preselect?.includes(i.taskId)))),
+    [q.data, pick.preselect],
   );
   const max = q.data?.group.max ?? 5;
   const min = q.data?.group.min ?? 3;
-  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [picked, setPicked] = useState<Set<number>>(() => new Set(pick.preselect ?? []));
   const [title, setTitle] = useState('');
   const [failed, setFailed] = useState<{ taskId: number; reason: string }[]>([]);
 
   // Тема по умолчанию — тема первой отмеченной группы.
   const autoTitle = groups.find(g => g.waitingItems.some(i => picked.has(i.taskId)))?.label ?? '';
   const effectiveTitle = title.trim() || autoTitle;
+  // Слот закреплён за отделом, а в группе люди из разных отделов — предупреждаем (не запрещаем).
+  const pickedDepts = [...new Set(groups.flatMap(g => g.waitingItems.filter(i => picked.has(i.taskId)).map(i => i.departmentName ?? '—')))];
+  const deptWarning = pick.preset.departmentLabel && pickedDepts.length > 1
+    ? `Слот закреплён за «${pick.preset.departmentLabel}», а в группе люди из ${pickedDepts.length} отделов: ${pickedDepts.join(', ')}.`
+    : null;
 
   const toggle = (id: number) => setPicked(p => {
     const n = new Set(p);
@@ -141,6 +152,7 @@ export function SlotAssemble({ pick, onDone, onManual, onCancel }: {
             <input className={INPUT} value={title} onChange={e => setTitle(e.target.value)} maxLength={200}
               placeholder={autoTitle || 'Отметьте людей — тема подставится'} />
           </label>
+          {deptWarning && <p className="text-[12.5px] text-[var(--color-warning)]">{deptWarning}</p>}
           {mut.isError && <p className="text-[13px] text-[var(--color-negative)]">{(mut.error as Error).message}</p>}
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
             <button type="button" onClick={onManual} className="min-h-11 rounded-lg px-2 text-[var(--color-accent)] hover:underline">

@@ -9,6 +9,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, ArchiveRestore, ArrowDown, ArrowUp, BarChart3, ImagePlus, Link2, Loader2, Package, Pencil, Plus, Trash2 } from 'lucide-react';
 import { SearchSelect } from '@/components/ui/SearchSelect';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import {
   TASKER_METRIC_GROUP_LABELS, type TaskerMetric, type TaskerMetricGroup, type TaskerPgMeasure, type TaskerTemplateFull,
   type TaskerTopicKind, type TaskerTopicSaveRequest,
@@ -133,8 +134,9 @@ function TemplateCard({ t, first, last, busy, onEdit, onMove, onArchive, onDelet
   const long = t.body.length > 280 || t.body.split('\n').length > 6;
   return (
     <article className={`flex min-w-0 flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 ${t.active ? '' : 'opacity-70'}`}>
-      <div className="flex min-w-0 items-start gap-2">
-        <h3 className="min-w-0 flex-1 break-words font-semibold text-[var(--color-text)]">{t.title}</h3>
+      {/* Телефон: заголовок во всю ширину, иконки — строкой под ним (иначе заголовок сжат в столбик). */}
+      <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1">
+        <h3 className="min-w-0 basis-full break-words font-semibold text-[var(--color-text)] sm:basis-0 sm:flex-1">{t.title}</h3>
         <div className="flex shrink-0 items-center gap-0.5">
           {t.active && (
             <>
@@ -368,6 +370,8 @@ export function TemplatesPage() {
     },
     onSettled: refresh, onError: onErr,
   });
+  const [confirmArchive, setConfirmArchive] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<{ id: number; title: string } | null>(null);
   const topicPatch = useMutation({
     mutationFn: (v: { id: string; active: boolean }) => updateTopic(v.id, { active: v.active }),
     onSuccess: () => { setErr(null); refreshTopics(); }, onError: onErr,
@@ -415,10 +419,15 @@ export function TemplatesPage() {
           <h1 className="text-xl font-semibold text-[var(--color-text)]">Задачник</h1>
         </header>
         <TaskerTabs active="templates" />
-        <p className="max-w-3xl text-sm text-[var(--color-text-secondary)]">
-          Темы задач и пошаговые инструкции к ним. Тема — показатель из отчётов или товарная группа: по ней снимаются цифры
-          и делается автозамер. В форме задачи РОП выбирает тему, вариант инструкции (первый — по умолчанию) и дописывает своё.
-        </p>
+        <details className="max-w-3xl text-sm text-[var(--color-text-secondary)]">
+          <summary className="min-h-11 cursor-pointer content-center">
+            Темы задач и инструкции к ним · <span className="text-[var(--color-accent)]">как это работает</span>
+          </summary>
+          <p className="pb-1">
+            Тема — показатель из отчётов или товарная группа: по ней снимаются цифры и делается автозамер. В форме задачи РОП
+            выбирает тему, вариант инструкции (первый — по умолчанию) и дописывает своё.
+          </p>
+        </details>
 
         {loadErr && (
           <p className="rounded-lg bg-[var(--color-negative)]/10 p-3 text-sm text-[var(--color-negative)]">
@@ -440,6 +449,7 @@ export function TemplatesPage() {
               className="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left text-sm font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">
               <Plus size={15} aria-hidden /> Новая тема
             </button>
+            {topicsQ.isLoading && [0, 1, 2, 3, 4].map(i => <div key={i} className="mx-1 my-0.5 h-9 animate-pulse rounded-lg bg-[var(--color-bg-surface)]" />)}
             {topics.map(m => {
               const on = m.id === metricId && topicForm !== 'new';
               return (
@@ -475,7 +485,9 @@ export function TemplatesPage() {
                     <div className="flex min-w-0 flex-1 flex-col">
                       <h2 className="flex min-w-0 items-center gap-1.5 text-base font-semibold text-[var(--color-text)]">
                         {metric && <KindIcon t={metric} className="shrink-0 text-[var(--color-text-muted)]" />}
-                        <span className="min-w-0 break-words">{metric?.label ?? '—'}</span>
+                        {metric ? <span className="min-w-0 break-words">{metric.label}</span>
+                          : topicsQ.isLoading ? <span className="h-5 w-48 animate-pulse rounded bg-[var(--color-bg-surface)]" aria-label="Загружаю" />
+                          : <span className="min-w-0 text-[var(--color-text-muted)]">Выберите тему слева или создайте новую</span>}
                         {metric?.active === false && <span className="rounded bg-[var(--color-bg-hover)] px-1.5 py-0.5 text-[11px] font-normal text-[var(--color-text-muted)]">архив</span>}
                       </h2>
                       {metric && (
@@ -498,9 +510,9 @@ export function TemplatesPage() {
                         <button type="button" onClick={() => { setErr(null); setTopicForm('edit'); }} className={ICON} aria-label="Изменить тему" title="Изменить тему"><Pencil size={15} /></button>
                         <button type="button" disabled={topicPatch.isPending}
                           onClick={() => {
-                            const toArchive = metric.active !== false;
-                            if (toArchive && !window.confirm(`Убрать тему «${metric.label}» в архив? В форме задачи её не будет; старые задачи останутся.`)) return;
-                            topicPatch.mutate({ id: metric.id, active: !toArchive });
+                            // В архив — через ConfirmDialog (как везде в Монолитике), вернуть — сразу.
+                            if (metric.active !== false) setConfirmArchive(true);
+                            else topicPatch.mutate({ id: metric.id, active: true });
                           }}
                           className={ICON} aria-label={metric.active !== false ? 'Тему в архив' : 'Вернуть тему'} title={metric.active !== false ? 'Тему в архив' : 'Вернуть тему из архива'}>
                           {metric.active !== false ? <Archive size={15} /> : <ArchiveRestore size={15} />}
@@ -521,11 +533,14 @@ export function TemplatesPage() {
                   <TemplateEditor initial={{ title: '', body: '' }} saving={save.isPending} error={err}
                     onCancel={() => { setEditing(null); setErr(null); }} onSave={v => save.mutate({ id: 'new', ...v })} />
                 )}
-                {q.isLoading && <p className="text-sm text-[var(--color-text-muted)]">Загрузка…</p>}
+                {q.isLoading && [0, 1].map(i => <div key={i} className="h-28 animate-pulse rounded-xl bg-[var(--color-bg-surface)]" />)}
                 {!q.isLoading && metricId && active.length === 0 && editing !== 'new' && (
-                  <p className="rounded-xl border border-dashed border-[var(--color-border)] p-4 text-sm text-[var(--color-text-muted)]">
-                    Вариантов пока нет — в форме задачи поле рекомендаций будет пустым.
-                  </p>
+                  <div className="flex min-w-0 flex-col items-start gap-2 rounded-xl border border-dashed border-[var(--color-border)] p-4 text-sm text-[var(--color-text-muted)]">
+                    <span>Вариантов пока нет — в форме задачи поле инструкции будет пустым, РОП напишет её сам.</span>
+                    <button type="button" onClick={() => { setErr(null); setEditing('new'); }} className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">
+                      <Plus size={15} aria-hidden /> Добавить первый вариант
+                    </button>
+                  </div>
                 )}
                 {active.map((t, i) => editing === t.id ? (
                   <TemplateEditor key={t.id} initial={t} saving={save.isPending} error={err}
@@ -548,7 +563,7 @@ export function TemplatesPage() {
                       <TemplateCard key={t.id} t={t} first last busy={busy}
                         onEdit={() => { setErr(null); setEditing(t.id); }} onMove={() => {}}
                         onArchive={a => patch.mutate({ id: t.id, active: a })}
-                        onDelete={() => { if (window.confirm(`Удалить вариант «${t.title}» навсегда? Это не отменить.`)) del.mutate(t.id); }} />
+                        onDelete={() => setConfirmDelete({ id: t.id, title: t.title })} />
                     ))}
                   </div>
                 )}
@@ -557,6 +572,22 @@ export function TemplatesPage() {
           </section>
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmArchive && !!metric}
+        title="Убрать тему в архив?"
+        description={metric ? `«${metric.label}» пропадёт из формы задачи; старые задачи и их замеры останутся.` : ''}
+        confirmLabel="В архив" cancelLabel="Отмена" pending={topicPatch.isPending}
+        onCancel={() => setConfirmArchive(false)}
+        onConfirm={() => { if (metric) topicPatch.mutate({ id: metric.id, active: false }, { onSettled: () => setConfirmArchive(false) }); }}
+      />
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title="Удалить вариант навсегда?"
+        description={confirmDelete ? `«${confirmDelete.title}» удалится без возможности вернуть.` : ''}
+        confirmLabel="Удалить" cancelLabel="Отмена" tone="danger" pending={del.isPending}
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => { if (confirmDelete) del.mutate(confirmDelete.id, { onSettled: () => setConfirmDelete(null) }); }}
+      />
     </div>
   );
 }
