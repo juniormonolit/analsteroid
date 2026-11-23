@@ -325,3 +325,14 @@ export interface TaskerErrorResponse {
   error: string;
   code?: 'not_configured' | 'forbidden' | 'bad_request' | 'limit' | 'bitrix';
 }
+
+/** GET /api/tasker/managers — кому текущий пользователь может ставить задачи (срез canSeeManager). */
+export interface TaskerManagerOption {
+  id: number;
+  name: string;
+  deptName: string | null;
+}
+
+export interface TaskerManagersResponse {
+  managers: TaskerManagerOption[];
+}
