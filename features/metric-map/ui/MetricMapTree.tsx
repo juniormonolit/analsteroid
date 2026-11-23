@@ -11,11 +11,15 @@ import { fmtDelta, fmtRub, fmtValue, fromInput, isMultiplier, sliderRange, toInp
 // выстраиваются колонками под общей шапкой — читается как дерево-таблица; на телефоне
 // под названием переносятся подписанными «чипами».
 
-const COLS = 'lg:grid lg:grid-cols-[120px_96px_132px_120px_120px] lg:gap-x-3';
+// Переключение «колонки ↔ подписанные строки» — по ширине САМОГО дерева (container query),
+// не вьюпорта: открытое левое меню съедает ~240px, и на окне ~800–1000px вьюпортный lg
+// давал колонки при контенте ~650px — название сжималось до слова в строке, значение
+// наезжало на него (правка 23.11). 960px = колонки ~540 + название ≥250 на 4-м уровне вложенности.
+const COLS = '@min-[960px]:grid @min-[960px]:grid-cols-[112px_84px_120px_112px_104px] @min-[960px]:gap-x-3 @min-[960px]:shrink-0';
 
 export function TreeHeader() {
   return (
-    <div className="hidden lg:flex items-end gap-3 px-3 pb-1.5 text-[11px] font-medium text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
+    <div className="hidden @min-[960px]:flex items-end gap-3 px-3 pb-1.5 text-[11px] font-medium text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
       <div className="flex-1 min-w-0">Показатель</div>
       <div className={`${COLS} text-right`}>
         <div>Значение</div>
@@ -41,7 +45,7 @@ interface TreeProps {
 
 export function MetricMapTree(props: TreeProps) {
   return (
-    <div className="flex flex-col">
+    <div className="@container flex flex-col">
       <TreeHeader />
       <NodeBranch {...props} id={props.data.rootId} depth={0} sign={null} />
     </div>
@@ -61,7 +65,7 @@ function NodeBranch(props: TreeProps & { id: string; depth: number; sign: '+' | 
     <div>
       <NodeRow {...props} def={def} v={v} open={open} />
       {kids.length > 0 && open && (
-        <div className="ml-[13px] lg:ml-[17px] border-l border-dashed border-[var(--color-border-strong)] pl-1.5 lg:pl-3">
+        <div className="ml-[13px] @min-[960px]:ml-[17px] border-l border-dashed border-[var(--color-border-strong)] pl-1.5 @min-[960px]:pl-3">
           {kids.map(c => <NodeBranch key={c} {...props} id={c} depth={depth + 1} sign={childSign} />)}
           {showResidual && (
             <div className="flex items-center gap-2 px-3 py-2 text-xs text-[var(--color-text-muted)]">
@@ -93,7 +97,7 @@ function NodeRow({ def, v, open, depth, sign, idx, onToggle, whatIf, scenario, o
 
   return (
     <div className={`rounded-lg ${isRoot ? 'bg-[var(--color-bg-surface)] border border-[var(--color-border)]' : 'hover:bg-[var(--color-bg-hover)]'} ${v?.lowSample ? 'opacity-60' : ''}`}>
-      <div className="flex flex-col lg:flex-row lg:items-center gap-1 lg:gap-3 px-2 lg:px-3 py-2">
+      <div className="flex flex-col @min-[960px]:flex-row @min-[960px]:items-center gap-1 @min-[960px]:gap-3 px-2 @min-[960px]:px-3 py-2">
         {/* Название */}
         <div className="flex items-start gap-1 min-w-0 flex-1">
           {hasKids ? (
@@ -141,7 +145,7 @@ function NodeRow({ def, v, open, depth, sign, idx, onToggle, whatIf, scenario, o
         </div>
 
         {/* Цифры */}
-        <div className={`pl-5 lg:pl-0 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs ${COLS} lg:text-right`}>
+        <div className={`pl-5 @min-[960px]:pl-0 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs ${COLS} @min-[960px]:text-right`}>
           <Cell caption="">
             <span className={`text-sm font-semibold tabular-nums ${changed ? 'line-through text-[var(--color-text-muted)] font-normal' : 'text-[var(--color-text)]'}`}>
               {fmtValue(value, def.unit)}
@@ -197,7 +201,7 @@ function NodeRow({ def, v, open, depth, sign, idx, onToggle, whatIf, scenario, o
 function Cell({ caption, children }: { caption: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0 whitespace-nowrap">
-      {caption && <span className="lg:hidden text-[var(--color-text-muted)] mr-1">{caption}</span>}
+      {caption && <span className="@min-[960px]:hidden text-[var(--color-text-muted)] mr-1">{caption}</span>}
       {children}
     </div>
   );
@@ -242,7 +246,7 @@ function WhatIfEditor({ def, value, median, override, onChange }: {
   const r = sliderRange(value, def.unit, median);
   const suffix = def.unit === 'pct' ? '%' : def.unit === 'rub' ? '₽' : def.unit === 'count' ? 'шт' : '';
   return (
-    <div className="mx-2 lg:mx-3 mb-2 rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)]/40 px-3 py-2 flex flex-col sm:flex-row sm:items-center gap-2">
+    <div className="mx-2 @min-[960px]:mx-3 mb-2 rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)]/40 px-3 py-2 flex flex-col sm:flex-row sm:items-center gap-2">
       <input
         type="range" min={r.min} max={r.max} step={r.step} value={Math.min(r.max, Math.max(r.min, cur))}
         onChange={e => onChange(Number(e.target.value))}
