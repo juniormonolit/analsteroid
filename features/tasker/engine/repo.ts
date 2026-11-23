@@ -6,8 +6,23 @@ import { hasPerm } from '@/lib/auth/perms';
 import type {
   Snapshot, TaskerChecklistItem, TaskerSession, TaskerStatus, TaskerSyncState, TaskerTask, TaskerTaskKind, TaskerTasksQuery, TaskerVerdict,
 } from '../types';
-import { bitrixTaskUrl, loadMetricDefs, loadSettings, mskToday, type TaskerMetricDef } from './config';
+import { bitrixTaskUrl, directorFor, loadMetricDefs, loadSettings, mskToday, type TaskerMetricDef, type TaskerSettings } from './config';
 import { loadLiveTasks } from './live';
+import { getEmployeeDirectory } from '@/lib/org/employeeDirectory';
+import { hasFullManagerAccess } from '@/lib/org/managerAccess';
+
+/** «Провёл»/«Перенести» у сессии: исполнитель сессии (РОП/тренер), его директор по продажам, админ. */
+export function canManageSession(
+  session: SessionUser, settings: TaskerSettings,
+  dir: Map<number, { branch?: string | null }>, executorId: string,
+): boolean {
+  if (hasFullManagerAccess(session)) return true;
+  const me = session.bitrixUserId ? String(session.bitrixUserId) : null;
+  if (!me) return false;
+  if (me === executorId) return true;
+  const branch = dir.get(Number(executorId))?.branch ?? null;
+  return directorFor(settings, branch) === me;
+}
 
 export interface TaskRow {
   id: string; bitrix_task_id: string | null; marker: string;
@@ -186,6 +201,7 @@ export async function getTask(id: number, viewer?: TaskViewer | null): Promise<T
 interface SessionRow {
   id: string; rop_bitrix_id: string; metric_id: string; slot_start: Date; duration_min: number; calendar_event_id: string | null;
   task_ids: string[] | null; managers: { id: string; name: string | null }[] | null; rop_name: string | null;
+  held_at: Date | null; held_by: string | null;
 }
 
 export async function listSessions(
@@ -209,14 +225,15 @@ export async function listSessions(
   })();
   where.push(vis);
   const r = await systemDb().query<SessionRow>(
-    `SELECT s.id, s.rop_bitrix_id, s.metric_id, s.slot_start, s.duration_min, s.calendar_event_id,
+    `SELECT s.id, s.rop_bitrix_id, s.metric_id, s.slot_start, s.duration_min, s.calendar_event_id, s.held_at, s.held_by,
             (SELECT max(t.rop_name) FROM tasker_tasks t WHERE t.session_id = s.id AND t.rop_bitrix_id = s.rop_bitrix_id) AS rop_name,
             (SELECT array_agg(t.id ORDER BY t.id) FROM tasker_tasks t WHERE t.session_id = s.id AND t.cancelled_at IS NULL) AS task_ids,
             (SELECT json_agg(DISTINCT jsonb_build_object('id', t.manager_bitrix_id, 'name', t.manager_name))
                FROM tasker_tasks t WHERE t.session_id = s.id AND t.cancelled_at IS NULL) AS managers
        FROM tasker_sessions s WHERE ${where.join(' AND ')} ORDER BY s.slot_start LIMIT 500`, params,
   );
-  const metrics = new Map((await loadMetricDefs()).map(m => [m.id, m]));
+  const [metricDefs, settings, dir] = await Promise.all([loadMetricDefs(), loadSettings(), getEmployeeDirectory()]);
+  const metrics = new Map(metricDefs.map(m => [m.id, m]));
   return r.rows.map(s => ({
     id: Number(s.id),
     rop: { id: Number(s.rop_bitrix_id), name: s.rop_name ?? `#${s.rop_bitrix_id}` },
@@ -227,5 +244,8 @@ export async function listSessions(
     calendarEventId: num(s.calendar_event_id),
     taskIds: (s.task_ids ?? []).map(Number),
     managers: (s.managers ?? []).map(x => ({ id: Number(x.id), name: x.name ?? `#${x.id}` })),
+    heldAt: isoOf(s.held_at),
+    heldBy: s.held_by,
+    canManage: canManageSession(session, settings, dir, s.rop_bitrix_id),
   }));
 }

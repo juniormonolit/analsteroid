@@ -219,6 +219,27 @@ export interface TaskerSession {
   calendarEventId: number | null;
   taskIds: number[];
   managers: TaskerPerson[];
+  /** «Провёл» (миграция 283): когда и кто отметил. Задачи сессии этим не закрываются. */
+  heldAt?: string | null;
+  heldBy?: string | null;
+  /** Может отмечать «Провёл» и переносить: исполнитель сессии, его директор, админ. */
+  canManage?: boolean;
+}
+
+/** PATCH /api/tasker/sessions/:id
+ *  done — «Провёл»; undone — снять отметку; reschedule — новый слот (slotStart ISO, durationMin 5–480 — необязательно). */
+export interface TaskerSessionPatchRequest {
+  action: 'done' | 'undone' | 'reschedule';
+  slotStart?: string;
+  durationMin?: number;
+}
+
+export interface TaskerSessionPatchResponse {
+  session: TaskerSession;
+  /** Перенос: кто занят в новое время (не запрет — предупреждение). */
+  availability?: TaskerAvailabilityResponse | null;
+  /** Сохранено, но Битрикс пока не принял — повторим автоматически. */
+  warning?: string | null;
 }
 
 // ── Обучения (сессия D; здесь — минимальная форма для ответа /tasks) ─────────

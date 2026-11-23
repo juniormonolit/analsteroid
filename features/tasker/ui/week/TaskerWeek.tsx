@@ -8,6 +8,8 @@ import type { TaskerMeetingOccurrence, TaskerSession, TaskerTask, TrainingEnroll
 import { MeetingBlock } from '../../meetings/ui/MeetingBlock';
 import { addDays, fmtDayLong, fmtTime, mskDay, shortName, todayMsk } from '../shared/format';
 import { TaskCard } from '../shared/TaskCard';
+// «Провёл» / «Перенести» у сессии (сессия A, UX-аудит п.39).
+import { SessionActions } from '../shared/SessionActions';
 
 type Item =
   | { kind: 'session'; at: string; session: TaskerSession; tasks: TaskerTask[] }
@@ -62,6 +64,7 @@ export function SessionBlock({ session: s, tasks, onOpen }: { session: TaskerSes
           </button>
         )) : s.managers.map(m => <span key={m.id} className="rounded-md bg-[var(--color-bg)] px-2 py-1">{shortName(m.name)}</span>)}
       </div>
+      <SessionActions session={s} />
     </div>
   );
 }
