@@ -13,13 +13,31 @@ import type {
 } from '../types';
 import { TaskerError, loadMetricDefs, publicMetric } from './config';
 
-const GROUPS: TaskerMetricGroup[] = ['conversion', 'check', 'activity', 'repeat', 'product'];
 const FORMATS: TaskerMetric['format'][] = ['percent', 'money', 'number'];
 const LABEL_MAX = 80;
 
 const formatOf = (m: Pick<Metric, 'dataType'>): TaskerMetric['format'] =>
   m.dataType === 'percent' ? 'percent' : m.dataType === 'money' ? 'money' : 'number';
-const groupOf = (f: TaskerMetric['format']): TaskerMetricGroup => (f === 'percent' ? 'conversion' : f === 'money' ? 'check' : 'activity');
+/**
+ * Группа темы-показателя — автоматически по категории метрики в каталоге (правка владельца 23.11: поле «Группа»
+ * из формы убрано). Маппинг категорий каталога (metrics.category):
+ *   Конверсии, Отказы                          → conversion («Конверсии»)
+ *   Продажи, Средний чек, Отгрузки, Планы      → check («Чеки»)
+ *   Звонки, Активность, Сделки, Брони, Клиенты → activity («Активность»)
+ *   Повторные / Повторка                       → repeat («Повторка»)
+ * Категории нет или она новая — по формату: % → conversion, ₽ → check, число → activity.
+ * Тема по товарной группе — всегда product. Набор групп — CHECK из миграции 282, без новой миграции.
+ */
+const CATEGORY_GROUP: Record<string, TaskerMetricGroup> = {
+  'конверсии': 'conversion', 'отказы': 'conversion',
+  'продажи': 'check', 'средний чек': 'check', 'отгрузки': 'check', 'планы': 'check',
+  'звонки': 'activity', 'активность': 'activity', 'сделки': 'activity', 'брони': 'activity', 'клиенты': 'activity',
+  'повторные': 'repeat', 'повторка': 'repeat',
+};
+export function groupOfMetric(m: Pick<Metric, 'category'>, format: TaskerMetric['format']): TaskerMetricGroup {
+  const byCat = m.category ? CATEGORY_GROUP[m.category.trim().toLowerCase()] : undefined;
+  return byCat ?? (format === 'percent' ? 'conversion' : format === 'money' ? 'check' : 'activity');
+}
 /** Счётчик/сумма (не доля и не среднее): «своё среднее за 6 мес.» приводится к длине периода. */
 const additiveOf = (m: Pick<Metric, 'dataType' | 'aggregationFn'>) => m.dataType !== 'percent' && m.aggregationFn === 'sum';
 
@@ -41,13 +59,12 @@ export async function topicCatalog(): Promise<TaskerTopicCatalogResponse> {
 
 function cleanCommon(req: TaskerTopicSaveRequest) {
   const label = typeof req.label === 'string' ? req.label.trim().slice(0, LABEL_MAX) : undefined;
-  const group = req.group !== undefined ? (GROUPS.includes(req.group) ? req.group : null) : undefined;
-  if (group === null) throw new TaskerError('Неизвестная группа темы');
+  // Группа от клиента не принимается — считается по каталогу (groupOfMetric) / 'product' для товарной группы.
   const format = req.format !== undefined ? (FORMATS.includes(req.format) ? req.format : null) : undefined;
   if (format === null) throw new TaskerError('Неизвестный формат');
   const sortOrder = req.sortOrder !== undefined && Number.isFinite(Number(req.sortOrder)) ? Math.round(Number(req.sortOrder)) : undefined;
   return {
-    label, group, format, sortOrder,
+    label, format, sortOrder,
     higherIsBetter: typeof req.higherIsBetter === 'boolean' ? req.higherIsBetter : undefined,
     active: typeof req.active === 'boolean' ? req.active : undefined,
   };
@@ -80,7 +97,7 @@ export async function createTopic(session: SessionUser, req: TaskerTopicSaveRequ
        ON CONFLICT (id) DO UPDATE SET active = true, archived_at = NULL, label = EXCLUDED.label, grp = EXCLUDED.grp,
          higher_is_better = EXCLUDED.higher_is_better, tag = EXCLUDED.tag, updated_by = EXCLUDED.updated_by, updated_at = now()
        WHERE NOT tasker_metrics.active`,
-      [id, label, c.group ?? 'product', c.higherIsBetter ?? true, format, label.slice(0, 40), measure === 'amount',
+      [id, label, 'product', c.higherIsBetter ?? true, format, label.slice(0, 40), measure === 'amount',
         c.sortOrder ?? null, pgId, measure, session.login],
     ).then(r => { if (!r.rowCount) throw new TaskerError('Такая тема уже есть'); });
     return topicById(id);
@@ -99,7 +116,7 @@ export async function createTopic(session: SessionUser, req: TaskerTopicSaveRequ
        higher_is_better = EXCLUDED.higher_is_better, format = EXCLUDED.format, tag = EXCLUDED.tag,
        updated_by = EXCLUDED.updated_by, updated_at = now()
      WHERE NOT tasker_metrics.active`,
-    [m.id, label, c.group ?? groupOf(format), c.higherIsBetter ?? true, format, label.slice(0, 40), additiveOf(m),
+    [m.id, label, groupOfMetric(m, format), c.higherIsBetter ?? true, format, label.slice(0, 40), additiveOf(m),
       c.sortOrder ?? null, session.login],
   ).then(r => { if (!r.rowCount) throw new TaskerError('Такая тема уже есть'); });
   return topicById(m.id);
@@ -125,7 +142,7 @@ export async function updateTopic(session: SessionUser, id: string, req: TaskerT
         updated_by       = $8,
         updated_at       = now()
       WHERE id = $1`,
-    [id, c.label ?? null, c.group ?? null, c.higherIsBetter ?? null, format ?? null, c.sortOrder ?? null, c.active ?? null, session.login],
+    [id, c.label ?? null, null /* группа — только автоматически при создании */, c.higherIsBetter ?? null, format ?? null, c.sortOrder ?? null, c.active ?? null, session.login],
   );
   return topicById(id);
 }

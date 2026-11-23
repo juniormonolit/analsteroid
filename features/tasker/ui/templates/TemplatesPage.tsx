@@ -11,7 +11,7 @@ import { Archive, ArchiveRestore, ArrowDown, ArrowUp, BarChart3, ImagePlus, Link
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import {
-  TASKER_METRIC_GROUP_LABELS, type TaskerMetric, type TaskerMetricGroup, type TaskerPgMeasure, type TaskerTemplateFull,
+  TASKER_METRIC_GROUP_LABELS, type TaskerMetric, type TaskerPgMeasure, type TaskerTemplateFull,
   type TaskerTopicKind, type TaskerTopicSaveRequest,
 } from '../../types';
 import { TaskerTabs } from '../shared/TaskerPage';
@@ -171,7 +171,6 @@ function TemplateCard({ t, first, last, busy, onEdit, onMove, onArchive, onDelet
 
 // ── Тема: создание / правка ─────────────────────────────────────────────────
 
-const GROUP_OPTIONS = (Object.keys(TASKER_METRIC_GROUP_LABELS) as TaskerMetricGroup[]).map(g => ({ value: g, label: TASKER_METRIC_GROUP_LABELS[g] }));
 const FORMAT_OPTIONS = [{ value: 'percent', label: 'Проценты, %' }, { value: 'money', label: 'Деньги, ₽' }, { value: 'number', label: 'Число' }];
 
 function Segmented<T extends string>({ value, onChange, options, label }: {
@@ -200,7 +199,6 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
   const [pgId, setPgId] = useState('');
   const [measure, setMeasure] = useState<TaskerPgMeasure>('amount');
   const [label, setLabel] = useState(topic?.label ?? '');
-  const [group, setGroup] = useState<TaskerMetricGroup | ''>(topic?.group ?? '');
   const [higher, setHigher] = useState<'up' | 'down'>(topic?.higherIsBetter === false ? 'down' : 'up');
   const [format, setFormat] = useState<TaskerMetric['format'] | ''>(topic?.format ?? '');
   const [err, setErr] = useState<string | null>(null);
@@ -215,13 +213,12 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
     mutationFn: async () => {
       const common: TaskerTopicSaveRequest = {
         label: label.trim() || undefined,
-        group: group || undefined,
         higherIsBetter: higher === 'up',
       };
       if (topic) return updateTopic(topic.id, { ...common, label: label.trim(), ...(topic.kind !== 'product_group' && format ? { format } : {}) });
       return createTopic(kind === 'metric'
         ? { ...common, kind, metricId, format: format || undefined }
-        : { ...common, kind, productGroupId: pgId, pgMeasure: measure, group: group || 'product' });
+        : { ...common, kind, productGroupId: pgId, pgMeasure: measure });
     },
     onSuccess: r => {
       qc.invalidateQueries({ queryKey: TOPICS_KEY });
@@ -266,7 +263,7 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
         <p className="text-xs text-[var(--color-text-muted)]">
           {topic.kind === 'product_group'
             ? `Товарная группа · замер: ${topic.pgMeasure === 'share' ? 'доля в продажах менеджера' : 'сумма продаж группы'}`
-            : `Показатель каталога: ${topic.id}`}
+            : `Показатель каталога: ${topic.id} · группа «${TASKER_METRIC_GROUP_LABELS[topic.group]}» (по категории каталога)`}
         </p>
       )}
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
@@ -275,11 +272,6 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
           <input value={label} onChange={e => setLabel(e.target.value)} maxLength={80} placeholder={defaultLabel || 'Как тема видна в задаче'}
             className={INPUT} aria-label="Короткое название темы" />
         </label>
-        <div className={FIELD}>
-          Группа
-          <SearchSelect options={GROUP_OPTIONS} value={group || (kind === 'product_group' ? 'product' : '')} onChange={v => setGroup(v as TaskerMetricGroup)}
-            placeholder="По формату показателя" ariaLabel="Группа темы" className="w-full" />
-        </div>
         <div className={FIELD}>
           Что лучше
           <Segmented label="Направление" value={higher} onChange={setHigher}

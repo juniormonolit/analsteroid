@@ -429,6 +429,7 @@ export interface TaskerTopicSaveRequest {
   pgMeasure?: TaskerPgMeasure;
   /** Короткое название темы (по умолчанию — короткое имя метрики / имя группы). */
   label?: string;
+  /** Игнорируется сервером: группа считается по категории метрики каталога (product — у товарной группы). */
   group?: TaskerMetricGroup;
   higherIsBetter?: boolean;
   /** Формат значения; у товарной группы задан способом замера. */
