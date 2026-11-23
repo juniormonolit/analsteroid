@@ -48,12 +48,12 @@ export function layoutDays(days: string[], tasks: TaskerTask[], sessions: Tasker
 export function SessionBlock({ session: s, tasks, onOpen }: { session: TaskerSession; tasks: TaskerTask[]; onOpen: (t: TaskerTask) => void }) {
   return (
     <div className="min-w-0 rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] p-2.5 text-xs">
-      <div className="flex min-w-0 items-center gap-1.5 font-semibold text-[var(--color-text)]">
+      <div className="flex min-w-0 items-start gap-1.5 font-semibold text-[var(--color-text)]">
         <Users size={14} className="shrink-0 text-[var(--color-accent)]" aria-hidden />
         <span className="shrink-0 tabular-nums">{fmtTime(s.slotStart)}</span>
-        <span className="min-w-0 truncate">Сессия · {s.metricLabel}</span>
+        <span className="line-clamp-2 min-w-0 break-words" title={`Сессия · ${s.metricLabel}`}>{s.metricLabel}</span>
       </div>
-      <div className="mt-0.5 text-[var(--color-text-muted)]">РОП {shortName(s.rop.name)} · {s.durationMin} мин</div>
+      <div className="mt-0.5 text-[var(--color-text-muted)]">Сессия {s.durationMin} мин · ведёт {shortName(s.rop.name)}</div>
       <div className="mt-1.5 flex min-w-0 flex-wrap gap-1">
         {tasks.length > 0 ? tasks.map(t => (
           <button key={t.id} type="button" onClick={() => onOpen(t)}
@@ -70,13 +70,13 @@ export function TrainingBlock({ list }: { list: TrainingEnrollment[] }) {
   const e = list[0];
   return (
     <div className="min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-2.5 text-xs" title={e.place ?? undefined}>
-      <div className="flex min-w-0 items-center gap-1.5 font-semibold text-[var(--color-text)]">
+      <div className="flex min-w-0 items-start gap-1.5 font-semibold text-[var(--color-text)]">
         <GraduationCap size={14} className="shrink-0 text-[var(--color-warning)]" aria-hidden />
         <span className="shrink-0 tabular-nums">{fmtTime(e.startsAt)}</span>
-        <span className="min-w-0 truncate">Обучение · {e.title}</span>
+        <span className="line-clamp-2 min-w-0 break-words" title={`Обучение · ${e.title}`}>{e.title}</span>
       </div>
       <div className="mt-0.5 min-w-0 truncate text-[var(--color-text-muted)]">
-        {e.durationMin} мин{e.place ? ` · ${e.place}` : ''}{e.trainer ? ` · ${shortName(e.trainer.name)}` : ''}
+        Обучение {e.durationMin} мин{e.place ? ` · ${e.place}` : ''}{e.trainer ? ` · ${shortName(e.trainer.name)}` : ''}
       </div>
       <div className="mt-0.5 min-w-0 break-words text-[var(--color-text-secondary)]">Записаны: {list.map(x => shortName(x.manager.name)).join(', ')}</div>
     </div>
@@ -125,7 +125,7 @@ export function TaskerWeek({ monday, tasks, sessions, trainings, meetings = [], 
               {fmtDayLong(d)}{isToday ? ' · сегодня' : ''}
             </h2>
             <DayItems items={items} onOpen={onOpen} />
-            {items.length === 0 && <div className="px-1 pb-2 text-xs text-[var(--color-text-muted)]">ничего не запланировано</div>}
+            {items.length === 0 && <div className="px-1 pb-2 text-xs text-[var(--color-text-muted)]">—</div>}
           </section>
         );
       })}

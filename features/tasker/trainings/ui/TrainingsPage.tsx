@@ -1,13 +1,13 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CalendarPlus, GraduationCap, MapPin, Users } from 'lucide-react';
+import { CalendarPlus, MapPin, Settings, Users } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import type { TrainingEvent, TrainingEventInput, TrainingEventResponse, TrainingsResponse } from '../types';
+import type { TrainingEvent, TrainingEventInput, TrainingEventResponse, TrainingQueueResponse, TrainingsResponse } from '../types';
+import { TaskerTabs } from '../../ui/shared/TaskerPage';
 import {
-  TRAININGS_KEY, cancelTraining, createTraining, enrollManager, getJson, resyncTraining, setAttendance, unenrollManager, updateTraining,
+  QUEUE_KEY, TRAININGS_KEY, cancelTraining, createTraining, enrollManager, getJson, resyncTraining, setAttendance, unenrollManager, updateTraining,
 } from './api';
 import { addDaysKey, durationLabel, endOf, mskDateKey, mskDayLabel, mskTime } from './format';
 import { TrainingDetails } from './TrainingDetails';
@@ -21,10 +21,11 @@ type Mode = 'week' | 'queue' | 'upcoming' | 'past' | 'effect' | 'settings';
 type Panel = { kind: 'view'; id: number } | { kind: 'edit'; id: number } | { kind: 'create'; preset?: TrainingFormPreset } | null;
 const MODES: Mode[] = ['week', 'queue', 'upcoming', 'past', 'effect', 'settings'];
 const MODE_LABEL: Record<Mode, string> = {
-  week: 'Неделя', queue: 'Очередь тренера', upcoming: 'Ближайшие', past: 'Прошедшие (90 дней)', effect: 'Эффективность', settings: 'Настройки',
+  week: 'Неделя', queue: 'Очередь тренера', upcoming: 'Ближайшие', past: 'Прошедшие', effect: 'Эффективность', settings: 'Настройки',
 };
 
-const TAB = 'min-h-11 rounded-lg px-4 text-sm font-medium';
+// Второй уровень вкладок (под вкладками Задачника) — лёгкий, с подчёркиванием, перенос строки вместо ленты (CLAUDE.md, п.12).
+const subTab = (on: boolean) => `inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 border-b-2 px-2 text-sm sm:px-2.5 ${on ? 'border-[var(--color-accent)] font-medium text-[var(--color-accent)]' : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'}`;
 
 /** Расписание обучений Задачника (/tasker/trainings): видят все, ведёт тренер, РОП записывает своих. */
 export function TrainingsPage() {
@@ -34,6 +35,7 @@ export function TrainingsPage() {
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [linkManager, setLinkManager] = useState<string | null>(null);
+  const [showCancelled, setShowCancelled] = useState(false);
 
   // Ссылки: ?event=ID (из описания задачи Битрикса), ?tab=effect&manager=ID (история из карточки задачи).
   useEffect(() => {
@@ -54,11 +56,13 @@ export function TrainingsPage() {
   const q = useQuery({ queryKey: [...TRAININGS_KEY, listMode], queryFn: () => getJson<TrainingsResponse>(url) });
 
   const events = useMemo(() => {
-    const list = q.data?.events ?? [];
+    const all = q.data?.events ?? [];
+    // Отменённые — только по галочке (как в «Собраниях»): в рабочем списке они шум.
+    const list = showCancelled ? all : all.filter(e => !e.cancelledAt);
     if (mode !== 'past') return list;
     const now = Date.now();
     return list.filter(e => endOf(e.startsAt, e.durationMin).getTime() <= now).reverse();
-  }, [q.data, mode]);
+  }, [q.data, mode, showCancelled]);
   const days = useMemo(() => {
     const m = new Map<string, TrainingEvent[]>();
     for (const e of events) {
@@ -81,6 +85,13 @@ export function TrainingsPage() {
   });
   const current = inList ?? single.data?.event ?? null;
   const metrics = q.data?.metrics ?? [];
+  const queueQ = useQuery({
+    queryKey: QUEUE_KEY,
+    queryFn: () => getJson<TrainingQueueResponse>('/api/tasker/trainings/queue'),
+    enabled: canManage || canEnroll,
+  });
+  const queueCount = (queueQ.data?.groups ?? []).reduce((n, g) => n + g.items.filter(i => !i.event).length, 0);
+  const cancelledCount = (q.data?.events ?? []).filter(e => e.cancelledAt).length;
 
   const refresh = () => qc.invalidateQueries({ queryKey: TRAININGS_KEY });
   const mut = useMutation({
@@ -99,34 +110,44 @@ export function TrainingsPage() {
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
-      <div className={`mx-auto flex w-full ${mode === 'week' || mode === 'settings' ? 'max-w-6xl' : 'max-w-4xl'} min-w-0 flex-col gap-4 px-3 py-4 sm:px-6`}>
-        <header className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <Link href="/tasker" aria-label="Задачник" className="tap-target flex min-h-9 min-w-9 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
-              <ArrowLeft size={18} />
-            </Link>
-            <GraduationCap size={22} className="shrink-0 text-[var(--color-accent)]" />
-            <h1 className="min-w-0 truncate text-lg font-semibold">Обучения</h1>
-          </div>
+      <div className="flex w-full min-w-0 flex-col gap-3 px-4 pb-6 pt-4 sm:px-6 sm:pt-6">
+        {/* Шапка как у остальных экранов Задачника: заголовок, главное действие, вкладки раздела. */}
+        <header className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+          <h1 className="text-xl font-semibold text-[var(--color-text)]">Задачник</h1>
           {canManage && (
             <button type="button" onClick={() => openPanel({ kind: 'create' })}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-medium text-white">
-              <CalendarPlus size={16} /> Новое обучение
+              className="ml-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-medium text-white hover:bg-[var(--color-accent-hover)]">
+              <CalendarPlus size={16} aria-hidden /> Новое обучение
             </button>
           )}
         </header>
+        <TaskerTabs active="trainings" />
 
-        <div className="flex flex-wrap gap-2" role="tablist">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-1 border-b border-[var(--color-border)]" role="tablist" aria-label="Обучения">
           {MODES.filter(m => (m === 'settings' ? canManage : m === 'queue' ? canManage || canEnroll : true)).map(m => (
-            <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setMode(m)}
-              className={`${TAB} ${mode === m ? 'bg-[var(--color-accent)] text-white' : 'border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'}`}>
-              {MODE_LABEL[m]}
+            <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setMode(m)} className={subTab(mode === m)}>
+              {m === 'settings' && <Settings size={14} aria-hidden />}
+              {/* На телефоне — короткие подписи, чтобы второй ряд вкладок не занимал полэкрана. */}
+              {m === 'settings' ? <span className="sr-only sm:not-sr-only">{MODE_LABEL[m]}</span>
+                : m === 'queue' ? <><span className="sm:hidden">Очередь</span><span className="hidden sm:inline">{MODE_LABEL[m]}</span></>
+                : m === 'effect' ? <><span className="sm:hidden">Эффект</span><span className="hidden sm:inline">{MODE_LABEL[m]}</span></>
+                : MODE_LABEL[m]}
+              {m === 'queue' && queueCount > 0 && (
+                <span className="rounded-full bg-[var(--color-accent)] px-1.5 text-[11px] font-medium tabular-nums text-white">{queueCount}</span>
+              )}
             </button>
           ))}
         </div>
 
+        {(mode === 'upcoming' || mode === 'past') && cancelledCount > 0 && (
+          <label className="inline-flex min-h-11 items-center gap-2 self-start text-[13px] text-[var(--color-text-secondary)]">
+            <input type="checkbox" checked={showCancelled} onChange={e => setShowCancelled(e.target.checked)} className="size-4 accent-[var(--color-accent)]" />
+            показать отменённые ({cancelledCount})
+          </label>
+        )}
+
         {mode === 'week' ? (
-          <WeekGrid canManage={canManage} onOpen={id => openPanel({ kind: 'view', id })} onCreate={preset => openPanel({ kind: 'create', preset })} />
+          <WeekGrid canManage={canManage} canEnroll={canEnroll} onOpenQueue={() => setMode('queue')} onOpen={id => openPanel({ kind: 'view', id })} onCreate={preset => openPanel({ kind: 'create', preset })} />
         ) : mode === 'queue' ? (
           <TrainerQueue onOpenEvent={id => openPanel({ kind: 'view', id })} />
         ) : mode === 'settings' ? (
@@ -134,14 +155,21 @@ export function TrainingsPage() {
         ) : mode === 'effect' ? (
           <EffectivenessView canPickManager={canEnroll || canManage} initialManager={linkManager} />
         ) : q.isLoading ? (
-          <p className="text-sm text-[var(--color-text-muted)]">Загружаю расписание…</p>
+          <div className="flex min-w-0 flex-col gap-2" aria-busy>{[0, 1, 2].map(i => <div key={i} className="h-16 animate-pulse rounded-xl bg-[var(--color-bg-surface)]" />)}</div>
         ) : q.isError ? (
           <p className="text-sm text-[var(--color-negative)]">{(q.error as Error).message}</p>
         ) : days.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-[var(--color-border)] px-4 py-10 text-center text-sm text-[var(--color-text-muted)]">
-            {mode === 'upcoming'
-              ? canManage ? 'Ближайших обучений нет — создайте первое.' : 'Ближайших обучений пока нет.'
-              : 'За последние 90 дней обучений не было.'}
+          <div className="flex min-w-0 flex-col items-center gap-3 rounded-xl border border-dashed border-[var(--color-border)] px-4 py-8 text-center text-sm text-[var(--color-text-muted)]">
+            <span>
+              {mode === 'upcoming'
+                ? canManage ? 'Ближайших занятий нет. Соберите группу из очереди тренера или в свободном слоте недели.' : 'Ближайших занятий пока нет — когда тренер назначит, они появятся здесь.'
+                : 'За последние 90 дней занятий не было.'}
+            </span>
+            {mode === 'upcoming' && canManage && (
+              <button type="button" onClick={() => setMode('week')} className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-4 font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">
+                Открыть сетку недели
+              </button>
+            )}
           </div>
         ) : (
           days.map(([day, list]) => (

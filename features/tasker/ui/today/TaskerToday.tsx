@@ -9,6 +9,8 @@ import { TaskCard } from '../shared/TaskCard';
 import { DayItems, layoutDays } from '../week/TaskerWeek';
 
 function Block({ title, hint, count, tone, children }: { title: string; hint: string; count: number; tone?: 'neg'; children: React.ReactNode }) {
+  // Пустой блок не занимает полэкрана словом «нет» — сворачивается в строку итогов (аудит 23.11).
+  if (count === 0) return null;
   return (
     <section aria-label={title} className="flex min-w-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-3">
       <header className="flex min-w-0 items-baseline gap-2">
@@ -16,7 +18,7 @@ function Block({ title, hint, count, tone, children }: { title: string; hint: st
         <span className="text-xs tabular-nums text-[var(--color-text-muted)]">{count}</span>
       </header>
       <p className="-mt-1 text-xs text-[var(--color-text-muted)]">{hint}</p>
-      {count === 0 ? <div className="py-2 text-xs text-[var(--color-text-muted)]">нет</div> : children}
+      {children}
     </section>
   );
 }
@@ -46,14 +48,32 @@ export function TaskerToday({ tasks, sessions, trainings, meetings = [], onOpen 
     </div>
   );
 
+  const empty = [
+    { label: 'Расписание', n: agenda.length },
+    { label: 'Просрочено', n: overdue.length },
+    { label: 'Срок сегодня', n: dueToday.length },
+    { label: 'Замер сегодня', n: measureToday.length },
+  ].filter(x => x.n === 0);
+  const allEmpty = empty.length === 4;
+
   return (
     <div className="flex min-w-0 flex-col gap-3 px-4 pb-6 pt-3 sm:px-6">
-      <div className="text-sm text-[var(--color-text-muted)] first-letter:uppercase">{fmtDayLong(today)}</div>
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="text-sm font-medium text-[var(--color-text)] first-letter:uppercase">{fmtDayLong(today)}</span>
+        {!allEmpty && empty.length > 0 && (
+          <span className="text-xs text-[var(--color-text-muted)]">{empty.map(x => `${x.label} — нет`).join(' · ')}</span>
+        )}
+      </div>
+      {allEmpty && (
+        <div className="rounded-xl border border-dashed border-[var(--color-border)] px-4 py-8 text-center text-sm text-[var(--color-text-muted)]">
+          На сегодня ничего: нет сессий, просрочек, сроков и замеров. План на неделю — во вкладке «Неделя».
+        </div>
+      )}
       <div className="grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-2">
+        <Block title="Просрочено" hint="Срок прошёл, а задача не сдана" count={overdue.length} tone="neg">{cards(overdue)}</Block>
         <Block title="Расписание дня" hint="Сессии, собрания, обучения и задачи со слотом — по времени" count={agenda.length}>
           <div className="flex min-w-0 flex-col gap-2"><DayItems items={agenda} onOpen={onOpen} /></div>
         </Block>
-        <Block title="Просрочено" hint="Срок прошёл, а задача не сдана" count={overdue.length} tone="neg">{cards(overdue)}</Block>
         <Block title="Срок сегодня" hint="Сдать до конца дня" count={dueToday.length}>{cards(dueToday)}</Block>
         <Block title="Замер сегодня" hint="Сегодня система пересчитает показатель и поставит вердикт" count={measureToday.length}>{cards(measureToday)}</Block>
       </div>

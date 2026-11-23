@@ -16,7 +16,9 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
   compact?: boolean;
 }) {
   const overdue = isOverdue(t);
-  const { kind, assignee, doneNote } = t;
+  const { kind, doneNote } = t;
+  // Исполнитель, совпадающий с менеджером, не дублируем («Черняков В. · Практика · Черняков В.» — аудит 23.11).
+  const assignee = t.assignee && t.assignee.id !== t.manager.id ? t.assignee : null;
   return (
     <button
       type="button"
@@ -40,14 +42,14 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
         {!compact && (assignee ?? t.rop) && <>
           <span aria-hidden className="shrink-0 text-[var(--color-text-muted)]">·</span>
           {assignee
-            ? <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`Исполнитель: ${assignee.name}`}>{shortName(assignee.name)}</span>
+            ? <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`Исполнитель: ${assignee.name}`}>ведёт {shortName(assignee.name)}</span>
             : <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`РОП: ${t.rop!.name}`}>РОП {shortName(t.rop!.name)}</span>}
         </>}
       </div>
       {!compact && (
         <div className="flex min-w-0 items-center gap-1 tabular-nums text-[var(--color-text)]" title="Значение при постановке → цель">
           <Target size={12} className="shrink-0 text-[var(--color-text-muted)]" aria-hidden />
-          <span className="truncate">{fmtValue(t.snapshot.value, t.format)} → {fmtValue(t.target, t.format)}</span>
+          <span className="truncate"><span className="text-[var(--color-text-muted)]">было</span> {fmtValue(t.snapshot.value, t.format)} → <span className="text-[var(--color-text-muted)]">цель</span> {fmtValue(t.target, t.format)}</span>
           {t.measuredValue != null && <span className="truncate text-[var(--color-text-muted)]">· замер {fmtValue(t.measuredValue, t.format)}</span>}
         </div>
       )}

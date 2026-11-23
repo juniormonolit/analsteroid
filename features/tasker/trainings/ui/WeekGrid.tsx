@@ -1,33 +1,50 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
-import type { TrainingEvent, TrainingSlot, TrainingSlotsResponse, TrainingsResponse } from '../types';
-import { SLOTS_KEY, TRAININGS_KEY, getJson } from './api';
-import { addDaysKey, ddmm, isoWeekday, mskDateKey, mskTime, surname, weekStart, WEEKDAYS_SHORT } from './format';
+import { ChevronLeft, ChevronRight, Lock, Plus, Users } from 'lucide-react';
+import { Drawer } from '@/components/ui/Drawer';
+import type { TrainingEvent, TrainingQueueResponse, TrainingSlot, TrainingSlotsResponse, TrainingsResponse } from '../types';
+import { QUEUE_KEY, SLOTS_KEY, TRAININGS_KEY, getJson } from './api';
+import { addDaysKey, ddmm, endOf, isoWeekday, mskDateKey, mskTime, plural, surname, weekStart, WEEKDAYS_SHORT } from './format';
 import type { TrainingFormPreset } from './TrainingForm';
+import { SlotAssemble, type SlotPick } from './SlotAssemble';
 
 /**
- * Сетка недели как таблица тренера: строки — время слотов, колонки — Пн–Пт (Сб/Вс — если есть слоты или события).
- * В ячейке — тема, отдел, фамилии. Пустой слот тренеру — «+», создание обучения с подставленным временем.
- * На телефоне — те же данные списком по дням (таблица из 5 колонок на 375px не читается).
+ * Сетка недели тренера (по образцу его Excel): строки — слоты времени, колонки — Пн–Пт (Сб/Вс — если есть).
+ * Правила (аудит 23.11, ai_docs/fresh_docs/TASKER_UX_AUDIT.md):
+ * - подпись слота («Нулевой цикл · Питер · НЦ · очно») — один раз в заголовке строки, если она одинакова во все дни;
+ *   иначе в ячейке маленький чип-закрепление («Москва»), а не текст на всю ячейку;
+ * - занятие — заметная карточка: тема, отдел, места X/Y, фамилии;
+ * - свободный будущий слот у тренера — видимая (и на таче) кнопка «Собрать занятие» → люди из очереди «Теория»;
+ * - прошедшие слоты приглушены и без действий, сегодня — подписанная акцентная колонка;
+ * - над сеткой — полоса «что делать»: сколько ждут в очереди / пустая неделя.
+ * lg+ — таблица; уже — карточки по дням (на 768 с сайдбаром 5 колонок не читаются).
  */
-export function WeekGrid({ canManage, onOpen, onCreate }: {
+export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }: {
   canManage: boolean;
+  canEnroll: boolean;
   onOpen: (id: number) => void;
   onCreate: (preset: TrainingFormPreset) => void;
+  onOpenQueue: () => void;
 }) {
   const today = mskDateKey(new Date());
   const [monday, setMonday] = useState(() => weekStart(today));
+  const [pick, setPick] = useState<SlotPick | null>(null);
   const sunday = addDaysKey(monday, 6);
   const slotsQ = useQuery({ queryKey: SLOTS_KEY, queryFn: () => getJson<TrainingSlotsResponse>('/api/tasker/trainings/slots') });
   const evQ = useQuery({
     queryKey: [...TRAININGS_KEY, 'week', monday],
     queryFn: () => getJson<TrainingsResponse>(`/api/tasker/trainings?from=${monday}&to=${sunday}`),
   });
+  const queueQ = useQuery({
+    queryKey: QUEUE_KEY,
+    queryFn: () => getJson<TrainingQueueResponse>('/api/tasker/trainings/queue'),
+    enabled: canManage || canEnroll,
+  });
 
   const slots = useMemo(() => (slotsQ.data?.slots ?? []).filter(s => s.active), [slotsQ.data]);
-  const events = useMemo(() => evQ.data?.events ?? [], [evQ.data]);
+  // Отменённые в сетке не показываем — это расписание, а не журнал.
+  const events = useMemo(() => (evQ.data?.events ?? []).filter(e => !e.cancelledAt), [evQ.data]);
 
   const grid = useMemo(() => {
     const days = Array.from({ length: 7 }, (_, i) => addDaysKey(monday, i));
@@ -44,129 +61,247 @@ export function WeekGrid({ canManage, onOpen, onCreate }: {
       const k = `${mskDateKey(e.startsAt)}|${mskTime(e.startsAt)}`;
       evAt.set(k, [...(evAt.get(k) ?? []), e]);
     }
-    return { cols, rows, slotAt, evAt };
+    // Заголовок строки: длительность и подпись, общая для всех слотов этого времени (если одинакова).
+    const rowInfo = new Map<string, { duration: number | null; meta: string; uniform: boolean }>();
+    for (const t of rows) {
+      const ss = cols.map(d => slotAt.get(`${isoWeekday(d)}|${t}`)).filter((s): s is TrainingSlot => !!s);
+      const metas = new Set(ss.map(slotMeta));
+      const uniform = ss.length === cols.length && metas.size === 1;
+      rowInfo.set(t, { duration: ss[0]?.durationMin ?? null, meta: uniform ? [...metas][0] : '', uniform });
+    }
+    return { cols, rows, slotAt, evAt, rowInfo };
   }, [monday, slots, events]);
 
   const loading = slotsQ.isLoading || evQ.isLoading;
   const error = (slotsQ.error ?? evQ.error) as Error | null;
   const nowMs = Date.now();
+  const startMsOf = (day: string, time: string) => Date.parse(`${day}T${time}:00+03:00`);
 
-  const cell = (day: string, time: string, compact: boolean) => {
+  const freeFuture = grid.cols.reduce((n, d) => n + grid.rows.filter(t => {
+    const slot = grid.slotAt.get(`${isoWeekday(d)}|${t}`);
+    return slot && !grid.evAt.has(`${d}|${t}`) && startMsOf(d, t) > nowMs;
+  }).length, 0);
+
+  const openSlot = (day: string, time: string, slot: TrainingSlot) => setPick({
+    meta: slotMeta(slot),
+    preset: {
+      startsAt: new Date(startMsOf(day, time)).toISOString(), durationMin: slot.durationMin, place: slot.place,
+      slotId: slot.id, departmentLabel: slot.departmentLabel,
+    },
+  });
+
+  /** Содержимое ячейки (одинаково для таблицы и списка по дням). */
+  const cell = (day: string, time: string, showMeta: boolean) => {
     const evs = grid.evAt.get(`${day}|${time}`) ?? [];
     const slot = grid.slotAt.get(`${isoWeekday(day)}|${time}`) ?? null;
-    const startMs = Date.parse(`${day}T${time}:00+03:00`);
-    if (evs.length) {
-      return evs.map(e => <EventChip key={e.id} e={e} onOpen={() => onOpen(e.id)} />);
-    }
-    if (!slot) return compact ? null : <span aria-hidden className="text-[var(--color-text-muted)]">·</span>;
-    const meta = [slot.label, slot.departmentLabel, slot.isOffline ? 'очно' : null].filter(Boolean).join(' · ');
-    const canAdd = canManage && startMs > nowMs;
+    if (evs.length) return evs.map(e => <EventCard key={e.id} e={e} past={endOf(e.startsAt, e.durationMin).getTime() < nowMs} onOpen={() => onOpen(e.id)} />);
+    if (!slot) return null;
+    const past = startMsOf(day, time) <= nowMs;
+    // Подпись, которой нет в заголовке строки, — чипом (закрепление за отделом и т.п.).
+    const tag = showMeta || !grid.rowInfo.get(time)?.uniform ? (slot.departmentLabel || slot.label) : null;
+    if (past) return <span title="Слот прошёл" className="px-1 text-[12px] text-[var(--color-text-muted)]">—</span>;
     return (
-      <div className="flex min-w-0 items-start justify-between gap-1">
-        <span className="min-w-0 break-words text-[11.5px] text-[var(--color-text-muted)]">{meta || (compact ? 'свободно' : '')}</span>
-        {canAdd && (
-          <button type="button" aria-label={`Обучение ${WEEKDAYS_SHORT[isoWeekday(day)]} ${ddmm(day)} ${time}`}
-            onClick={() => onCreate({
-              startsAt: new Date(startMs).toISOString(), durationMin: slot.durationMin, place: slot.place,
-              slotId: slot.id, departmentLabel: slot.departmentLabel,
-            })}
-            className="tap-target hover-reveal inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-accent)]">
-            <Plus size={14} />
+      <div className="flex min-w-0 flex-col gap-1">
+        {tag && (
+          <span title="Слот закреплён" className="inline-flex min-w-0 max-w-full items-center gap-1 self-start rounded bg-[var(--color-bg-hover)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-secondary)]">
+            <Lock size={10} className="shrink-0" /><span className="truncate">{tag}</span>
+          </span>
+        )}
+        {canManage ? (
+          <button type="button" onClick={() => openSlot(day, time, slot)}
+            aria-label={`Собрать занятие: ${WEEKDAYS_SHORT[isoWeekday(day)]} ${ddmm(day)}, ${time}`}
+            className="inline-flex min-h-11 w-full min-w-0 items-center justify-center gap-1 rounded-lg border border-dashed border-[var(--color-border-strong,var(--color-border))] px-2 text-[12.5px] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)]">
+            <Plus size={14} className="shrink-0" /><span className="truncate">Собрать занятие</span>
           </button>
+        ) : (
+          <span className="text-[12px] text-[var(--color-text-muted)]">свободно</span>
         )}
       </div>
+    );
+  };
+
+  // Полоса «что делать» над сеткой.
+  const queue = queueQ.data;
+  const waitingGroups = (queue?.groups ?? []).map(g => ({ label: g.label, n: g.items.filter(i => !i.event).length })).filter(g => g.n > 0);
+  const waiting = waitingGroups.reduce((s, g) => s + g.n, 0);
+  const banner = !loading && !error && grid.rows.length > 0 && (
+    waiting > 0 ? (
+      <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-3 py-2.5 text-[13px] sm:flex-row sm:items-center sm:justify-between">
+        <span className="min-w-0">
+          <b>В очереди {waiting} {plural(waiting, 'человек', 'человека', 'человек')}</b>
+          {' '}по {waitingGroups.length} {plural(waitingGroups.length, 'теме', 'темам', 'темам')}: {waitingGroups.map(g => `${g.label} (${g.n})`).join(' · ')}.
+          {canManage && ' Нажмите «Собрать занятие» в свободном слоте и отметьте людей.'}
+        </span>
+        <button type="button" onClick={onOpenQueue} className="min-h-11 shrink-0 self-start rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-bg)] px-3 font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)] sm:self-auto">
+          Открыть очередь
+        </button>
+      </div>
+    ) : events.length === 0 ? (
+      <div className="min-w-0 rounded-xl border border-dashed border-[var(--color-border)] px-3 py-2.5 text-[13px] text-[var(--color-text-secondary)]">
+        <b className="text-[var(--color-text)]">На этой неделе занятий нет.</b>{' '}
+        {canManage
+          ? `Очередь тренера пуста: люди попадают туда, когда РОП ставит задачу «Теория». Занятие можно собрать и вручную — кнопкой «Собрать занятие» в любом из ${freeFuture} свободных слотов.`
+          : canEnroll
+            ? 'Записать менеджера на обучение — задачей с типом «Теория» (попадёт в очередь тренера) или в карточке занятия во вкладке «Ближайшие».'
+            : 'Когда тренер назначит занятие, оно появится здесь.'}
+      </div>
+    ) : null
+  );
+
+  const dayHead = (d: string) => {
+    const isToday = d === today;
+    const past = d < today;
+    return (
+      <span className={`inline-flex min-w-0 items-center gap-1.5 ${past ? 'text-[var(--color-text-muted)]' : ''}`}>
+        <span className="font-semibold">{WEEKDAYS_SHORT[isoWeekday(d)]}</span>
+        <span className="tabular-nums">{ddmm(d)}</span>
+        {isToday && <span className="rounded-full bg-[var(--color-accent)] px-2 py-px text-[11px] font-medium text-white">сегодня</span>}
+      </span>
     );
   };
 
   return (
     <section className="flex min-w-0 flex-col gap-3">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <button type="button" aria-label="Предыдущая неделя" onClick={() => setMonday(addDaysKey(monday, -7))}
-          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]">
-          <ChevronLeft size={16} />
-        </button>
-        <span className="min-w-0 text-sm font-medium tabular-nums">{ddmm(monday)} – {ddmm(sunday)}</span>
-        <button type="button" aria-label="Следующая неделя" onClick={() => setMonday(addDaysKey(monday, 7))}
-          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]">
-          <ChevronRight size={16} />
-        </button>
+        <div className="flex min-w-0 items-center gap-1">
+          <button type="button" aria-label="Предыдущая неделя" onClick={() => setMonday(addDaysKey(monday, -7))}
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]">
+            <ChevronLeft size={16} />
+          </button>
+          <span className="min-w-0 px-2 text-sm font-medium tabular-nums">{ddmm(monday)} – {ddmm(addDaysKey(monday, grid.cols.length > 5 ? 6 : 4))}</span>
+          <button type="button" aria-label="Следующая неделя" onClick={() => setMonday(addDaysKey(monday, 7))}
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]">
+            <ChevronRight size={16} />
+          </button>
+        </div>
         {monday !== weekStart(today) && (
           <button type="button" onClick={() => setMonday(weekStart(today))}
-            className="min-h-11 rounded-lg px-3 text-sm text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">Эта неделя</button>
+            className="min-h-11 rounded-lg px-3 text-sm text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">К текущей неделе</button>
         )}
-        {slotsQ.data?.trainer && <span className="ml-auto min-w-0 truncate text-[12.5px] text-[var(--color-text-muted)]">Тренер: {slotsQ.data.trainer.name}</span>}
+        {!loading && !error && (
+          <span className="ml-auto min-w-0 text-[12.5px] text-[var(--color-text-muted)]">
+            {events.length} {plural(events.length, 'занятие', 'занятия', 'занятий')} · свободно {freeFuture}
+            {slotsQ.data?.trainer ? ` · тренер ${slotsQ.data.trainer.name}` : ''}
+          </span>
+        )}
       </div>
 
+      {banner}
+
       {loading ? (
-        <p className="text-sm text-[var(--color-text-muted)]">Загружаю неделю…</p>
+        <div className="flex min-w-0 flex-col gap-2" aria-busy>
+          {[0, 1, 2, 3].map(i => <div key={i} className="h-14 animate-pulse rounded-lg bg-[var(--color-bg-surface)]" />)}
+        </div>
       ) : error ? (
-        <p className="text-sm text-[var(--color-negative)]">{error.message}</p>
+        <div className="rounded-xl bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-negative)]">
+          {error.message}
+          <button type="button" onClick={() => { slotsQ.refetch(); evQ.refetch(); }} className="ml-2 underline">Повторить</button>
+        </div>
       ) : grid.rows.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-[var(--color-border)] px-4 py-8 text-center text-sm text-[var(--color-text-muted)]">
-          {canManage ? 'Сетка слотов пуста — задайте её во вкладке «Настройки».' : 'На этой неделе обучений нет.'}
+        <div className="flex min-w-0 flex-col items-center gap-2 rounded-xl border border-dashed border-[var(--color-border)] px-4 py-8 text-center text-sm text-[var(--color-text-muted)]">
+          <span>{canManage ? 'Сетка слотов пуста: задайте дни и время занятий во вкладке «Настройки».' : 'На этой неделе обучений нет.'}</span>
         </div>
       ) : (
         <>
-          {/* Планшет и шире — таблица как у тренера */}
-          <div className="scroll-x hidden md:block">
-            <table className="w-full min-w-[720px] table-fixed border-collapse text-[12.5px]">
+          {/* lg+ — таблица как у тренера */}
+          <div className="scroll-x hidden rounded-xl bg-[var(--color-bg-surface)] lg:block">
+            <table className="w-full table-fixed border-collapse text-[12.5px]">
               <thead>
                 <tr>
-                  <th className="w-16 border-b border-[var(--color-border)] px-2 py-2 text-left font-medium text-[var(--color-text-muted)]">Время</th>
+                  <th className="w-36 border-b border-[var(--color-border)] px-3 py-2.5 text-left text-[12px] font-medium text-[var(--color-text-muted)]">Слот</th>
                   {grid.cols.map(d => (
-                    <th key={d} className={`border-b border-[var(--color-border)] px-2 py-2 text-left font-semibold ${d === today ? 'text-[var(--color-accent)]' : ''}`}>
-                      {WEEKDAYS_SHORT[isoWeekday(d)]} <span className="font-normal text-[var(--color-text-muted)]">{ddmm(d)}</span>
+                    <th key={d} className={`border-b border-l border-[var(--color-border)] px-2 py-2.5 text-left font-normal ${d === today ? 'border-t-2 border-t-[var(--color-accent)] bg-[var(--color-accent-soft)]' : ''}`}>
+                      {dayHead(d)}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {grid.rows.map(t => (
-                  <tr key={t} className="align-top">
-                    <td className="border-b border-[var(--color-border)] px-2 py-2 font-semibold tabular-nums">{t}</td>
-                    {grid.cols.map(d => (
-                      <td key={d} className={`group border-b border-l border-[var(--color-border)] px-1.5 py-1.5 ${d === today ? 'bg-[color-mix(in_srgb,var(--color-accent)_5%,transparent)]' : ''}`}>
-                        <div className="flex min-w-0 flex-col gap-1">{cell(d, t, false)}</div>
-                      </td>
-                    ))}
-                  </tr>
-                ))}
+                {grid.rows.map(t => {
+                  const info = grid.rowInfo.get(t)!;
+                  return (
+                    <tr key={t} className="align-top">
+                      <th scope="row" className="border-b border-[var(--color-border)] px-3 py-2 text-left font-normal">
+                        <span className="block text-[13px] font-semibold tabular-nums">{t}{info.duration ? `–${mskTime(endOf(`${today}T${t}:00+03:00`, info.duration))}` : ''}</span>
+                        {info.meta && <span className="mt-0.5 block break-words text-[11.5px] leading-snug text-[var(--color-text-muted)]">{info.meta}</span>}
+                      </th>
+                      {grid.cols.map(d => (
+                        <td key={d} className={`border-b border-l border-[var(--color-border)] p-1.5 ${d === today ? 'bg-[var(--color-accent-soft)]' : ''}`}>
+                          <div className="flex min-w-0 flex-col gap-1">{cell(d, t, false)}</div>
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
 
-          {/* Телефон — по дням */}
-          <div className="flex min-w-0 flex-col gap-3 md:hidden">
-            {grid.cols.map(d => (
-              <div key={d} className="flex min-w-0 flex-col gap-1.5 rounded-xl border border-[var(--color-border)] p-2.5">
-                <h3 className={`text-[13px] font-semibold ${d === today ? 'text-[var(--color-accent)]' : ''}`}>
-                  {WEEKDAYS_SHORT[isoWeekday(d)]} {ddmm(d)}{d === today ? ' · сегодня' : ''}
-                </h3>
-                {grid.rows.filter(t => grid.evAt.has(`${d}|${t}`) || grid.slotAt.has(`${isoWeekday(d)}|${t}`)).map(t => (
-                  <div key={t} className="group flex min-w-0 items-start gap-2 border-t border-[var(--color-border)] pt-1.5">
-                    <span className="w-11 shrink-0 pt-0.5 text-[12.5px] font-semibold tabular-nums">{t}</span>
-                    <div className="flex min-w-0 flex-1 flex-col gap-1">{cell(d, t, true)}</div>
-                  </div>
-                ))}
-              </div>
-            ))}
+          {/* Телефон и планшет — по дням */}
+          <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:hidden">
+            {grid.cols.map(d => {
+              const dayRows = grid.rows.filter(t => grid.evAt.has(`${d}|${t}`) || grid.slotAt.has(`${isoWeekday(d)}|${t}`));
+              const shown = dayRows.filter(t => grid.evAt.has(`${d}|${t}`) || startMsOf(d, t) > nowMs);
+              const hiddenPast = dayRows.length - shown.length;
+              return (
+                <div key={d} className={`flex min-w-0 flex-col gap-1.5 rounded-xl bg-[var(--color-bg-surface)] p-2.5 ${d === today ? 'ring-2 ring-[var(--color-accent)]' : ''}`}>
+                  <h3 className="text-[13px]">{dayHead(d)}</h3>
+                  {shown.length === 0 && (
+                    <p className="text-[12.5px] text-[var(--color-text-muted)]">{d < today || hiddenPast ? 'Занятий не было' : 'Слотов нет'}</p>
+                  )}
+                  {shown.map(t => (
+                    <div key={t} className="flex min-w-0 items-start gap-2 border-t border-[var(--color-border)] pt-1.5">
+                      <span className="w-12 shrink-0 pt-1 text-[12.5px] font-semibold tabular-nums">{t}</span>
+                      <div className="flex min-w-0 flex-1 flex-col gap-1">{cell(d, t, true)}</div>
+                    </div>
+                  ))}
+                  {hiddenPast > 0 && shown.length > 0 && (
+                    <p className="border-t border-[var(--color-border)] pt-1.5 text-[11.5px] text-[var(--color-text-muted)]">
+                      {hiddenPast} {plural(hiddenPast, 'слот', 'слота', 'слотов')} уже прошли
+                    </p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </>
       )}
+
+      <Drawer open={pick !== null} onOpenChange={o => { if (!o) setPick(null); }} title="Собрать занятие">
+        {pick && (
+          <SlotAssemble key={pick.preset.startsAt} pick={pick}
+            onDone={id => { setPick(null); onOpen(id); }}
+            onManual={() => { const p = pick.preset; setPick(null); onCreate(p); }}
+            onCancel={() => setPick(null)} />
+        )}
+      </Drawer>
     </section>
   );
 }
 
-function EventChip({ e, onOpen }: { e: TrainingEvent; onOpen: () => void }) {
+/** «Нулевой цикл · Питер · НЦ · очно» */
+function slotMeta(s: TrainingSlot): string {
+  return [s.label, s.departmentLabel, s.isOffline ? 'очно' : null].filter(Boolean).join(' · ');
+}
+
+function EventCard({ e, past, onOpen }: { e: TrainingEvent; past: boolean; onOpen: () => void }) {
   const names = e.attendees.map(a => surname(a.manager.name));
-  const hidden = e.enrolledCount - names.length;
+  const shown = names.slice(0, 3);
+  const more = e.enrolledCount - shown.length;
+  const cap = e.capacity;
+  const full = cap != null && e.enrolledCount >= cap;
+  const small = cap != null && e.enrolledCount < 3;
   return (
     <button type="button" onClick={onOpen}
-      className="flex w-full min-w-0 flex-col gap-0.5 rounded-lg bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] px-2 py-1.5 text-left hover:bg-[color-mix(in_srgb,var(--color-accent)_20%,transparent)]">
-      <span className="min-w-0 break-words font-medium leading-snug">{e.title}</span>
+      className={`flex w-full min-w-0 flex-col gap-0.5 rounded-lg border border-[var(--color-border)] border-l-[3px] bg-[var(--color-bg)] px-2 py-1.5 text-left shadow-sm hover:shadow ${past ? 'border-l-[var(--color-text-muted)] opacity-75' : small ? 'border-l-[var(--color-warning)]' : 'border-l-[var(--color-accent)]'}`}>
+      <span className="line-clamp-2 min-w-0 break-words text-[12.5px] font-semibold leading-snug">{e.title}</span>
       {e.departmentLabel && <span className="min-w-0 truncate text-[11.5px] text-[var(--color-text-secondary)]">{e.departmentLabel}</span>}
+      <span className={`inline-flex items-center gap-1 text-[11.5px] tabular-nums ${full ? 'text-[var(--color-negative)]' : 'text-[var(--color-text-secondary)]'}`}>
+        <Users size={12} className="shrink-0" />{e.enrolledCount}{cap != null ? ` / ${cap}` : ''}
+        {past ? ' · прошло' : small ? ' · набирается' : ''}
+      </span>
       <span className="min-w-0 break-words text-[11.5px] text-[var(--color-text-muted)]">
-        {names.length ? names.join(', ') : 'никто не записан'}{hidden > 0 ? ` +${hidden}` : ''}
+        {shown.length ? shown.join(', ') : e.enrolledCount ? '' : 'никто не записан'}{more > 0 ? ` +${more}` : ''}
       </span>
     </button>
   );

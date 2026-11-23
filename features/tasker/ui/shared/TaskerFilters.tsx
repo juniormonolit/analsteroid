@@ -3,7 +3,7 @@
 // Списки людей собираются из пришедших задач и копятся за сессию страницы: иначе после выбора
 // менеджера в списке остался бы он один.
 import { useEffect, useMemo, useState } from 'react';
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { SearchSelect, type SearchSelectOption } from '@/components/ui/SearchSelect';
 import { TASKER_METRIC_GROUP_LABELS, type TaskerMetric, type TaskerPerson, type TaskerTasksResponse } from '../../types';
 import type { TaskerFilterState } from './api';
@@ -45,9 +45,17 @@ export function TaskerFilters({ f, data, metrics }: { f: TaskerFilterState; data
     [metrics],
   );
   const cls = 'min-w-0 max-w-full';
+  // Телефон: четыре селекта занимали два ряда до первой карточки — прячем за одну кнопку (аудит 23.11).
+  const [open, setOpen] = useState(false);
+  const activeCount = [f.rop, f.manager, f.metric, f.mine].filter(Boolean).length;
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1.5" role="group" aria-label="Фильтр задач">
+    <>
+    <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+      className={`inline-flex min-h-11 items-center gap-1.5 self-start rounded-lg border px-3 text-sm sm:hidden ${activeCount ? 'border-[var(--color-accent)] text-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text)]'}`}>
+      <SlidersHorizontal size={15} aria-hidden /> Фильтры{activeCount ? ` · ${activeCount}` : ''}
+    </button>
+    <div className={`${open ? 'flex' : 'hidden'} min-w-0 flex-wrap items-center gap-1.5 sm:flex`} role="group" aria-label="Фильтр задач">
       {ropOptions.length > 1 || f.rop ? (
         <SearchSelect ariaLabel="РОП" value={f.rop} onChange={f.setRop} allLabel="Все РОПы" options={ropOptions} searchPlaceholder="Поиск РОПа" className={cls} />
       ) : null}
@@ -62,5 +70,6 @@ export function TaskerFilters({ f, data, metrics }: { f: TaskerFilterState; data
         </button>
       )}
     </div>
+    </>
   );
 }
