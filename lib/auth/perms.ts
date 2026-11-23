@@ -75,6 +75,9 @@ export const PERM_SECTIONS = [
   // «Канбан логиста» (владелец 09.11): заявки 1С по фильтрам → проработка «дешевле» →
   // итог. Роли «Логист» выдаётся миграцией 261.
   { key: 'section.logist_kanban', label: 'Канбан логиста' },
+  // «Задачник» (TASKER_SPEC.md, 23.11): задачи «подтянуть показатель до среднего» с
+  // автозамером + расписание обучений. Видят все роли продаж (менеджер — свои задачи).
+  { key: 'section.tasker', label: 'Задачник' },
   { key: 'section.rating', label: 'Рейтинг' },
   { key: 'section.widget_constructor', label: 'Виджеты' },
   // «Дашборд тест» (задача владельца 08.10) — черновик дашборда директора по
@@ -139,6 +142,10 @@ export const PERM_ACTIONS = [
   // и весов приоритета, видит все запросы, переназначает. Пофамильно; «Администратор» и супер-админ — и так
   // (features/logist-kanban/engine/requests/actor.ts canManageLogistKanban).
   { key: 'action.logist_kanban.manage', label: 'Канбан запросов логистам: настройки очередей, весь поток, переназначение' },
+  // «Задачник» (TASKER_SPEC.md): ставить задачи менеджерам (РОП — своим, директор — филиалу,
+  // админ — всем; срез — canSeeManager). Тренер — личное право на расписание обучений.
+  { key: 'action.tasker.assign', label: 'Задачник: ставить задачи менеджерам' },
+  { key: 'action.tasker.trainings.manage', label: 'Задачник: вести расписание обучений (тренер)' },
 ] as const;
 
 // Особое право-джокер: «все разделы, включая будущие». Заведено 31.08 по жалобе
@@ -191,6 +198,7 @@ export const MORE_MENU_PERMS: ReadonlyArray<{ key: PermKey; label: string }> = [
   { key: 'section.cross_sell', label: 'Что предложить' },
   { key: 'section.repeat_kanban', label: 'Канбан повторных продаж' },
   { key: 'section.logist_kanban', label: 'Канбан логиста' },
+  { key: 'section.tasker', label: 'Задачник' },
   { key: 'action.deal_chats', label: 'Чаты' },
   { key: 'section.rating', label: 'Рейтинг' },
   { key: 'section.offload', label: 'Разгрузка отделов' },

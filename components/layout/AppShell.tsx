@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
-  BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
+  BarChart2, ClipboardList, ListChecks, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
   Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3, Megaphone, Tags,
 } from 'lucide-react';
@@ -490,6 +490,8 @@ function SidebarBody({
     // «Канбан логиста» — запросы менеджеров логистам (supply / cheaper), LOGIST_REQUESTS_SPEC.md;
     // с 19.11 заменил прототип на заявках 1С. Право — section.logist_kanban (роль «Логист»).
     { href: '/logist-kanban', label: 'Канбан логиста', icon: <Columns3 size={18} />, ok: canMore('section.logist_kanban') },
+    // «Задачник» (TASKER_SPEC.md, 23.11) — задачи РОПа менеджеру с автозамером + обучения.
+    { href: '/tasker', label: 'Задачник', icon: <ListChecks size={18} />, ok: canMore('section.tasker') },
     // Чаты по сделкам (задача владельца 20.07) — переписки РОПа с менеджерами через
     // бота «Аналитик»; гейт по действию, не по section.* (право включается ролям).
     { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: canMore('action.deal_chats') },
