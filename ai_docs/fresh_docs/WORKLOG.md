@@ -30935,3 +30935,20 @@ worktree (временная страница в `(bare)`, в общую пап�
 **НЕ проверено на живых данных:** локально нет доступа к БД (`.env.local` смотрит на мёртвый 62, туннель 15432 не
 поднят, свежих кредов monolitika нет). Сверку с отчётом за октябрь 2026 (компания + 2–3 менеджера) и покрытие
 комплексности — прогнать `npm run verify:metric-map` с env прода; до этого числа карты не подтверждены.
+
+## 2026-11-23 — «Карта показателей»: 500 на проде «нет метрики repeat_deals_count» — поиск метрик без падений
+
+На проде (BUILD oEEY4KaQuwgpNl9rHIQwh) GET `/api/metric-map` → 500: в `monolitika.metrics` нет
+`repeat_deals_count`. Куда делся: это id из ранних сидов (006/009); с миграции 041 «Кол-во сделок (повт.)» в
+каталоге — `repeat_created_count` (на него же ссылаются 184/185). Кроме того, `primary_reservations_count` на проде
+`is_active=false`; `loadMetrics` отдаёт строку только при `is_active OR NOT is_hidden_in_ui`, так что её может не быть.
+
+`features/metric-map/engine/data.ts::catalogMetrics` теперь ищет метрику каждого слота (сделки/брони/продажи/суммы
+ветки) так: кандидаты id (`repeat_created_count`, затем `repeat_deals_count`; `primary_deals_count`, …) в
+`loadMetrics` → те же id напрямую из `metrics` (неактивные/скрытые годятся) → синтез: парная метрика другой ветки с
+заменой `funnel_type` (как у `repeat_reservations_count`) → «все воронки» (`deals_count`, `reservations_count`,
+`sales_count`, `all_sales_amount`) + `funnel_type`. Синтез пишется в лог `[metric-map] нет в каталоге, собрано из
+парных: …`. Падает только без опоры вовсе. Колонки SQL — по слотам, не по id каталога.
+**Проверено:** typecheck; заглушка каталога «как на проде» (нет `repeat_deals_count`/`repeat_created_count`,
+`primary_reservations_count` неактивна и скрыта): повт. сделок = 2 (синтез из `primary_deals_count`), перв. броней = 1
+(прямое чтение), корень 130 000 = перв. + повт. На живых данных — не сверено (ждёт выкатки).
