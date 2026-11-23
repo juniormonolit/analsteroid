@@ -75,6 +75,7 @@ export async function register() {
     if (allow.has('repeatMorning')) scheduleRepeatMorning();
     if (allow.has('repeatTaskStatus')) scheduleRepeatTaskStatus();
     if (allow.has('repeatAutoBrak')) scheduleRepeatAutoBrak();
+    if (allow.has('metricMapNightly')) scheduleMetricMapNightly();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
@@ -747,6 +748,37 @@ function scheduleWidgetMetrics() {
 // по SSH (monolitika-ro@5.42.106.70, команды tables/sql), запись — gzip-файл в SUPPLY_PANEL_DIR.
 // Без пишущих действий в БД и рассылок — поэтому разрешена и при рубильнике (BACKGROUND_JOBS_ALLOW).
 // Первый прогон — сразу при старте, чтобы раздел не ждал 15 минут после деплоя.
+// «Карта показателей» (миграция 276, владелец 23.11): ночной пересчёт снимков в 03:00–03:59 МСК,
+// раз в сутки — замок в Redis на дату ставится ПОСЛЕ успешного прогона. Только чтение sa + запись
+// своей таблицы metric_map_snapshots; рассылок нет. Как и снимок канбана, запускается только
+// ключом metricMapNightly в BACKGROUND_JOBS_ALLOW.
+function scheduleMetricMapNightly() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    const msk = new Date(Date.now() + 3 * 3600_000);
+    if (msk.getUTCHours() !== 3) return;
+    const date = msk.toISOString().slice(0, 10);
+    running = true;
+    try {
+      const { redisReady } = await import('./lib/cache/redis');
+      const redis = await redisReady();
+      if (redis && await redis.get(`metric-map-nightly:done:${date}`)) return;
+      if (redis && !(await redis.set(`metric-map-nightly:try:${date}`, '1', 'EX', 1800, 'NX'))) return;
+      const { recomputeMetricMaps } = await import('./features/metric-map/engine/service');
+      const started = Date.now();
+      const r = await recomputeMetricMaps(false);
+      console.log(`[metricMapNightly] ${date}: снимков ${r.count}, ${Math.round((Date.now() - started) / 1000)} с`);
+      if (redis) await redis.set(`metric-map-nightly:done:${date}`, '1', 'EX', 3 * 86400);
+    } catch (err) {
+      console.error('[metricMapNightly] не удалось:', err instanceof Error ? err.message : err);
+    } finally {
+      running = false;
+    }
+  };
+  setInterval(() => { void tick(); }, 5 * 60 * 1000);
+}
+
 // Ежедневный снимок канбана повторных продаж (миграция 231, владелец 20.10): в 23:30–23:59 МСК,
 // раз в сутки — замок в Redis на дату ставится ПОСЛЕ успешного прогона (как у отчётов).
 function scheduleRepeatKanbanSnapshot() {

@@ -300,17 +300,27 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
   }
 }
 
-function genDealsExpr(m: Metric, batch = false): string {
+/**
+ * Условие «сделка `d` попала в метрику `m`» (дата метрики в периоде $1..$2 + её фильтры
+ * из каталога). Отдельно от genDealsExpr — нужно «Карте показателей»
+ * (features/metric-map/engine), чтобы считать по ТЕМ ЖЕ определениям, что и отчёты.
+ */
+export function dealsMetricCond(m: Metric, batch = false): string {
+  sqlIdent(m.dateField, 'date_field');
+  const when: string[] = [
+    ...(batch ? [`d.${m.dateField} IS NOT NULL`] : [`d.${m.dateField} >= $1`, `d.${m.dateField} < $2`]),
+    ...m.filters.map(f => resolveFilterClause(f, 'd')).filter(Boolean),
+  ];
+  return when.join(' AND ');
+}
+
+export function genDealsExpr(m: Metric, batch = false): string {
   // Режим пачек (ТЗ владельца 28.09, features/reports/engine/dealBatches.ts):
   // население задано СПИСКОМ сделок, а не периодом, поэтому рамки периода у каждой
   // метрики снимаются, остаётся только «событие метрики вообще случилось». Так
   // «Кол-во сделок» = размер пачки, а «Продаж» = сколько из этой пачки продано —
   // ровно то, что нужно для конверсии внутри пачки.
-  const when: string[] = [
-    ...(batch ? [`d.${m.dateField} IS NOT NULL`] : [`d.${m.dateField} >= $1`, `d.${m.dateField} < $2`]),
-    ...m.filters.map(f => resolveFilterClause(f, 'd')).filter(Boolean),
-  ];
-  const cond = when.join(' AND ');
+  const cond = dealsMetricCond(m, batch);
 
   switch (m.aggFn) {
     case 'count_distinct':
