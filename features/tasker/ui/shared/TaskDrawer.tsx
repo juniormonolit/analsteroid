@@ -12,7 +12,7 @@ import {
   TASKER_METRIC_GROUP_LABELS, TASKER_VERDICT_LABELS,
   type Snapshot, type TaskerSnapshotResponse, type TaskerTask,
 } from '../../types';
-import { BOARD_COLUMN_LABELS, VERDICT_CLS, boardColumn, fmtD, fmtDT, fmtValue, isOverdue, moveTargets, mskDay, TASK_KIND_LABELS, todayMsk, type MoveTarget } from './format';
+import { BOARD_COLUMN_LABELS, VERDICT_CLS, boardColumn, cleanName, executorOf, fmtD, fmtDT, fmtValue, isOverdue, moveTargets, mskDay, statusLockReason, TASK_KIND_LABELS, todayMsk, type MoveTarget } from './format';
 import { ManagerTrainingHistory } from '@/features/tasker/trainings/ui/ManagerTrainingHistory';
 
 /** Минимум символов «Что сделано» — как на сервере (engine/patch.ts MIN_DONE_NOTE). */
@@ -66,8 +66,12 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
   const linkTarget = isBitrixIframe ? '_top' : '_blank';
   const overdue = isOverdue(t);
   const targets = moveTargets(t);
-  const { kind, assignee, doneNote, doneAt } = t;
+  const { kind, doneNote, doneAt } = t;
   const canChangeStatus = targets.length > 0;
+  const executor = executorOf(t);
+  const lockReason = canChangeStatus ? null : statusLockReason(t);
+  // «Сейчас»: загрузка ≠ пусто. Пусто (нет данных с постановки) — явной фразой, а не вечным «…».
+  const liveEmpty = !live.isLoading && !live.error && (live.data == null || live.data.value == null);
   const [completing, setCompleting] = useState(false);
   const [note, setNote] = useState('');
   const noteOk = note.trim().length >= MIN_DONE_NOTE;
@@ -108,16 +112,34 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
             </div>
             <div className="min-w-0 rounded-lg bg-[var(--color-bg-surface)] p-2 sm:p-3">
               <div className="text-xs text-[var(--color-text-muted)]">{t.status === 'result' ? 'На замере' : 'Сейчас'}</div>
-              <div className="break-words text-base font-semibold tabular-nums sm:text-lg">
-                {t.status === 'result' ? fmtValue(t.measuredValue, t.format)
-                  : live.isLoading ? '…'
-                  : live.error ? '—'
-                  : fmtValue(live.data?.value, t.format)}
-              </div>
-              <div className="text-xs text-[var(--color-text-muted)]">
-                {t.status === 'result' ? (t.measuredAt ? fmtD(t.measuredAt) : '') : live.error ? 'не посчиталось' : `с ${fmtD(t.createdAt)} по сегодня`}
-                {t.status !== 'result' && live.data && !live.data.enoughData ? ' · мало данных' : ''}
-              </div>
+              {t.status === 'result' ? (
+                <>
+                  <div className="break-words text-base font-semibold tabular-nums sm:text-lg">{fmtValue(t.measuredValue, t.format)}</div>
+                  <div className="text-xs text-[var(--color-text-muted)]">{t.measuredAt ? fmtD(t.measuredAt) : ''}</div>
+                </>
+              ) : live.isLoading ? (
+                <>
+                  <div className="my-1 h-6 w-16 animate-pulse rounded bg-[var(--color-bg-hover)]" aria-label="Считаю" />
+                  <div className="text-xs text-[var(--color-text-muted)]">считаю…</div>
+                </>
+              ) : live.error ? (
+                <>
+                  <div className="text-base font-semibold sm:text-lg">—</div>
+                  <button type="button" onClick={() => live.refetch()} className="text-left text-xs text-[var(--color-negative)] underline">не посчиталось · повторить</button>
+                </>
+              ) : liveEmpty ? (
+                <>
+                  <div className="text-sm font-medium leading-snug text-[var(--color-text-secondary)]">пока нет данных</div>
+                  <div className="text-xs text-[var(--color-text-muted)]">считаем с {fmtD(t.createdAt)}</div>
+                </>
+              ) : (
+                <>
+                  <div className="break-words text-base font-semibold tabular-nums sm:text-lg">{fmtValue(live.data?.value, t.format)}</div>
+                  <div className="text-xs text-[var(--color-text-muted)]">
+                    с {fmtD(t.createdAt)} по сегодня{live.data && !live.data.enoughData ? ' · мало данных' : ''}
+                  </div>
+                </>
+              )}
             </div>
             <div className="min-w-0 rounded-lg bg-[var(--color-bg-surface)] p-2 sm:p-3">
               <div className="text-xs text-[var(--color-text-muted)]">Цель</div>
@@ -133,11 +155,16 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
         </section>
 
         <section aria-label="Кто и когда" className="min-w-0 divide-y divide-[var(--color-border)]">
-          <Row label="Менеджер">{t.manager.name}</Row>
-          {assignee && <Row label={kind === 'theory' ? 'Исполнитель (тренер)' : 'Исполнитель'}>{assignee.name}</Row>}
-          {t.rop && <Row label="РОП">{t.rop.name}</Row>}
-          {t.director && <Row label="Наблюдатель">{t.director.name}</Row>}
-          <Row label="Поставил">{t.creator.name}</Row>
+          <Row label="Менеджер">{cleanName(t.manager.name)}</Row>
+          {/* Тот же исполнитель и та же роль, что на карточке доски (executorOf). */}
+          {executor && (
+            <Row label={executor.role ? `Ведёт · ${executor.role}` : 'Ведёт'}>
+              {executor.role === 'менеджер' ? `${cleanName(executor.person.name)} (сам)` : cleanName(executor.person.name)}
+            </Row>
+          )}
+          {t.rop && executor?.role !== 'РОП' && <Row label="РОП">{cleanName(t.rop.name)}</Row>}
+          {t.director && <Row label="Наблюдатель">{cleanName(t.director.name)}</Row>}
+          <Row label="Поставил">{cleanName(t.creator.name)}</Row>
           <Row label="Срок"><span className={overdue ? 'font-medium text-[var(--color-negative)]' : ''}>{fmtDT(t.deadline)}</span></Row>
           {t.slotStart && <Row label="Сессия">{fmtDT(t.slotStart)} · {t.durationMin} мин</Row>}
           <Row label="Контрольная дата">{fmtD(t.controlDate)}</Row>
@@ -221,6 +248,10 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
               </div>
             )}
           </section>
+        )}
+
+        {lockReason && (
+          <p className="rounded-lg bg-[var(--color-bg-surface)] p-3 text-xs leading-snug text-[var(--color-text-muted)]">{lockReason}</p>
         )}
 
         {t.bitrixUrl && (

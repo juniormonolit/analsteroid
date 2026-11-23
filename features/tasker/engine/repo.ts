@@ -42,16 +42,19 @@ export interface TaskRow {
 }
 
 /** Кто смотрит (для canChangeStatus): Bitrix ID и право «ставить задачи». */
-export interface TaskViewer { bitrixId: string | null; userId: string; canManage: boolean }
+export interface TaskViewer { bitrixId: string | null; userId: string; canManage: boolean; isSuperadmin?: boolean }
 
 export function viewerOf(session: SessionUser): TaskViewer {
-  return { bitrixId: session.bitrixUserId ? String(session.bitrixUserId) : null, userId: session.id, canManage: hasPerm(session, 'action.tasker.assign') };
+  return { bitrixId: session.bitrixUserId ? String(session.bitrixUserId) : null, userId: session.id, canManage: hasPerm(session, 'action.tasker.assign'), isSuperadmin: !!session.isSuperadmin };
 }
 
 /** Менять статус/завершать: исполнитель — всегда; с правом «ставить задачи» — постановщик (кто нажал / от чьего
  *  имени), РОП и директор менеджера. Менеджер — объект задачи — только смотрит (правка 23.11). */
 export function canChangeStatusOf(r: TaskRow, v: TaskViewer): boolean {
   if (v.bitrixId && r.executor_bitrix_id === v.bitrixId) return true;
+  // Суперадмин — разбор и исправление ошибок (аудит UX 23.11, раунд 2: у Admin в карточке не было ни одного действия).
+  // Не если он сам менеджер-объект задачи. В Битрикс статус уходит от вебхука (у админа может не быть Bitrix ID).
+  if (v.isSuperadmin && v.bitrixId !== r.manager_bitrix_id) return true;
   if (!v.canManage) return false;
   if (r.creator_user_id === v.userId) return true;
   return !!v.bitrixId && v.bitrixId !== r.manager_bitrix_id

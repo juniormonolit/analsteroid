@@ -3,7 +3,7 @@
 // Строки по важности: тема (метрика) → менеджер → было/цель → срок/слот и сигналы.
 import { AlertTriangle, CalendarClock, CloudOff, Target } from 'lucide-react';
 import { TASKER_VERDICT_LABELS, type TaskerTask } from '../../types';
-import { TASK_KIND_LABELS, VERDICT_CLS, fmtD, fmtDT, fmtValue, isOverdue, shortName } from './format';
+import { TASK_KIND_LABELS, VERDICT_CLS, executorOf, fmtD, fmtDT, fmtValue, isOverdue, shortName } from './format';
 
 export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, onDragEnd, compact }: {
   task: TaskerTask;
@@ -17,8 +17,9 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
 }) {
   const overdue = isOverdue(t);
   const { kind, doneNote } = t;
-  // Исполнитель, совпадающий с менеджером, не дублируем («Черняков В. · Практика · Черняков В.» — аудит 23.11).
-  const assignee = t.assignee && t.assignee.id !== t.manager.id ? t.assignee : null;
+  // Кто ведёт — то же поле и та же роль, что в карточке задачи (executorOf; аудит 23.11, раунд 2).
+  // Исполнитель = сам менеджер (старые задачи) — «ведёт сам», без повтора фамилии.
+  const executor = executorOf(t);
   return (
     <button
       type="button"
@@ -39,11 +40,11 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
       <div className="flex min-w-0 items-center gap-1.5 text-[var(--color-text-secondary)]">
         <span className="min-w-0 truncate" title={`Менеджер: ${t.manager.name}`}>{shortName(t.manager.name)}</span>
         {kind && <span className={`shrink-0 rounded px-1.5 py-px text-[11px] font-medium ${kind === 'theory' ? 'bg-[var(--color-warning)]/15 text-[var(--color-warning)]' : 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'}`}>{TASK_KIND_LABELS[kind]}</span>}
-        {!compact && (assignee ?? t.rop) && <>
+        {!compact && executor && <>
           <span aria-hidden className="shrink-0 text-[var(--color-text-muted)]">·</span>
-          {assignee
-            ? <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`Исполнитель: ${assignee.name}`}>ведёт {shortName(assignee.name)}</span>
-            : <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`РОП: ${t.rop!.name}`}>РОП {shortName(t.rop!.name)}</span>}
+          <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`Ведёт${executor.role ? ` (${executor.role})` : ''}: ${executor.person.name}`}>
+            {executor.role === 'менеджер' ? 'ведёт сам' : `${executor.role ?? 'ведёт'} ${shortName(executor.person.name)}`}
+          </span>
         </>}
       </div>
       {!compact && (

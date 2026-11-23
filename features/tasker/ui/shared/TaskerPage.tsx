@@ -15,6 +15,7 @@ import type { TaskerTask, TaskerTasksResponse, TaskerView } from '../../types';
 import { TASKS_KEY, patchTask, useMockFlag, useTaskerFilters, useTaskerMetrics, useTaskerTasks } from './api';
 import { addDays, fmtD, mondayOf, todayMsk, type MoveTarget } from './format';
 import { TaskerFilters } from './TaskerFilters';
+import { TabStrip } from './TabStrip';
 import { TaskDrawer } from './TaskDrawer';
 import { CreateTaskDrawer } from '../create/CreateTaskDrawer';
 import { TaskerBoard } from '../board/TaskerBoard';
@@ -33,21 +34,20 @@ const BTN = 'inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg
  */
 export function TaskerTabs({ active, onSelect }: { active: TaskerView | 'trainings' | 'meetings' | 'templates'; onSelect?: (v: TaskerView) => void }) {
   const canTemplates = useCanManageTemplates();
+  // Лента без переноса (правило 12; раньше на 375/768 вкладки уезжали во вторую строку).
+  const tab = (key: string, on: boolean, label: string, href: string) => onSelect && (VIEWS as readonly string[]).includes(key) ? (
+    <button key={key} type="button" data-tab-key={key} aria-current={on ? 'page' : undefined} onClick={() => onSelect(key as TaskerView)} className={`${tabCls(on)} shrink-0`}>{label}</button>
+  ) : (
+    <Link key={key} href={href} data-tab-key={key} aria-current={on ? 'page' : undefined} className={`${tabCls(on)} shrink-0`}>{label}</Link>
+  );
   return (
-    <nav className="flex w-fit max-w-full flex-wrap gap-1 rounded-lg border border-[var(--color-border)] p-0.5" aria-label="Вид Задачника">
-      {VIEWS.map(v => {
-        const label = VIEW_LABELS[v];
-        return onSelect ? (
-          <button key={v} type="button" aria-current={active === v ? 'page' : undefined} onClick={() => onSelect(v)} className={tabCls(active === v)}>{label}</button>
-        ) : (
-          <Link key={v} href={v === 'board' ? '/tasker' : `/tasker?view=${v}`} className={tabCls(active === v)}>{label}</Link>
-        );
-      })}
-      <Link href="/tasker/meetings" aria-current={active === 'meetings' ? 'page' : undefined} className={tabCls(active === 'meetings')}>Собрания</Link>
-      <Link href="/tasker/trainings" aria-current={active === 'trainings' ? 'page' : undefined} className={tabCls(active === 'trainings')}>Обучения</Link>
+    <TabStrip activeKey={active} ariaLabel="Вид Задачника" className="w-fit rounded-lg border border-[var(--color-border)]" innerClassName="gap-1 p-0.5">
+      {VIEWS.map(v => tab(v, active === v, VIEW_LABELS[v], v === 'board' ? '/tasker' : `/tasker?view=${v}`))}
+      {tab('meetings', active === 'meetings', 'Собрания', '/tasker/meetings')}
+      {tab('trainings', active === 'trainings', 'Обучения', '/tasker/trainings')}
       {/* На самой странице шаблонов вкладка видна сразу — иначе она «впрыгивала» после загрузки сессии. */}
-      {(canTemplates || active === 'templates') && <Link href="/tasker/templates" aria-current={active === 'templates' ? 'page' : undefined} className={tabCls(active === 'templates')}>Шаблоны</Link>}
-    </nav>
+      {(canTemplates || active === 'templates') && tab('templates', active === 'templates', 'Шаблоны', '/tasker/templates')}
+    </TabStrip>
   );
 }
 

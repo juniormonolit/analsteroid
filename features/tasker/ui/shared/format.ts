@@ -1,5 +1,5 @@
 // Форматтеры и даты Задачника (общие для доски, недели, «Сегодня» и карточки). Время — МСК.
-import type { TaskerMetric, TaskerTask, TaskerVerdict } from '../../types';
+import type { TaskerMetric, TaskerPerson, TaskerTask, TaskerVerdict } from '../../types';
 
 const TZ = 'Europe/Moscow';
 const MSK_OFFSET_MS = 3 * 3600_000;
@@ -16,8 +16,14 @@ export function fmtValue(v: number | null | undefined, format: TaskerMetric['for
 }
 
 /** «Фамилия И.» — как в канбанах. */
+/** Имя без роли, которую в Битриксе дописывают в ФИО («Ян Руденко РОП», «(РОП) …») — роль подписываем сами. */
+export function cleanName(name: string) {
+  const s = name.replace(/[([]?(?<!\p{L})(РОП|тренер)(?!\p{L})[)\]]?/giu, ' ').replace(/\s+/g, ' ').trim();
+  return s || name.trim();
+}
+
 export function shortName(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const parts = cleanName(name).split(/\s+/).filter(Boolean);
   if (parts.length < 2) return parts[0] ?? name;
   const [last, first] = parts.length === 2 ? [parts[1], parts[0]] : [parts[0], parts[1]];
   return `${last} ${first[0]}.`;
@@ -117,3 +123,30 @@ export function plural(n: number, one: string, few: string, many: string) {
 export { TASKER_KIND_LABELS as TASK_KIND_LABELS } from '../../types';
 /** @deprecated поля kind/assignee/doneNote/doneAt есть в TaskerTask — читайте напрямую. */
 export const taskExtras = (t: TaskerTask) => t;
+
+export type ExecutorRole = 'тренер' | 'РОП' | 'менеджер' | 'постановщик' | 'директор';
+
+/** Кто ведёт задачу (одно поле для карточки и дровера): исполнитель из Битрикса с ролью относительно задачи.
+ *  Нет исполнителя — РОП менеджера. У старых задач (бэкфилл 279) исполнитель = сам менеджер. */
+export function executorOf(t: TaskerTask): { person: TaskerPerson; role: ExecutorRole | null } | null {
+  const p = t.assignee ?? t.rop;
+  if (!p) return null;
+  const role: ExecutorRole | null = t.kind === 'theory' && t.assignee ? 'тренер'
+    : p.id === t.manager.id ? 'менеджер'
+    : t.rop && p.id === t.rop.id ? 'РОП'
+    : t.director && p.id === t.director.id ? 'директор'
+    : p.id === t.creator.id ? 'постановщик'
+    : null;
+  return { person: p, role };
+}
+
+/** Почему в карточке нет кнопок статуса (вместо молчаливо пустого блока). null — менять можно. */
+export function statusLockReason(t: TaskerTask): string | null {
+  if (t.verdict) return 'По задаче есть итог замера — она закрыта. Нужен новый подход — поставьте новую задачу.';
+  if (t.bitrixTaskId == null) return 'Задача ещё не создана в Битриксе — статус можно будет менять после отправки.';
+  if (t.canChangeStatus === false) {
+    const ex = executorOf(t);
+    return `Статус меняет исполнитель${ex ? ` (${cleanName(ex.person.name)})` : ''}, постановщик (${cleanName(t.creator.name)}) или РОП/директор менеджера с правом ставить задачи.`;
+  }
+  return null;
+}

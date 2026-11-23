@@ -29,6 +29,8 @@ function task(i: number, status: TaskerStatus, opts: { day: string; hm?: string;
   const value = Math.round(base * (0.7 + (i % 3) * 0.05) * 10) / 10;
   const deptAvg = base;
   const slotStart = opts.slot ? at(opts.day, opts.hm ?? '11:00') : null;
+  // i % 6 === 3 — «старая» задача (бэкфилл 279): исполнитель = сам менеджер, «РОП» в ФИО, данных ещё нет, статус не менять.
+  const legacy = i % 6 === 3 && i % 4 !== 1;
   return {
     id: 7000 + i,
     bitrixTaskId: i % 5 === 4 ? null : 310000 + i,
@@ -37,17 +39,17 @@ function task(i: number, status: TaskerStatus, opts: { day: string; hm?: string;
     syncError: i % 5 === 4 ? 'Битрикс: не задан проект Задачника' : null,
     title: `Подтянуть «${m.label}» до среднего отдела`,
     body: 'Разобрать 5 последних проигранных сделок на сессии.\nПерезвонить клиентам без КП в течение 2 дней.\nСверить скрипт презентации с эталоном отдела.',
-    manager: man, rop, director: DIRECTOR, creator: rop,
+    manager: man, rop: legacy ? { ...rop, name: `${rop.name} РОП` } : rop, director: DIRECTOR, creator: rop,
     kind: i % 4 === 1 ? 'theory' : 'practice',
-    executorBitrixId: i % 4 === 1 ? '2054' : String(rop.id),
-    assignee: i % 4 === 1 ? { id: 2054, name: 'Будковский Андрей' } : rop,
+    executorBitrixId: i % 4 === 1 ? '2054' : legacy ? String(man.id) : String(rop.id),
+    assignee: i % 4 === 1 ? { id: 2054, name: 'Будковский Андрей' } : legacy ? man : rop,
     doneNote: status === 'done' || status === 'measuring' || status === 'result' ? 'Разобрали 6 сделок, проверили брони, перезвонили трём клиентам.' : null,
     doneAt: status === 'done' || status === 'measuring' || status === 'result' ? at(addDays(opts.day, -1), '17:00') : null,
-    doneBy: null, canChangeStatus: true,
+    doneBy: null, canChangeStatus: !legacy,
     departmentName: i % 2 ? 'Отдел продаж Юг' : 'Отдел продаж Центр',
     metricId: m.id, metricLabel: m.label, metricGroup: m.group, higherIsBetter: m.higherIsBetter, format: m.format,
     period: { from: addDays(todayMsk(), -40), to: addDays(todayMsk(), -10) },
-    snapshot: { value, deptAvg, ownAvg6m: Math.round(base * 0.85 * 10) / 10, deptName: i % 2 ? 'Отдел продаж Юг' : 'Отдел продаж Центр', enoughData: i % 7 !== 6, denominator: i % 7 === 6 ? 3 : 24 },
+    snapshot: { value: legacy ? null : value, deptAvg, ownAvg6m: Math.round(base * 0.85 * 10) / 10, deptName: i % 2 ? 'Отдел продаж Юг' : 'Отдел продаж Центр', enoughData: i % 7 !== 6, denominator: i % 7 === 6 ? 3 : 24 },
     target: deptAvg,
     templateId: null,
     deadline: at(opts.day, '18:00'),

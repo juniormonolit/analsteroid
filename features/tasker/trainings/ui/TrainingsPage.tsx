@@ -6,6 +6,7 @@ import { Drawer } from '@/components/ui/Drawer';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import type { TrainingEvent, TrainingEventInput, TrainingEventResponse, TrainingQueueResponse, TrainingsResponse } from '../types';
 import { TaskerTabs } from '../../ui/shared/TaskerPage';
+import { TabStrip } from '../../ui/shared/TabStrip';
 import {
   QUEUE_KEY, TRAININGS_KEY, cancelTraining, createTraining, enrollManager, getJson, resyncTraining, setAttendance, unenrollManager, updateTraining,
 } from './api';
@@ -131,12 +132,12 @@ export function TrainingsPage() {
         </header>
         <TaskerTabs active="trainings" />
 
-        <div className="flex min-w-0 flex-wrap items-center gap-x-1 border-b border-[var(--color-border)]" role="tablist" aria-label="Обучения">
+        <TabStrip activeKey={mode === 'past' ? 'upcoming' : mode} role="tablist" ariaLabel="Обучения" className="border-b border-[var(--color-border)]" innerClassName="gap-x-1">
           {TAB_MODES.filter(m => (m === 'settings' ? canManage : m === 'queue' ? canManage || canEnroll : true)).map(m => {
             const on = mode === m || (m === 'upcoming' && mode === 'past');
             return (
             // Телефон: «Настройки» — шестерёнкой в шапке, иначе она одна уезжала во второй ряд.
-            <button key={m} type="button" role="tab" aria-selected={on} onClick={() => { if (!on) setMode(m); }} className={`${subTab(on)} ${m === 'settings' ? 'max-sm:hidden' : ''}`}>
+            <button key={m} type="button" role="tab" data-tab-key={m} aria-selected={on} onClick={() => { if (!on) setMode(m); }} className={`${subTab(on)} shrink-0 ${m === 'settings' ? 'max-sm:hidden' : ''}`}>
               {m === 'settings' && <Settings size={14} aria-hidden />}
               {/* На телефоне — короткие подписи, чтобы второй ряд вкладок не занимал полэкрана. */}
               {m === 'settings' ? <span className="sr-only sm:not-sr-only">{MODE_LABEL[m]}</span>
@@ -149,7 +150,7 @@ export function TrainingsPage() {
             </button>
             );
           })}
-        </div>
+        </TabStrip>
 
         {(mode === 'upcoming' || mode === 'past') && (
           <div className="flex min-w-0 flex-wrap items-center gap-3">

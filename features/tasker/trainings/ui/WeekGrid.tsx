@@ -271,8 +271,9 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
             </table>
           </div>
 
-          {/* Телефон — лента дней (без скролла: 5–7 равных ячеек), показан один день. */}
-          <div className="grid min-w-0 gap-1 sm:hidden" style={{ gridTemplateColumns: `repeat(${grid.cols.length}, minmax(0, 1fr))` }} role="tablist" aria-label="День недели">
+          {/* Уже 1024 (телефон и планшет) — лента дней (без скролла: 5–7 равных ячеек) и один день. Раньше на планшете
+              дни шли сеткой в 2 колонки разной высоты — рваная раскладка с дырами (аудит, раунд 2). */}
+          <div className="grid min-w-0 gap-1 lg:hidden" style={{ gridTemplateColumns: `repeat(${grid.cols.length}, minmax(0, 1fr))` }} role="tablist" aria-label="День недели">
             {grid.cols.map(d => {
               const on = d === shownPhone;
               const n = events.filter(e => mskDateKey(e.startsAt) === d).length;
@@ -289,14 +290,14 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
             })}
           </div>
 
-          {/* Телефон (выбранный день) и планшет (все дни в 2 колонки) */}
-          <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:hidden">
+          {/* Выбранный день */}
+          <div className="grid min-w-0 grid-cols-1 gap-3 lg:hidden">
             {grid.cols.map(d => {
               const dayRows = grid.rows.filter(t => grid.evAt.has(`${d}|${t}`) || grid.slotAt.has(`${isoWeekday(d)}|${t}`));
               const shown = dayRows.filter(t => grid.evAt.has(`${d}|${t}`) || startMsOf(d, t) > nowMs);
               const hiddenPast = dayRows.length - shown.length;
               return (
-                <div key={d} className={`${d === shownPhone ? 'flex' : 'hidden sm:flex'} min-w-0 flex-col gap-1.5 rounded-xl bg-[var(--color-bg-surface)] p-2.5 ${d === today ? 'sm:ring-2 sm:ring-[var(--color-accent)]' : ''}`}>
+                <div key={d} className={`${d === shownPhone ? 'flex' : 'hidden'} min-w-0 flex-col gap-1.5 rounded-xl bg-[var(--color-bg-surface)] p-2.5`}>
                   <h3 className="text-[13px]">{dayHead(d)}</h3>
                   {shown.length === 0 && (
                     <p className="text-[12.5px] text-[var(--color-text-muted)]">{d < today || hiddenPast ? 'Занятий не было' : 'Слотов нет'}</p>
