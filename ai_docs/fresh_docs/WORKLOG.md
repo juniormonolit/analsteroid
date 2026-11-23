@@ -55,6 +55,31 @@
   задачу» в шапке чужой карточки менеджера (`CreateTaskButton`, сам проверяет право).
 
 ---
+## 2026-11-23 — Задачник: расписание обучений, фаза 1 (сессия D)
+
+ТЗ — `TASKER_SPEC.md`, раздел «Обучения». Тренер ведёт расписание, видят все с `section.tasker`, РОП записывает своих.
+- Миграция **275** `tasker_training_events` (тема, описание, start_at, duration_min, место/ссылка, лимит мест NULL,
+  trainer_bitrix_user_id, created_by, cancelled_at/by) + `tasker_training_enrollments` (event_id, manager_bitrix_user_id,
+  enrolled_by, tasker_task_id без FK — ядро 274, UNIQUE пары). Гранты роли приложения по образцу 272. **На прод не применена.**
+- Движок `features/tasker/trainings/engine/`, типы `features/tasker/trainings/types.ts` (`TrainingEnrollment` — из общего `types.ts` A).
+- API: `GET /api/tasker/trainings?from&to&upcoming=1&includeCancelled=1` → `{events, canManage, canEnroll}`;
+  `POST` / `PATCH /:id` / `DELETE /:id` (= отмена, записи остаются) — только `action.tasker.trainings.manage`;
+  `POST|DELETE /:id/enroll {managerId, taskerTaskId?}` — РОП/директор/админ (срез не «только себя») или `action.tasker.assign`,
+  только видимые менеджеры (`canSeeManager`); тренер — любого. Проверки: не отменено, не прошло, лимит мест под `FOR UPDATE`.
+  Повторная запись — не ошибка (форма задачи может прислать ещё раз, привяжет taskerTaskId).
+  `GET /enrollments?managerIds=1,2&from&to` → `{enrollments: TrainingEnrollment[]}` (срез сессии; отменённые не отдаются) — для видов B.
+  `GET /managers` → кого можно записать (для SearchSelect).
+- В карточке события чужие менеджеры видны только числом («и ещё N из других отделов»); тренер/админ видит всех.
+- UI `/tasker/trainings`: «Ближайшие» / «Прошедшие (90 дней)», группировка по дням (время — МСК), Drawer карточки,
+  у тренера — создать/изменить/отменить (ConfirmDialog), «Записать менеджера» (SearchSelect) и отписка. Проверено на 1280/375
+  на моках (локально нет доступа к БД).
+- **Как выдать право тренеру (Будковскому).** Личные исключения в UI «Пользователи» принимают только `section.*`, поэтому SQL
+  (system БД, найти человека): `SELECT id, login, display_name, bitrix_user_id FROM users WHERE display_name ILIKE '%Будковск%';`
+  затем `UPDATE users SET section_overrides = array(SELECT DISTINCT unnest(COALESCE(section_overrides,'{}') || '{action.tasker.trainings.manage}')) WHERE id = '<id>';`
+  Сессия подхватывает права сразу (union в `getSession`). Пересохранение его исключений из UI ключ уберёт — тогда повторить.
+  Ему же нужен `section.tasker` (роль или исключение). Фаза 2 — в BACKLOG.
+
+---
 ## 2026-11-20 — «Контроль звонков»: несколько ручных получателей на уровень эскалации
 
 Владелец: «после Андреевой в МСК ОС сообщение уходило и Смекалову и Небоге». Раньше на (отдел, роль) — один ручной.
