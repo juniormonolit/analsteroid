@@ -9,11 +9,21 @@ import { cached } from '@/lib/cache/redis';
 import { addDaysYmd, daysBetween, MIN_DENOMINATOR, mskToday, type TaskerMetricDef } from './config';
 import { cellOf, type ReportRunner, type RunRow } from './reportRunner';
 
-function periodBody(metric: TaskerMetricDef, from: string, to: string, grouping: 'team' | 'none'): Record<string, unknown> {
+/** Метрика «Сумма продаж» каталога — замер темы «товарная группа» (миграция 282). */
+export const PG_AMOUNT_METRIC = 'all_sales_amount';
+
+/**
+ * Тело прогона «По менеджерам». Тема-показатель — ячейка метрики (+ знаменатели). Тема «товарная группа» —
+ * «Сумма продаж» с фильтром по группе (productGroupId, шкала kc: тот же фильтр, что дрилл-даун отчёта
+ * «По товарным группам» в менеджера); pgFilter=false — та же сумма без фильтра (знаменатель доли).
+ */
+function periodBody(metric: TaskerMetricDef, from: string, to: string, grouping: 'team' | 'none', pgFilter = true): Record<string, unknown> {
   const range = { from: `${from}T00:00:00.000+03:00`, to: `${to}T23:59:59.999+03:00` };
+  const pg = metric.kind === 'product_group' && metric.productGroupId;
   return {
     reportSlug: 'by-managers',
-    metricIds: [metric.id, ...metric.denominatorIds],
+    metricIds: pg ? [PG_AMOUNT_METRIC] : [metric.id, ...metric.denominatorIds],
+    ...(pg && pgFilter ? { productGroupId: metric.productGroupId } : {}),
     dealScope: 'all',
     clientType: 'all',
     productGroupMode: 'kc',
@@ -65,7 +75,14 @@ interface CurTable {
 }
 type HistTable = Record<string, number | null>;
 
+/** Доля продаж группы, %: сумма группы / вся сумма менеджера (отдела). Нет продаж вовсе — null. */
+function share(part: number | null, whole: number | null): number | null {
+  if (whole === null || whole <= 0) return null;
+  return ((part ?? 0) / whole) * 100;
+}
+
 async function curTable(run: ReportRunner, metric: TaskerMetricDef, period: TaskerPeriod): Promise<CurTable> {
+  if (metric.kind === 'product_group') return curTablePg(run, metric, period);
   const cur = await run(periodBody(metric, period.from, period.to, 'team'));
   const rows: CurTable['rows'] = {};
   for (const r of cur.rows ?? []) {
@@ -79,7 +96,54 @@ async function curTable(run: ReportRunner, metric: TaskerMetricDef, period: Task
   return { rows, teams };
 }
 
+/** Тема «товарная группа»: сумма продаж группы или её доля. Второй прогон — без фильтра: из него список менеджеров
+ *  (продавал, но не эту группу → 0 ₽ / 0%, а не «мало данных») и знаменатель доли. «Мало данных» — у менеджера
+ *  за период нет ни одной продажи. */
+async function curTablePg(run: ReportRunner, metric: TaskerMetricDef, period: TaskerPeriod): Promise<CurTable> {
+  const isShare = metric.pgMeasure === 'share';
+  const [part, whole] = await Promise.all([
+    run(periodBody(metric, period.from, period.to, 'team', true)),
+    run(periodBody(metric, period.from, period.to, 'team', false)),
+  ]);
+  const wholeRows = new Map((whole.rows ?? []).map(r => [String(r.dimensionId), r]));
+  const partRows = new Map((part.rows ?? []).map(r => [String(r.dimensionId), r]));
+  const rows: CurTable['rows'] = {};
+  for (const [id, r] of wholeRows) {
+    const p = partRows.get(id);
+    const total = cellOf(r, PG_AMOUNT_METRIC);
+    const amount = total !== null && total > 0 ? cellOf(p, PG_AMOUNT_METRIC) ?? 0 : null;
+    const value = isShare ? share(amount, total) : amount;
+    rows[id] = { value, denom: null, teamId: r.teamId ?? p?.teamId ?? null, teamName: r.teamName ?? p?.teamName ?? null };
+  }
+  const teams: CurTable['teams'] = {};
+  for (const g of whole.grouped ?? []) {
+    const id = String(g.dimensionId);
+    if (!id.startsWith('__team__')) continue;
+    const p = (part.grouped ?? []).find(x => String(x.dimensionId) === id);
+    const total = cellOf(g, PG_AMOUNT_METRIC);
+    const amount = total !== null && total > 0 ? cellOf(p, PG_AMOUNT_METRIC) ?? 0 : null;
+    teams[id.slice('__team__'.length)] = isShare ? share(amount, total) : amount;
+  }
+  return { rows, teams };
+}
+
 async function histTable(run: ReportRunner, metric: TaskerMetricDef, win: TaskerPeriod): Promise<HistTable> {
+  if (metric.kind === 'product_group') {
+    const isShare = metric.pgMeasure === 'share';
+    const [part, whole] = await Promise.all([
+      run(periodBody(metric, win.from, win.to, 'none', true)),
+      run(periodBody(metric, win.from, win.to, 'none', false)),
+    ]);
+    const out: HistTable = {};
+    const partRows = new Map((part.rows ?? []).map(r => [String(r.dimensionId), r]));
+    for (const r of whole.rows ?? []) {
+      const id = String(r.dimensionId);
+      const total = cellOf(r, PG_AMOUNT_METRIC);
+      const amount = total !== null && total > 0 ? cellOf(partRows.get(id), PG_AMOUNT_METRIC) ?? 0 : null;
+      out[id] = isShare ? share(amount, total) : amount;
+    }
+    return out;
+  }
   const hist = await run(periodBody(metric, win.from, win.to, 'none'));
   const out: HistTable = {};
   for (const r of hist.rows ?? []) out[String(r.dimensionId)] = cellOf(r, metric.id);

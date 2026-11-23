@@ -130,9 +130,11 @@ export function TrainingForm({
       <fieldset className="flex min-w-0 flex-col gap-3 rounded-lg border border-[var(--color-border)] p-3">
         <legend className="px-1 text-[13px] font-medium">Оценка эффективности</legend>
         <label className={LABEL}>
-          Какие показатели должно подтянуть обучение
-          <SearchMultiSelect options={metrics.map(m => ({ value: m.id, label: m.label }))} value={metricIds} onChange={setMetricIds}
-            allLabel="Не выбраны" unitLabel="показателя" searchPlaceholder="Поиск показателя" ariaLabel="Показатели обучения"
+          Какие темы должно подтянуть обучение
+          {/* Архивные темы (миграция 282) не предлагаются, но уже выбранные остаются видны. */}
+          <SearchMultiSelect options={metrics.filter(m => m.active !== false || metricIds.includes(m.id)).map(m => ({ value: m.id, label: m.label }))}
+            value={metricIds} onChange={setMetricIds}
+            allLabel="Не выбраны" unitLabel="темы" searchPlaceholder="Поиск темы" ariaLabel="Темы обучения"
             className="min-h-11 w-full min-w-0" />
         </label>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

@@ -88,7 +88,7 @@ export const slotAutoEligible = (s: TrainingSlot) => s.active && !(s.departmentI
 
 export async function suggest(actor: TrainingActor, metricId: string, rawTaskIds: unknown, rawLimit: unknown): Promise<TrainingSuggestion[]> {
   if (!actor.canManage) throw new TrainingError('Собирать занятия из очереди может тренер', 403);
-  if (!metricId) throw new TrainingError('Не указан показатель');
+  if (!metricId) throw new TrainingError('Не указана тема');
   const limit = Math.min(6, Math.max(1, Number(rawLimit) || 3));
   const [items, group, trainer, slots] = await Promise.all([loadQueue(actor, { metricId }), groupSettings(), defaultTrainerId(), loadSlots()]);
   const waiting = (items ?? []).filter(i => !i.event);

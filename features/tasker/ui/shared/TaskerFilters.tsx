@@ -41,7 +41,7 @@ export function TaskerFilters({ f, data, metrics }: { f: TaskerFilterState; data
   const ropOptions = useMemo(() => toOptions(people.rops, f.rop), [people.rops, f.rop]);
   const managerOptions = useMemo(() => toOptions(people.managers, f.manager), [people.managers, f.manager]);
   const metricOptions = useMemo(
-    () => [...metrics].sort((a, b) => a.sortOrder - b.sortOrder).map(m => ({ value: m.id, label: m.label, hint: TASKER_METRIC_GROUP_LABELS[m.group] })),
+    () => [...metrics].sort((a, b) => a.sortOrder - b.sortOrder).map(m => ({ value: m.id, label: m.active === false ? `${m.label} (архив)` : m.label, hint: TASKER_METRIC_GROUP_LABELS[m.group] })),
     [metrics],
   );
   const cls = 'min-w-0 max-w-full';
@@ -53,7 +53,7 @@ export function TaskerFilters({ f, data, metrics }: { f: TaskerFilterState; data
       ) : null}
       <SearchSelect ariaLabel="Менеджер" value={f.manager} onChange={f.setManager} allLabel="Все менеджеры" options={managerOptions}
         searchable searchPlaceholder="Поиск менеджера" className={cls} />
-      <SearchSelect ariaLabel="Тема" value={f.metric} onChange={f.setMetric} allLabel="Все темы" options={metricOptions} searchPlaceholder="Поиск метрики" className={cls} />
+      <SearchSelect ariaLabel="Тема" value={f.metric} onChange={f.setMetric} allLabel="Все темы" options={metricOptions} searchPlaceholder="Поиск темы" className={cls} />
       <SearchSelect ariaLabel="Чьи задачи" value={f.mine} onChange={v => f.setMine(v as TaskerFilterState['mine'])} allLabel="Все видимые" options={MINE_OPTIONS} className={cls} />
       {f.active && (
         <button type="button" onClick={f.reset}

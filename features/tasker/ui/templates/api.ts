@@ -2,6 +2,7 @@
 import type {
   TaskerTemplateFull, TaskerTemplateImageResponse, TaskerTemplateSaveRequest, TaskerTemplatesFullResponse,
 } from '@/features/tasker/types';
+import type { TaskerMetric, TaskerTopicCatalogResponse, TaskerTopicSaveRequest, TaskerTopicsResponse } from '@/features/tasker/types';
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -33,3 +34,13 @@ export function uploadTemplateImage(file: File): Promise<TaskerTemplateImageResp
   fd.append('file', file);
   return call<TaskerTemplateImageResponse>('/api/tasker/templates/images', { method: 'POST', body: fd });
 }
+
+// ── Темы (миграция 282) ─────────────────────────────────────────────────────
+
+export const TOPICS_KEY = ['tasker', 'topics'] as const;
+export const fetchTopics = () => call<TaskerTopicsResponse>('/api/tasker/topics');
+export const fetchTopicCatalog = () => call<TaskerTopicCatalogResponse>('/api/tasker/topics/catalog');
+export const createTopic = (req: TaskerTopicSaveRequest) => call<{ topic: TaskerMetric }>('/api/tasker/topics', json('POST', req));
+export const updateTopic = (id: string, req: TaskerTopicSaveRequest) =>
+  call<{ topic: TaskerMetric }>(`/api/tasker/topics/${encodeURIComponent(id)}`, json('PATCH', req));
+export const reorderTopics = (ids: string[]) => call<{ ok: true }>('/api/tasker/topics', json('POST', { action: 'reorder', ids }));

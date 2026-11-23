@@ -15,7 +15,7 @@ import {
 // Проверка наложения времени у слота сессии (сессия A).
 import { AvailabilityWarning } from '../shared/AvailabilityWarning';
 import { renderTemplateBody, templateToBitrix } from '../templates/templateBody';
-import type { TaskerAvailabilityRequest } from '@/features/tasker/types';
+import { TASKER_METRIC_GROUP_LABELS, type TaskerAvailabilityRequest } from '@/features/tasker/types';
 
 /**
  * Форма постановки задачи «подтянуть показатель» (Задачник, сессия C; ТЗ —
@@ -113,7 +113,8 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
   const managersQ = useQuery({ queryKey: ['tasker', 'managers'], queryFn: fetchAssignableManagers, staleTime: 5 * 60_000, retry: false });
   const trainingsQ = useQuery({ queryKey: ['tasker', 'trainings-upcoming'], queryFn: fetchUpcomingTrainings, staleTime: 60_000, retry: false });
 
-  const metrics = useMemo(() => metricsQ.data?.metrics ?? [], [metricsQ.data]);
+  // Архивные темы (миграция 282) в форме не предлагаются.
+  const metrics = useMemo(() => (metricsQ.data?.metrics ?? []).filter(m => m.active !== false), [metricsQ.data]);
 
   const [managerIds, setManagerIds] = useState<string[]>(initialManagers ?? []);
   const [metricId, setMetricId] = useState('');
@@ -317,7 +318,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
 
   const problems: string[] = [];
   if (managerIdNums.length === 0) problems.push('выберите менеджера');
-  if (!metricId) problems.push('выберите показатель');
+  if (!metricId) problems.push('выберите тему');
   if (!periodOk) problems.push('проверьте период');
   if (!body.trim()) problems.push('заполните рекомендации');
   if (!deadline) problems.push('укажите срок');
@@ -336,7 +337,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
         {metricsQ.data && !metricsQ.data.bitrixConfigured && (
           <Banner tone="warn">Проект «Задачник» в Битриксе ещё не настроен (ждём ID группы) — создание задачи вернёт ошибку.</Banner>
         )}
-        {metricsQ.error && <Banner tone="error">Не загрузился список показателей: {(metricsQ.error as Error).message}</Banner>}
+        {metricsQ.error && <Banner tone="error">Не загрузился список тем: {(metricsQ.error as Error).message}</Banner>}
 
         <KindSwitch kind={kind} onKind={setKind} trainerName={trainer?.name ?? null} />
 
@@ -345,12 +346,13 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
             <SearchMultiSelect options={managerOptions} value={managerIds} onChange={setManagerIds}
               allLabel="Выберите менеджеров" unitLabel="менеджеров" ariaLabel="Менеджеры" className="w-full" />
           </Field>
-          <Field label="Показатель" hint={metric ? (metric.higherIsBetter ? 'Больше — лучше' : 'Меньше — лучше') : undefined}>
+          <Field label="Тема" hint={metric ? `${metric.kind === 'product_group' ? (metric.pgMeasure === 'share' ? 'Товарная группа: доля в продажах · ' : 'Товарная группа: сумма продаж · ') : ''}${metric.higherIsBetter ? 'Больше — лучше' : 'Меньше — лучше'}` : undefined}>
+            {/* Темы — из конструктора «Задачник → Шаблоны» (миграция 282): показатель каталога или товарная группа. */}
             <SearchSelect
-              options={metrics.map(m => ({ value: m.id, label: m.label }))}
+              options={metrics.map(m => ({ value: m.id, label: m.label, hint: m.kind === 'product_group' ? 'Товарная группа' : TASKER_METRIC_GROUP_LABELS[m.group] }))}
               value={metricId} onChange={setMetricId}
-              placeholder={metricsQ.isLoading ? 'Загрузка…' : 'Выберите показатель'}
-              ariaLabel="Показатель" className="w-full" disabled={metricsQ.isLoading}
+              placeholder={metricsQ.isLoading ? 'Загрузка…' : 'Выберите тему'}
+              ariaLabel="Тема" className="w-full" disabled={metricsQ.isLoading}
             />
           </Field>
         </div>
@@ -408,12 +410,12 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
             </div>
           )}
           {metricId && !templatesQ.isLoading && templates.length === 0 && (
-            <p className="text-xs text-[var(--color-text-muted)]">Для этого показателя вариантов инструкции пока нет — напишите своё.</p>
+            <p className="text-xs text-[var(--color-text-muted)]">Для этой темы вариантов инструкции пока нет — напишите своё.</p>
           )}
           <textarea value={extra} rows={template ? 3 : 6}
             onChange={e => setExtra(e.target.value)}
             aria-label={template ? 'Дописать своё' : 'Рекомендации'}
-            placeholder={!metricId ? 'Сначала выберите показатель' : template ? 'Дописать своё (необязательно)…' : 'Что сделать…'}
+            placeholder={!metricId ? 'Сначала выберите тему' : template ? 'Дописать своё (необязательно)…' : 'Что сделать…'}
             className={`${INPUT} ${template ? 'min-h-[80px]' : 'min-h-[120px]'} resize-y py-2 leading-snug`} />
         </Field>
 
@@ -512,7 +514,7 @@ function SnapshotBlock({ managerIds, managerName, metric, loading, error, data, 
         <span className="text-xs font-semibold text-[var(--color-text-muted)]">Снимок цифр</span>
         {loading && <span className="text-[11px] text-[var(--color-text-muted)]">считаю…</span>}
       </div>
-      {!ready && <span className="text-[13px] text-[var(--color-text-muted)]">Выберите менеджера и показатель — цифры посчитаются сами.</span>}
+      {!ready && <span className="text-[13px] text-[var(--color-text-muted)]">Выберите менеджера и тему — цифры посчитаются сами.</span>}
       {ready && error && <span className="text-[13px] text-[var(--color-negative)]">Снимок не посчитался: {error.message}</span>}
       {ready && !error && managerIds.map(id => {
         const s = data?.[id];

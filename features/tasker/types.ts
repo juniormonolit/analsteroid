@@ -5,13 +5,14 @@
 // ── Справочники ─────────────────────────────────────────────────────────────
 
 /** Группа темы — для группировки/фильтра на доске. */
-export type TaskerMetricGroup = 'conversion' | 'check' | 'activity' | 'repeat';
+export type TaskerMetricGroup = 'conversion' | 'check' | 'activity' | 'repeat' | 'product';
 
 export const TASKER_METRIC_GROUP_LABELS: Record<TaskerMetricGroup, string> = {
   conversion: 'Конверсии',
   check: 'Чеки',
   activity: 'Активность',
   repeat: 'Повторка',
+  product: 'Товарные группы',
 };
 
 /** Метрика из белого списка «прокачиваемых» (таблица tasker_metrics). */
@@ -27,7 +28,19 @@ export interface TaskerMetric {
   /** Тег задачи в Битриксе (тема). */
   tag: string;
   sortOrder: number;
+  /** Тип темы (миграция 282): показатель каталога или «материалы по товарной группе». Нет — 'metric'. */
+  kind?: TaskerTopicKind;
+  /** sa.product_groups.id (шкала kc) — только kind = product_group. */
+  productGroupId?: string | null;
+  /** Что замеряем у товарной группы: сумму продаж или долю в продажах менеджера. */
+  pgMeasure?: TaskerPgMeasure | null;
+  /** false — тема в архиве: в форме не предлагается, старые задачи с ней живут. Нет — активна. */
+  active?: boolean;
 }
+
+/** Тема задачи (миграция 282): «metric» — показатель каталога отчётов, «product_group» — товарная группа. */
+export type TaskerTopicKind = 'metric' | 'product_group';
+export type TaskerPgMeasure = 'amount' | 'share';
 
 /** Шаблон рекомендаций по метрике (tasker_templates). */
 export interface TaskerTemplate {
@@ -358,6 +371,39 @@ export interface TaskerTemplateSaveRequest {
   body?: string;
   sortOrder?: number;
   active?: boolean;
+}
+
+// ── Темы (конструктор, миграция 282) ─────────────────────────────────────────
+
+/** GET /api/tasker/topics — все темы вместе с архивом (право action.tasker.templates). */
+export interface TaskerTopicsResponse {
+  topics: TaskerMetric[];
+  canEdit: boolean;
+}
+
+/** POST /api/tasker/topics (создать) и PATCH /api/tasker/topics/[id] (kind/metricId/productGroupId/pgMeasure — только при создании). */
+export interface TaskerTopicSaveRequest {
+  kind?: TaskerTopicKind;
+  /** id метрики каталога отчётов (kind = metric). */
+  metricId?: string;
+  /** sa.product_groups.id (kind = product_group). */
+  productGroupId?: string;
+  pgMeasure?: TaskerPgMeasure;
+  /** Короткое название темы (по умолчанию — короткое имя метрики / имя группы). */
+  label?: string;
+  group?: TaskerMetricGroup;
+  higherIsBetter?: boolean;
+  /** Формат значения; у товарной группы задан способом замера. */
+  format?: TaskerMetric['format'];
+  sortOrder?: number;
+  /** false — в архив, true — вернуть. */
+  active?: boolean;
+}
+
+/** GET /api/tasker/topics/catalog — из чего собирать темы. */
+export interface TaskerTopicCatalogResponse {
+  metrics: { id: string; name: string; shortName: string | null; category: string | null; format: TaskerMetric['format'] }[];
+  productGroups: { id: string; name: string }[];
 }
 
 /** POST /api/tasker/templates/images (multipart `file`) → абсолютная ссылка на картинку. */

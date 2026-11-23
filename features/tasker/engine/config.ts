@@ -1,7 +1,7 @@
 // Задачник — настройки и справочники (tasker_settings / tasker_metrics / tasker_templates, миграция 274).
 import { systemDb } from '@/lib/db/clients';
 import { bitrixPortalOrigin } from '@/lib/bitrix/appAuth';
-import type { TaskerMetric, TaskerMetricGroup, TaskerTemplate } from '../types';
+import type { TaskerMetric, TaskerMetricGroup, TaskerPgMeasure, TaskerTemplate, TaskerTopicKind } from '../types';
 
 export const MAX_OPEN_TASKS = 3;
 /** Порог «мало данных»: знаменатель метрики < 5 (ТЗ, вопрос 8). */
@@ -71,32 +71,51 @@ export function directorFor(settings: TaskerSettings, branch: string | null | un
 export interface TaskerMetricDef extends TaskerMetric {
   denominatorIds: string[];
   additive: boolean;
+  kind: TaskerTopicKind;
+  productGroupId: string | null;
+  pgMeasure: TaskerPgMeasure | null;
+  active: boolean;
 }
 
 interface MetricRow {
   id: string; label: string; grp: TaskerMetricGroup; higher_is_better: boolean;
   format: TaskerMetric['format']; tag: string; denominator_ids: string[]; additive: boolean; sort_order: number;
+  active: boolean; kind?: TaskerTopicKind; product_group_id?: string | null; pg_measure?: TaskerPgMeasure | null;
 }
 
+/**
+ * Темы Задачника (tasker_metrics, миграции 274 + 282) — ВСЕ, вместе с архивом (active = false): по ним считаются и
+ * подписываются старые задачи. Списки выбора (форма, обучения) фильтруют active сами; metricDef — только активные.
+ * До наката 282 колонок типа нет — читаем по-старому, всё = показатели.
+ */
 export async function loadMetricDefs(): Promise<TaskerMetricDef[]> {
+  const base = `id, label, grp, higher_is_better, format, tag, denominator_ids, additive, sort_order, active`;
+  const order = `ORDER BY active DESC, sort_order, label, id`;
   const r = await systemDb().query<MetricRow>(
-    `SELECT id, label, grp, higher_is_better, format, tag, denominator_ids, additive, sort_order
-       FROM tasker_metrics WHERE active ORDER BY sort_order, id`,
-  );
+    `SELECT ${base}, kind, product_group_id, pg_measure FROM tasker_metrics ${order}`,
+  ).catch(e => {
+    if ((e as { code?: string })?.code !== '42703') throw e;
+    return systemDb().query<MetricRow>(`SELECT ${base} FROM tasker_metrics ${order}`);
+  });
   return r.rows.map(m => ({
     id: m.id, label: m.label, group: m.grp, higherIsBetter: m.higher_is_better, format: m.format,
     tag: m.tag, sortOrder: m.sort_order, denominatorIds: m.denominator_ids ?? [], additive: m.additive,
+    kind: m.kind ?? 'metric', productGroupId: m.product_group_id ?? null, pgMeasure: m.pg_measure ?? null, active: m.active,
   }));
 }
 
 export async function metricDef(id: string): Promise<TaskerMetricDef> {
   const m = (await loadMetricDefs()).find(x => x.id === id);
-  if (!m) throw new TaskerError('Показатель не из белого списка Задачника');
+  if (!m) throw new TaskerError('Тема не из списка Задачника');
+  if (!m.active) throw new TaskerError('Тема в архиве — выберите другую');
   return m;
 }
 
 export function publicMetric(m: TaskerMetricDef): TaskerMetric {
-  return { id: m.id, label: m.label, group: m.group, higherIsBetter: m.higherIsBetter, format: m.format, tag: m.tag, sortOrder: m.sortOrder };
+  return {
+    id: m.id, label: m.label, group: m.group, higherIsBetter: m.higherIsBetter, format: m.format, tag: m.tag, sortOrder: m.sortOrder,
+    kind: m.kind, productGroupId: m.productGroupId, pgMeasure: m.pgMeasure, active: m.active,
+  };
 }
 
 export async function loadTemplates(metricId?: string | null): Promise<TaskerTemplate[]> {
