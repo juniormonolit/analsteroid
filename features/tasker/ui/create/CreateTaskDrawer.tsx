@@ -9,7 +9,7 @@ import type {
   Snapshot, TaskerCreateRequest, TaskerCreateResponse, TaskerMetric, TaskerSession,
 } from '@/features/tasker/types';
 import {
-  createTasks, fetchAssignableManagers, fetchCustomers, fetchMetrics, fetchSessions, fetchSnapshot,
+  createTasks, fetchAssignableManagers, fetchCreators, fetchCustomers, fetchMetrics, fetchSessions, fetchSnapshot,
   fetchTemplates, fetchUpcomingTrainings, TaskerApiError,
 } from './api';
 
@@ -131,6 +131,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
   const [controlDate, setControlDate] = useState(addDays(addDays(today, 7), 14));
   const [controlTouched, setControlTouched] = useState(false);
   const [trainingId, setTrainingId] = useState('');
+  const [creatorId, setCreatorId] = useState(''); // '' = сам пользователь
 
   const [result, setResult] = useState<TaskerCreateResponse | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -157,6 +158,27 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
     return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, 'ru'));
   }, [managersQ.data, extraManagers, initialManagers]);
   const managerName = (id: string) => managerOptions.find(o => o.value === id)?.label ?? `#${id}`;
+
+  // ── постановщик (правка директора по продажам 23.11) ──
+  // Список зависит от выбранных менеджеров (их РОПы/директора); выбор, выпавший из списка, — назад к себе.
+  const creatorsQ = useQuery({
+    queryKey: ['tasker', 'creators', managerIdNums.join(',')],
+    queryFn: () => fetchCreators(managerIdNums),
+    staleTime: 5 * 60_000,
+    retry: false,
+    placeholderData: prev => prev,
+  });
+  const creatorOptions = useMemo<SearchSelectOption[]>(
+    () => (creatorsQ.data?.creators ?? []).map(c => ({
+      value: c.role === 'self' ? '' : String(c.id),
+      label: c.role === 'self' ? `${c.name} (вы)` : c.name,
+      hint: c.role === 'self' ? null : c.hint,
+    })),
+    [creatorsQ.data],
+  );
+  useEffect(() => {
+    if (creatorId && creatorsQ.data && !creatorOptions.some(o => o.value === creatorId)) setCreatorId('');
+  }, [creatorId, creatorsQ.data, creatorOptions]);
 
   // ── снимок ──
   const periodOk = !!periodFrom && !!periodTo && periodFrom <= periodTo;
@@ -258,6 +280,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
       customersChecklist: checkedCustomers.length ? checkedCustomers : undefined,
       trainingEventId: trainingId ? Number(trainingId) : null,
       ...(overrideLimits ? { overrideLimits: true } : {}),
+      creatorBitrixId: creatorId ? Number(creatorId) : null,
     };
   };
 
@@ -314,6 +337,13 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
             />
           </Field>
         </div>
+
+        {creatorOptions.length > 1 && (
+          <Field label="Постановщик" hint={creatorId ? 'Задача — от его имени, вы останетесь в ней наблюдателем' : 'По умолчанию — вы'}>
+            <SearchSelect options={creatorOptions} value={creatorId} onChange={setCreatorId}
+              placeholder="Вы" ariaLabel="Постановщик" className="w-full sm:max-w-[calc(50%-8px)]" />
+          </Field>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Период снимка: с">

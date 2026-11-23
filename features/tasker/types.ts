@@ -247,6 +247,9 @@ export interface TaskerCreateRequest {
   trainingEventId?: number | null;
   /** Директор/админ: обойти лимит «≤3 открытых» (дубль метрики не обходится). */
   overrideLimits?: boolean;
+  /** Постановщик (Bitrix user id) — из GET /api/tasker/creators. Нет — сам нажавший. Не от себя → нажавший
+   *  добавляется наблюдателем; в БД creator_* = выбранный, creator_user_id = кто нажал. */
+  creatorBitrixId?: number | null;
 }
 
 export type TaskerWarningCode =
@@ -438,4 +441,19 @@ export interface TaskerMeetingOptionsResponse {
   canPickOrganizer: boolean;
   /** Bitrix ID текущего пользователя (организатор по умолчанию). */
   selfBitrixId: number | null;
+}
+
+/** GET /api/tasker/creators?managerIds=1,2 — кого можно указать постановщиком. */
+export interface TaskerCreatorOption {
+  id: number;
+  name: string;
+  /** self — сам пользователь; rop — РОП выбранных менеджеров (или любой, для директора/админа); director — директор по продажам. */
+  role: 'self' | 'rop' | 'director';
+  hint: string | null;
+}
+
+export interface TaskerCreatorsResponse {
+  creators: TaskerCreatorOption[];
+  /** Bitrix id самого пользователя (дефолт поля); null — аккаунт не связан с Битриксом. */
+  selfId: number | null;
 }

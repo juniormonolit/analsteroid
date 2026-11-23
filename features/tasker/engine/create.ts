@@ -19,6 +19,7 @@ import { crmBindingOf, loadHotCustomers } from './customers';
 import { drainTask, enqueue, type BxOp } from './bitrix';
 import { getTask, OPEN_TASK_SQL } from './repo';
 import { invalidateLive } from './live';
+import { creatorOptions } from './creators';
 
 /** Директор/админ может обойти лимит «≤ 3 открытых» (дубль метрики не обходится). */
 export function canOverrideLimits(session: SessionUser, settings: TaskerSettings): boolean {
@@ -51,6 +52,7 @@ export function validateCreate(body: unknown): TaskerCreateRequest {
     sessionId: b.sessionId ? Number(b.sessionId) : null, newSession: !!b.newSession, controlDate: b.controlDate,
     customersChecklist: Array.isArray(b.customersChecklist) ? b.customersChecklist.filter((x): x is string => typeof x === 'string').slice(0, 200) : [],
     trainingEventId: b.trainingEventId ? Number(b.trainingEventId) : null, overrideLimits: !!b.overrideLimits,
+    creatorBitrixId: Number.isInteger(Number(b.creatorBitrixId)) && Number(b.creatorBitrixId) > 0 ? Number(b.creatorBitrixId) : null,
   };
 }
 
@@ -165,6 +167,21 @@ export async function createTasks(
   }
   if (!eligible.length) return { created: [], warnings };
 
+  // Постановщик: выбранный в форме (тот же список, что отдаёт /api/tasker/creators) или сам нажавший.
+  // В БД creator_bitrix_id/creator_name — постановщик, creator_user_id — кто фактически нажал (по нему
+  // «мои поставленные», права правки и прогон автозамера). Не от себя → нажавший — наблюдатель в Битриксе.
+  const clickerBx = session.bitrixUserId ? String(session.bitrixUserId) : null;
+  let creatorBx = clickerBx;
+  let creatorName = session.displayName;
+  if (req.creatorBitrixId && String(req.creatorBitrixId) !== clickerBx) {
+    const { creators } = await creatorOptions(session, scope, settings, eligible);
+    const pick = creators.find(c => c.id === req.creatorBitrixId);
+    if (!pick) throw new TaskerError('Этого постановщика выбрать нельзя — доступны вы, ваш директор и (для директора) РОПы', 'forbidden', 403);
+    creatorBx = String(pick.id);
+    creatorName = pick.name;
+  }
+  const onBehalf = creatorBx !== clickerBx;
+
   // Снимок — один прогон отчёта на всех.
   // Тот же кэш, что у формы: снимок в задаче = цифры, которые РОП только что видел.
   const snaps = await computeSnapshots(run, eligible, metric, req.period, { cacheScope: snapshotCacheScope(scope.kind, session.id) });
@@ -212,7 +229,7 @@ export async function createTasks(
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27::jsonb)
        RETURNING id`,
       [marker, managerId, managerName, rop, nameOf(rop), director, nameOf(director),
-        session.bitrixUserId, session.id, session.displayName, snap.deptName ?? entry?.departmentName ?? null,
+        creatorBx, session.id, creatorName, snap.deptName ?? entry?.departmentName ?? null,
         metric.id, req.period.from, req.period.to, JSON.stringify(snap), target, req.templateId,
         title, req.body, deadlineIso, req.durationMin, slotStartIso, slotEndIso, req.controlDate, sess?.id ?? null,
         req.trainingEventId, JSON.stringify(checklist)]);
@@ -221,13 +238,17 @@ export async function createTasks(
     if (sess) touchedSessions.set(sess.id, taskId);
 
     const accomplices = rop && rop !== managerId ? [Number(rop)] : [];
-    const auditors = director && director !== managerId && director !== rop ? [Number(director)] : [];
+    const auditorSet = new Set<string>();
+    if (director && director !== managerId && director !== rop) auditorSet.add(director);
+    // Поставил не от себя — нажавший наблюдает (если он не ответственный/соисполнитель/постановщик).
+    if (onBehalf && clickerBx && clickerBx !== managerId && clickerBx !== rop && clickerBx !== creatorBx) auditorSet.add(clickerBx);
+    const auditors = [...auditorSet].map(Number);
     const crm = checklist.map(c => crmBindingOf(c.clientKey)).filter((x): x is string => !!x);
     const fields: Record<string, unknown> = {
       TITLE: title,
       DESCRIPTION: describe({ metric, snap, target, req, managerName, taskId, marker }),
       RESPONSIBLE_ID: Number(managerId),
-      ...(session.bitrixUserId ? { CREATED_BY: Number(session.bitrixUserId) } : {}),
+      ...(creatorBx ? { CREATED_BY: Number(creatorBx) } : {}),
       ...(accomplices.length ? { ACCOMPLICES: accomplices } : {}),
       ...(auditors.length ? { AUDITORS: auditors } : {}),
       TAGS: [metric.tag],
@@ -238,7 +259,7 @@ export async function createTasks(
       TASK_CONTROL: 'Y',
       ...(crm.length ? { UF_CRM_TASK: crm } : {}),
     };
-    const ops: BxOp[] = [{ op: 'create_task', fields, marker, creatorBitrixId: session.bitrixUserId }];
+    const ops: BxOp[] = [{ op: 'create_task', fields, marker, creatorBitrixId: creatorBx }];
     if (checklist.length) {
       ops.push({ op: 'checklist', items: checklist.map(c => `${c.title}${c.crmUrl ? ` — ${c.crmUrl}` : ''}`) });
     }

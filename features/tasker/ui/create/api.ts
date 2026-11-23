@@ -1,7 +1,7 @@
 // Клиентские обёртки над API Задачника для формы постановки (сессия C).
 // Контракт — features/tasker/types.ts / ai_docs/fresh_docs/TASKER_SPEC.md.
 import type {
-  TaskerCreateRequest, TaskerCreateResponse, TaskerCustomersResponse, TaskerManagerOption, TaskerManagersResponse, TaskerMetricsResponse,
+  TaskerCreateRequest, TaskerCreateResponse, TaskerCreatorsResponse, TaskerCustomersResponse, TaskerManagerOption, TaskerManagersResponse, TaskerMetricsResponse,
   TaskerPeriod, TaskerSessionsResponse, TaskerSnapshotResponse, TaskerTemplatesResponse,
 } from '@/features/tasker/types';
 
@@ -35,6 +35,9 @@ export const fetchCustomers = (managerId: number) =>
 
 export const fetchSessions = (metricId: string, from: string, to: string) =>
   call<TaskerSessionsResponse>(`/api/tasker/sessions?${new URLSearchParams({ metricId, from, to })}`);
+
+export const fetchCreators = (managerIds: number[]) =>
+  call<TaskerCreatorsResponse>(`/api/tasker/creators?managerIds=${managerIds.join(',')}`);
 
 export const createTasks = (req: TaskerCreateRequest) =>
   call<TaskerCreateResponse>('/api/tasker/tasks', json(req));
