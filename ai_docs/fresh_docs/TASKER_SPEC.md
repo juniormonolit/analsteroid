@@ -166,7 +166,7 @@
   менеджера с целью из его задачи, `tasker_tasks.training_event_id` = событие. Кого записать не удалось — список
   с причиной, остальные записаны. Календарь тренера обновляется как при обычной записи.
 - Признак «Теория» модуль обучений читает в одном месте (`trainings/engine/theory.ts`): `kind = 'theory'`,
-  `assignee_bitrix_id` = тренер, `done_at IS NULL` (миграция 279). До наката 279 очередь пишет «тип задачи ещё не развёрнут».
+  `executor_bitrix_id` = тренер, `done_at IS NULL` (миграция 279). До наката 279 очередь пишет «тип задачи ещё не развёрнут».
 - API: `GET/PUT /api/tasker/trainings/slots`, `GET /queue`, `POST /queue/suggest {metricId, taskIds?, limit?}`,
   `POST /queue/assemble {taskIds, startsAt, durationMin, title, place?, slotId?, departmentLabel?}`.
 - Исторический журнал Excel (кто когда был) не переносили: фамилии не сопоставляются с Bitrix ID однозначно,
