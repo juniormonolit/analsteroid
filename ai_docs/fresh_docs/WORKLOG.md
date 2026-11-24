@@ -31952,3 +31952,5 @@ worktree (временная страница в `(bare)`, в общую пап�
 (`people.dealAssignedId`), нет — `crm.deal.get` по UF_CRM_TASK; не нашёлся — warning «назначьте кнопкой». Работает и
 для drag на доске (тот же action). Сухой прогон на 180930/180928: movetask + tasks.task.update RESPONSIBLE_ID + коммент.
 Гид обновлён.
+
+Выкачено 24.11 (BUILD Ui63VPDq8s1b-XK_y5JVY), Осипову — сообщение бота.
