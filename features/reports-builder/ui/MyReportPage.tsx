@@ -64,7 +64,7 @@ interface Template {
 
 // Запасной набор на случай, если пресетов по роли не пришло вовсе (аккаунт без
 // привязки к Битриксу и без отделов). Пустой лист человек читает как поломку.
-const DEFAULT_METRICS = ['primary_sales_amount', 'repeat_sales_amount', 'primary_deals_count'];
+const DEFAULT_METRICS = ['primary_sales_amount', 'repeat_sales_amount', 'primary_sales_count'];
 
 function todayStr(): string {
   const d = new Date();
