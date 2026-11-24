@@ -22,11 +22,11 @@ import type { MetricWindow, PresentationData } from '../engine/presentation';
 // послайдово в настройках»). Колонка — единица выбора; слайд без записи в
 // хранилище показывает все. Персист — localStorage: настройка личная и
 // экранная, сервер ей не нужен.
-export type ColKey = 'sales_p' | 'sales_r' | 'ship_p' | 'ship_r' | 'inbound' | 'cr_sale' | 'cr_ship' | 'rep_share';
+export type ColKey = 'sales_p' | 'sales_r' | 'ship_p' | 'ship_r' | 'deals_p' | 'deals_r' | 'cr_sale' | 'cr_ship' | 'rep_share';
 const COL_GROUPS: { label: string; cols: { key: ColKey; label: string }[] }[] = [
   { label: 'Продажи, млн', cols: [{ key: 'sales_p', label: 'перв.' }, { key: 'sales_r', label: 'повт.' }] },
   { label: 'Отгрузки, млн', cols: [{ key: 'ship_p', label: 'перв.' }, { key: 'ship_r', label: 'повт.' }] },
-  { label: 'Сделок (все)', cols: [{ key: 'inbound', label: '' }] },
+  { label: 'Сделки', cols: [{ key: 'deals_p', label: 'перв.' }, { key: 'deals_r', label: 'повт.' }] },
   { label: 'CR первичная', cols: [{ key: 'cr_sale', label: 'в продажу' }, { key: 'cr_ship', label: 'в отгрузку' }] },
   { label: 'Доля повт.', cols: [{ key: 'rep_share', label: '' }] },
 ];
@@ -36,7 +36,17 @@ type SlideCols = Record<string, ColKey[]>; // ключ слайда → види
 
 function loadSlideCols(): SlideCols {
   if (typeof window === 'undefined') return {};
-  try { return JSON.parse(localStorage.getItem(COLS_LS_KEY) ?? '{}'); } catch { return {}; }
+  try {
+    const raw = JSON.parse(localStorage.getItem(COLS_LS_KEY) ?? '{}') as Record<string, string[]>;
+    // Колонка «Входящих» ('inbound', 24.11) разделена на «Сделки перв./повт.» — сохранённый
+    // выбор переносим, неизвестные ключи отбрасываем.
+    const out: SlideCols = {};
+    for (const [k, cols] of Object.entries(raw)) {
+      out[k] = cols.flatMap(c => (c === 'inbound' ? ['deals_p', 'deals_r'] : [c]))
+        .filter((c): c is ColKey => (ALL_COLS as string[]).includes(c));
+    }
+    return out;
+  } catch { return {}; }
 }
 function colsFor(slideCols: SlideCols, slideKey: string): Set<ColKey> {
   return new Set(slideCols[slideKey] ?? ALL_COLS);
@@ -110,7 +120,7 @@ function MetricTable({ label, rows, total, topN = 11, cols, onRowClick }: {
     ? rest.reduce((acc, r) => {
         for (const k of Object.keys(acc) as (keyof MetricWindow)[]) acc[k] += r[k];
         return acc;
-      }, { sales_p: 0, sales_r: 0, sales_n_p: 0, sales_n_r: 0, ship_p: 0, ship_r: 0, ship_n_p: 0, inbound: 0, inbound_p: 0, ppo: 0 })
+      }, { sales_p: 0, sales_r: 0, sales_n_p: 0, sales_n_r: 0, ship_p: 0, ship_r: 0, ship_n_p: 0, inbound_p: 0, inbound_r: 0, ppo: 0 })
     : null;
 
   // Видимые группы колонок; первая колонка каждой группы несёт разделитель.
@@ -125,7 +135,8 @@ function MetricTable({ label, rows, total, topN = 11, cols, onRowClick }: {
       case 'sales_r': return <NumCell v={w.sales_r} />;
       case 'ship_p': return <NumCell v={w.ship_p} strong />;
       case 'ship_r': return <NumCell v={w.ship_r} />;
-      case 'inbound': return <NumCell v={w.inbound} f={String} />;
+      case 'deals_p': return <NumCell v={w.inbound_p} f={String} />;
+      case 'deals_r': return <NumCell v={w.inbound_r} f={String} />;
       case 'cr_sale': return <CrCell n={w.sales_n_p} d={w.inbound_p} />;
       case 'cr_ship': return <CrCell n={w.ship_n_p} d={w.inbound_p} />;
       case 'rep_share': return <CrCell n={w.sales_n_r} d={w.sales_n_p + w.sales_n_r} />;
@@ -141,7 +152,7 @@ function MetricTable({ label, rows, total, topN = 11, cols, onRowClick }: {
 
   return (
     <div className="scroll-x">
-      <table className="w-full border-collapse text-[clamp(13px,1.15vw,21px)] min-w-[820px]">
+      <table className="w-full border-collapse text-[clamp(13px,1.15vw,21px)] min-w-[900px]">
         <thead>
           <tr>
             <th rowSpan={twoRows ? 2 : 1} className={`${TD} ${TH} text-left align-bottom`}>{label}</th>
@@ -569,14 +580,14 @@ export function PresentationPage() {
               <Slide>
                 <SlideHead
                   title="Год к году"
-                  sub={`${format(new Date(`${data.yoy.from}T12:00:00`), 'd MMMM', { locale: ru })} – ${format(new Date(`${data.yoy.to}T12:00:00`), 'd MMMM yyyy', { locale: ru })} против того же периода ${data.yoy.prevFrom.slice(0, 4)} · в скобках — прошлый год · сделки — все созданные (перв. + повт.), как «Кол-во сделок» в отчётах · CR — первичные к первичным сделкам · ППО — вторая отгрузка клиента`}
+                  sub={`${format(new Date(`${data.yoy.from}T12:00:00`), 'd MMMM', { locale: ru })} – ${format(new Date(`${data.yoy.to}T12:00:00`), 'd MMMM yyyy', { locale: ru })} против того же периода ${data.yoy.prevFrom.slice(0, 4)} · в скобках — прошлый год · сделки — созданные за период, как «Кол-во сделок (перв./повт.)» в отчётах · CR — перв. к перв. сделкам · ППО — вторая отгрузка клиента`}
                 />
                 <div className="scroll-x">
-                  <table className="w-full border-collapse text-[clamp(13px,1.3vw,24px)] min-w-[760px]">
+                  <table className="w-full border-collapse text-[clamp(13px,1.3vw,24px)] min-w-[860px]">
                     <thead>
                       <tr>
                         <th className={`${TD} ${TH} text-left`} />
-                        {['Продажи, млн', 'Отгрузки, млн', 'Сделок (все)', 'CR перв. в продажу', 'CR перв. в отгрузку', 'Доля повторных', 'ППО'].map(h => (
+                        {['Продажи, млн', 'Отгрузки, млн', 'Сделки (перв.)', 'Сделки (повт.)', 'CR перв. в продажу', 'CR перв. в отгрузку', 'Доля повторных', 'ППО'].map(h => (
                           <th key={h} className={`${TDNUM} ${TH}`}>{h}</th>
                         ))}
                       </tr>
@@ -588,7 +599,8 @@ export function PresentationPage() {
                           <td className={TD}>{label}</td>
                           <td className={TDNUM}>{mln(c.sales_p + c.sales_r)} <Delta cur={c.sales_p + c.sales_r} prev={p.sales_p + p.sales_r} /></td>
                           <td className={TDNUM}>{mln(c.ship_p + c.ship_r)} <Delta cur={c.ship_p + c.ship_r} prev={p.ship_p + p.ship_r} /></td>
-                          <td className={TDNUM}>{c.inbound} <Delta cur={c.inbound} prev={p.inbound} /></td>
+                          <td className={TDNUM}>{c.inbound_p} <Delta cur={c.inbound_p} prev={p.inbound_p} /></td>
+                          <td className={TDNUM}>{c.inbound_r} <Delta cur={c.inbound_r} prev={p.inbound_r} /></td>
                           <td className={TDNUM}><CrCell n={c.sales_n_p} d={c.inbound_p} /> <span className="text-[var(--color-text-muted)]">(<CrCell n={p.sales_n_p} d={p.inbound_p} />)</span></td>
                           <td className={TDNUM}><CrCell n={c.ship_n_p} d={c.inbound_p} /> <span className="text-[var(--color-text-muted)]">(<CrCell n={p.ship_n_p} d={p.inbound_p} />)</span></td>
                           <td className={TDNUM}><CrCell n={c.sales_n_r} d={c.sales_n_p + c.sales_n_r} /> <span className="text-[var(--color-text-muted)]">(<CrCell n={p.sales_n_r} d={p.sales_n_p + p.sales_n_r} />)</span></td>
@@ -605,7 +617,7 @@ export function PresentationPage() {
                 <Slide key={g.key}>
                   <SlideHead
                     title={`${g.name} — по менеджерам`}
-                    sub={`${periodLabel} · первичные/повторные — по воронке · CR = первичные продажи (отгрузки) к первичным сделкам · клик по менеджеру — его сделки`}
+                    sub={`${periodLabel} · первичные/повторные — по воронке · CR = первичные продажи (отгрузки) к перв. сделкам · клик по менеджеру — его сделки`}
                   />
                   <MetricTable
                     label="Менеджер"
@@ -628,7 +640,7 @@ export function PresentationPage() {
               <Slide>
                 <SlideHead
                   title="По товарным группам"
-                  sub={`${periodLabel} · топ-10 по продажам · CR = первичные продажи (отгрузки) к первичным сделкам`}
+                  sub={`${periodLabel} · топ-10 по продажам · CR = первичные продажи (отгрузки) к перв. сделкам`}
                   right={
                     <div className="inline-flex border border-[var(--color-border)] rounded-xl overflow-hidden" role="group" aria-label="Система товарных групп">
                       {([['kc', 'Категория КЦ'], ['by_max', 'По наибольшему']] as const).map(([mode, lbl]) => (
