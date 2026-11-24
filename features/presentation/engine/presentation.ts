@@ -14,13 +14,18 @@
 // клиента (та же семантика, что спец-фильтр _ppo в lib/metrics/sqlGen.ts).
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { getMonthWorkingDays } from '@/lib/plans/dailyPlan';
+import { loadMetrics } from '@/lib/metrics/catalog';
+import { dealsMetricCond } from '@/lib/metrics/sqlGen';
+import type { Metric } from '@/lib/metrics/types';
+import { accountTypeAllows, loadAccountLogins } from '@/features/reports/engine/byManagers';
+import { mskBounds } from '@/features/metric-map/engine/data';
 
 export interface MetricWindow {
   sales_p: number; sales_r: number;        // суммы продаж, ₽
   sales_n_p: number; sales_n_r: number;    // продажи, шт
   ship_p: number; ship_r: number;          // суммы отгрузок, ₽
   ship_n_p: number;                        // отгрузки перв., шт (числитель CR в отгрузку)
-  inbound: number; inbound_p: number;      // входящие все / первичные
+  inbound_p: number; inbound_r: number;    // сделки (перв.) / (повт.) — метрики каталога primary_deals_count / repeat_created_count
   ppo: number;                             // вторые отгрузки клиентов, шт
 }
 
@@ -58,9 +63,18 @@ export interface PresentationOptions {
   comparisonFrom: string; comparisonTo: string;
 }
 
-// Агрегатные колонки одного окна [$1=from, $2=to] по сделкам менеджеров $3.
+// Агрегатные колонки одного окна [$1=from, $2=to — даты МСК] по сделкам менеджеров $3.
 // Дата события приводится к МСК — как в отчётах.
-const METRIC_COLS = `
+//
+// Сделки (inbound_p / inbound_r) — НЕ своя формула, а условия метрик каталога
+// `primary_deals_count` («Кол-во сделок (перв.)») и `repeat_created_count` («Кол-во сделок (повт.)»)
+// тем же генератором, что у отчёта «По менеджерам» (dealsMetricCond), с теми же
+// границами периода ($4/$5 — полночь МСК, mskBounds). Жалоба 24.11: своя формула
+// «все созданные сделки» расходилась с отчётом (1838 +16% в презентации против
+// падения в отчёте) — см. WORKLOG 2026-11-24. «Все сделки» на слайдах не показываем
+// (решение владельца 24.11): рост повторных (×2,5) перекрывал падение первичных.
+function metricCols(primaryDeals: string, repeatDeals: string): string {
+  return `
   coalesce(sum(d.amount) FILTER (WHERE d.sold_at IS NOT NULL AND (d.sold_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date AND NOT coalesce(f.is_repeat,false)),0)::float8 AS sales_p,
   coalesce(sum(d.amount) FILTER (WHERE d.sold_at IS NOT NULL AND (d.sold_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date AND coalesce(f.is_repeat,false)),0)::float8 AS sales_r,
   count(*) FILTER (WHERE d.sold_at IS NOT NULL AND (d.sold_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date AND NOT coalesce(f.is_repeat,false))::int AS sales_n_p,
@@ -68,9 +82,44 @@ const METRIC_COLS = `
   coalesce(sum(d.amount) FILTER (WHERE d.delivered_at IS NOT NULL AND (d.delivered_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date AND NOT coalesce(f.is_repeat,false)),0)::float8 AS ship_p,
   coalesce(sum(d.amount) FILTER (WHERE d.delivered_at IS NOT NULL AND (d.delivered_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date AND coalesce(f.is_repeat,false)),0)::float8 AS ship_r,
   count(*) FILTER (WHERE d.delivered_at IS NOT NULL AND (d.delivered_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date AND NOT coalesce(f.is_repeat,false))::int AS ship_n_p,
-  count(*) FILTER (WHERE (d.created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date)::int AS inbound,
-  count(*) FILTER (WHERE (d.created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date AND NOT coalesce(f.is_repeat,false))::int AS inbound_p,
+  ${primaryDeals} AS inbound_p,
+  ${repeatDeals} AS inbound_r,
   count(*) FILTER (WHERE d.delivered_at IS NOT NULL AND (d.delivered_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date AND o.rn = 2)::int AS ppo`;
+}
+
+/** Агрегат метрики каталога по строкам группы. Период метрики — $4/$5 (dealsMetricCond пишет $1/$2). */
+function catalogAgg(m: Metric): string {
+  const cond = dealsMetricCond(m).replace(/\$1\b/g, () => '$4').replace(/\$2\b/g, () => '$5');
+  switch (m.aggFn) {
+    case 'count_distinct': return `COUNT(DISTINCT CASE WHEN ${cond} THEN d.${m.aggField} END)::int`;
+    case 'count_all':      return `COUNT(CASE WHEN ${cond} THEN 1 END)::int`;
+    default: throw new Error(`Презентация: метрика «${m.id}» — не счётчик (agg_fn=${m.aggFn})`);
+  }
+}
+
+/** Метрики сделок из каталога — те же, что колонки «Кол-во сделок» отчётов. */
+// Повт.: repeat_created_count — id «Кол-во сделок (повт.)» с миграции 041 (repeat_deals_count —
+// старый id из 006). Нет ни того, ни другого — та же первичная метрика с funnel_type=repeat
+// (тот же приём синтеза, что в «Карте показателей», features/metric-map/engine/data.ts).
+async function dealMetrics(): Promise<{ primaryDeals: Metric; repeatDeals: Metric }> {
+  const all = await loadMetrics();
+  const find = (ids: string[]) =>
+    ids.map(id => all.find(x => x.id === id)).find(x => x && x.source === 'deals' && x.aggField && x.dateField);
+  const primaryDeals = find(['primary_deals_count', 'primary_created_count']);
+  if (!primaryDeals) throw new Error('Презентация: в каталоге метрик нет «primary_deals_count»');
+  let repeatDeals = find(['repeat_created_count', 'repeat_deals_count']);
+  if (!repeatDeals) {
+    console.warn('[presentation] нет repeat_created_count в каталоге — собрано из primary_deals_count с funnel_type=repeat');
+    repeatDeals = {
+      ...primaryDeals, id: 'repeat_created_count',
+      filters: [...primaryDeals.filters.filter(f => f.field !== 'funnel_type'), { field: 'funnel_type', op: 'eq', value: 'repeat' }],
+    };
+  }
+  return { primaryDeals, repeatDeals };
+}
+
+/** Население «Итого» отчёта «По менеджерам»: по умолчанию accountType='managers' (/api/reports/run). */
+const REPORT_ACCOUNT_TYPE = 'managers' as const;
 
 // rn=2 — вторая отгрузка клиента за всю историю (ППО). Оконная функция вместо
 // коррелированного подзапроса — тот же приём, что _ppo в sqlGen.ts (O(n²)-грабли
@@ -82,7 +131,7 @@ const PPO_JOIN = `LEFT JOIN (
 
 const zeroWindow = (): MetricWindow => ({
   sales_p: 0, sales_r: 0, sales_n_p: 0, sales_n_r: 0,
-  ship_p: 0, ship_r: 0, ship_n_p: 0, inbound: 0, inbound_p: 0, ppo: 0,
+  ship_p: 0, ship_r: 0, ship_n_p: 0, inbound_p: 0, inbound_r: 0, ppo: 0,
 });
 const WINDOW_KEYS = Object.keys(zeroWindow()) as (keyof MetricWindow)[];
 
@@ -106,7 +155,7 @@ function yearBack(iso: string): string {
 export async function buildPresentation(opts: PresentationOptions): Promise<PresentationData> {
   const sa = analyticsDb();
 
-  const [deptsRes, rosterRes] = await Promise.all([
+  const [deptsRes, rosterAll, logins, dm] = await Promise.all([
     sa.query<DeptRow>(
       `SELECT bitrix_department_id AS bitrix_id, name, parent_bitrix_department_id AS parent_bitrix_id
          FROM sa.departments WHERE is_active = true`),
@@ -114,7 +163,13 @@ export async function buildPresentation(opts: PresentationOptions): Promise<Pres
       `SELECT manager_bitrix_user_id::int AS mgr, manager_name, department_id::text AS dept_uuid,
               branch, short_login
          FROM sa.org_resolved_hierarchy WHERE is_active = true`),
+    loadAccountLogins(),
+    dealMetrics(),
   ]);
+  // Те же строки, что «Итого» отчёта: без этого в презентацию попадали РОПы/логисты/
+  // служебные аккаунты, которых отчёт по менеджерам не показывает.
+  const rosterRes = { rows: rosterAll.rows.filter(r => accountTypeAllows(logins.get(String(r.mgr)), REPORT_ACCOUNT_TYPE)) };
+  const METRIC_COLS = metricCols(catalogAgg(dm.primaryDeals), catalogAgg(dm.repeatDeals));
 
   // uuid отдела менеджера → bitrixId отдела (иерархия ходит по bitrix-ид).
   const uuidToBitrix = new Map<string, string>();
@@ -183,7 +238,7 @@ export async function buildPresentation(opts: PresentationOptions): Promise<Pres
     `SELECT d.current_manager_id::int AS mgr, ${METRIC_COLS}
        FROM sa.deals d LEFT JOIN sa.funnels f ON f.id = d.funnel_id ${PPO_JOIN}
       WHERE d.current_manager_id = ANY($3::int[]) GROUP BY 1`,
-    [f, t, managerIds]);
+    [f, t, managerIds, ...mskBounds(f, t)]);
 
   // Товарные группы — две системы, как в отчётах (byProductGroups.ts):
   // kc = product_group_id → sa.product_groups.name, by_max = head_group_name.
@@ -194,9 +249,10 @@ export async function buildPresentation(opts: PresentationOptions): Promise<Pres
       WHERE d.current_manager_id = ANY($3::int[])
         AND ((d.sold_at IS NOT NULL AND (d.sold_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date)
           OR (d.delivered_at IS NOT NULL AND (d.delivered_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date)
-          OR ((d.created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date))
+          OR ((d.created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $1::date AND $2::date)
+          OR (d.created_at >= $4 AND d.created_at < $5))
       GROUP BY 1`,
-    [opts.periodFrom, opts.periodTo, managerIds]);
+    [opts.periodFrom, opts.periodTo, managerIds, ...mskBounds(opts.periodFrom, opts.periodTo)]);
 
   // Динамика по дням — продажи/отгрузки/шт за оба диапазона (для графика).
   const dailyQuery = (f: string, t: string) => sa.query<{ d: string; sales: number; ship: number; n: number }>(
@@ -275,7 +331,7 @@ export async function buildPresentation(opts: PresentationOptions): Promise<Pres
   for (const r of wPeriod.rows) {
     const g = groupOfManager.get(r.mgr);
     if (!g) continue;
-    if (r.sales_p + r.sales_r === 0 && r.ship_p + r.ship_r === 0 && r.inbound === 0) continue;
+    if (r.sales_p + r.sales_r === 0 && r.ship_p + r.ship_r === 0 && r.inbound_p + r.inbound_r === 0) continue;
     const { mgr, ...w } = r;
     managers[g].push({ managerId: mgr, name: nameOf.get(mgr) ?? `#${mgr}`, ...w });
   }
