@@ -93,6 +93,14 @@ export async function fetchBigTask<T extends BxBigTask = BxBigTask>(taskId: numb
   return r?.task?.id ? r.task : null;
 }
 
+/** Ответственный по сделке задачи (UF_CRM_TASK → D_…) — когда в снимке доски сделки нет. */
+async function dealOwnerOf(t: BxBigTask): Promise<string | null> {
+  const d = (t.ufCrmTask ?? []).find(x => String(x).startsWith('D_'));
+  if (!d) return null;
+  const deal = await read<{ ASSIGNED_BY_ID?: string | number }>('crm.deal.get', { id: d.slice(2) });
+  return deal?.ASSIGNED_BY_ID ? String(deal.ASSIGNED_BY_ID) : null;
+}
+
 /** Люди задачи для canSeeTask/canManageTask движка (visibility.ts): свежие поля из Битрикса + ответственный сделки
  *  из снимка доски (его нет в tasks.task.get) — иначе карточка, видимая на доске по сделке, отвечала бы 403. */
 export async function taskPeople(t: BxBigTask): Promise<TaskPeople> {
@@ -230,10 +238,39 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
     return true;
   };
 
+  /** Назначить исполнителя: RESPONSIBLE_ID, нажавший и РОП нового исполнителя — наблюдателями, упоминание + ТЗ в чат. */
+  const assignTo = async (rid: string, tz?: string, reason?: string) => {
+    if (actor.zone !== 'all' && !actor.zone.has(rid) && !(await isActiveManager(rid))) throw new BigActionError('Менеджер не найден среди действующих', 400);
+    if (status === '5') throw new BigActionError('Задача уже завершена — переназначить нельзя');
+    const fields: Record<string, unknown> = {};
+    if (rid !== String(t.responsibleId)) fields.RESPONSIBLE_ID = rid;
+    const auditors = (t.auditors ?? []).map(String);
+    const addAuditors: string[] = [];
+    if (actor.userId && actor.userId !== rid && !auditors.includes(actor.userId) && String(t.createdBy) !== actor.userId) addAuditors.push(actor.userId);
+    // РОП нового исполнителя — ВСЕГДА наблюдателем (РОП Осипов 18.11). Нажавший сам РОП / уже наблюдатель — не дублируем.
+    const rop = await ropOfManager(rid).catch(e => { run.warnings.push(`РОП исполнителя не определён: ${e instanceof Error ? e.message : e}`); return null; });
+    if (rop && rop !== rid && !auditors.includes(rop) && !addAuditors.includes(rop)) addAuditors.push(rop);
+    if (addAuditors.length) fields.AUDITORS = [...auditors, ...addAuditors];
+    if (Object.keys(fields).length) await run.task('tasks.task.update', { taskId, fields }, rop ? `РОП исполнителя по оргструктуре: ${rop}` : 'РОП исполнителя в оргструктуре не найден');
+    const rname = await read<{ NAME?: string; LAST_NAME?: string }[]>('user.get', { ID: rid }).then(u => [u?.[0]?.NAME, u?.[0]?.LAST_NAME].filter(Boolean).join(' ')).catch(() => '');
+    await run.comment(taskId, `[USER=${rid}]${rname || 'Менеджер'}[/USER], задача назначена на вас из Монолитики${who}${reason ? ` (${reason})` : ''}.${tz ? `\n[b]ТЗ:[/b]\n${tz.slice(0, 4000)}` : ''}`, uploadedFiles);
+  };
+
   switch (action.type) {
     case 'move': {
       if (!COLUMN_KEYS.has(action.column)) throw new BigActionError('Неизвестная колонка');
       await moveTo(action.column);
+      // Осипов 24.11 «ОТВЕТСТВЕННЫЙ НЕ СТАВИТСЯ»: переносил в «Назначил менеджера, дал ТЗ» и ждал, что задача уйдёт
+      // менеджеру, а она оставалась на РОПе (180924, 180931 — исполнителя потом ставил руками в Битриксе).
+      // Задача ещё ни на кого не назначена (на постановщике или на нажавшем) → исполнитель = ответственный по сделке.
+      if (action.column === 'assigned' && status !== '5') {
+        const resp = String(t.responsibleId ?? '');
+        if (resp === String(t.createdBy) || resp === actor.userId) {
+          const owner = people.dealAssignedId ? String(people.dealAssignedId) : await dealOwnerOf(t).catch(() => null);
+          if (owner && owner !== resp) await assignTo(owner, undefined, `перенос в «${columnTitle('assigned')}»`);
+          else if (!owner) run.warnings.push('Исполнитель не сменился: у сделки не нашёлся ответственный — назначьте кнопкой «Назначить менеджера».');
+        }
+      }
       if (AUTO_COMPLETE_COLUMNS.has(action.column) && status !== '5') {
         await run.close(taskId, status, control);
         await run.comment(taskId, `Перенесено в «${columnTitle(action.column)}» и закрыто из канбана больших чеков (Монолитика${who}).`);
@@ -243,23 +280,9 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
     case 'reassign': {
       const rid = String(action.responsibleId ?? '');
       if (!/^\d{1,10}$/.test(rid)) throw new BigActionError('Выберите менеджера');
-      if (actor.zone !== 'all' && !actor.zone.has(rid) && !(await isActiveManager(rid))) throw new BigActionError('Менеджер не найден среди действующих', 400);
-      if (status === '5') throw new BigActionError('Задача уже завершена — переназначить нельзя');
-      const fields: Record<string, unknown> = {};
-      if (rid !== String(t.responsibleId)) fields.RESPONSIBLE_ID = rid;
-      const auditors = (t.auditors ?? []).map(String);
-      const addAuditors: string[] = [];
-      if (actor.userId && actor.userId !== rid && !auditors.includes(actor.userId) && String(t.createdBy) !== actor.userId) addAuditors.push(actor.userId);
-      // РОП нового исполнителя — ВСЕГДА наблюдателем (РОП Осипов 18.11). Нажавший сам РОП / уже наблюдатель — не дублируем.
-      const rop = await ropOfManager(rid).catch(e => { run.warnings.push(`РОП исполнителя не определён: ${e instanceof Error ? e.message : e}`); return null; });
-      if (rop && rop !== rid && !auditors.includes(rop) && !addAuditors.includes(rop)) addAuditors.push(rop);
-      if (addAuditors.length) fields.AUDITORS = [...auditors, ...addAuditors];
-      if (Object.keys(fields).length) await run.task('tasks.task.update', { taskId, fields }, rop ? `РОП исполнителя по оргструктуре: ${rop}` : 'РОП исполнителя в оргструктуре не найден');
+      await assignTo(rid, action.comment?.trim() || undefined);
       const column = await currentColumn(taskId, t);
       if (column === 'new') await moveTo('assigned').catch(e => { run.warnings.push(e instanceof Error ? e.message : String(e)); });
-      const tz = action.comment?.trim();
-      const rname = await read<{ NAME?: string; LAST_NAME?: string }[]>('user.get', { ID: rid }).then(u => [u?.[0]?.NAME, u?.[0]?.LAST_NAME].filter(Boolean).join(' ')).catch(() => '');
-      await run.comment(taskId, `[USER=${rid}]${rname || 'Менеджер'}[/USER], задача назначена на вас из Монолитики${who}.${tz ? `\n[b]ТЗ:[/b]\n${tz.slice(0, 4000)}` : ''}`, uploadedFiles);
       break;
     }
     case 'comment': {
