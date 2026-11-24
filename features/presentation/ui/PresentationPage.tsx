@@ -26,7 +26,7 @@ export type ColKey = 'sales_p' | 'sales_r' | 'ship_p' | 'ship_r' | 'inbound' | '
 const COL_GROUPS: { label: string; cols: { key: ColKey; label: string }[] }[] = [
   { label: 'Продажи, млн', cols: [{ key: 'sales_p', label: 'перв.' }, { key: 'sales_r', label: 'повт.' }] },
   { label: 'Отгрузки, млн', cols: [{ key: 'ship_p', label: 'перв.' }, { key: 'ship_r', label: 'повт.' }] },
-  { label: 'Входящих', cols: [{ key: 'inbound', label: '' }] },
+  { label: 'Сделок (все)', cols: [{ key: 'inbound', label: '' }] },
   { label: 'CR первичная', cols: [{ key: 'cr_sale', label: 'в продажу' }, { key: 'cr_ship', label: 'в отгрузку' }] },
   { label: 'Доля повт.', cols: [{ key: 'rep_share', label: '' }] },
 ];
@@ -569,14 +569,14 @@ export function PresentationPage() {
               <Slide>
                 <SlideHead
                   title="Год к году"
-                  sub={`${format(new Date(`${data.yoy.from}T12:00:00`), 'd MMMM', { locale: ru })} – ${format(new Date(`${data.yoy.to}T12:00:00`), 'd MMMM yyyy', { locale: ru })} против того же периода ${data.yoy.prevFrom.slice(0, 4)} · в скобках — прошлый год · CR — первичные к первичным входящим · ППО — вторая отгрузка клиента`}
+                  sub={`${format(new Date(`${data.yoy.from}T12:00:00`), 'd MMMM', { locale: ru })} – ${format(new Date(`${data.yoy.to}T12:00:00`), 'd MMMM yyyy', { locale: ru })} против того же периода ${data.yoy.prevFrom.slice(0, 4)} · в скобках — прошлый год · сделки — все созданные (перв. + повт.), как «Кол-во сделок» в отчётах · CR — первичные к первичным сделкам · ППО — вторая отгрузка клиента`}
                 />
                 <div className="scroll-x">
                   <table className="w-full border-collapse text-[clamp(13px,1.3vw,24px)] min-w-[760px]">
                     <thead>
                       <tr>
                         <th className={`${TD} ${TH} text-left`} />
-                        {['Продажи, млн', 'Отгрузки, млн', 'Входящих', 'CR перв. в продажу', 'CR перв. в отгрузку', 'Доля повторных', 'ППО'].map(h => (
+                        {['Продажи, млн', 'Отгрузки, млн', 'Сделок (все)', 'CR перв. в продажу', 'CR перв. в отгрузку', 'Доля повторных', 'ППО'].map(h => (
                           <th key={h} className={`${TDNUM} ${TH}`}>{h}</th>
                         ))}
                       </tr>
@@ -605,7 +605,7 @@ export function PresentationPage() {
                 <Slide key={g.key}>
                   <SlideHead
                     title={`${g.name} — по менеджерам`}
-                    sub={`${periodLabel} · первичные/повторные — по воронке · CR = первичные продажи (отгрузки) к первичным входящим · клик по менеджеру — его сделки`}
+                    sub={`${periodLabel} · первичные/повторные — по воронке · CR = первичные продажи (отгрузки) к первичным сделкам · клик по менеджеру — его сделки`}
                   />
                   <MetricTable
                     label="Менеджер"
@@ -628,7 +628,7 @@ export function PresentationPage() {
               <Slide>
                 <SlideHead
                   title="По товарным группам"
-                  sub={`${periodLabel} · топ-10 по продажам · CR = первичные продажи (отгрузки) к первичным входящим`}
+                  sub={`${periodLabel} · топ-10 по продажам · CR = первичные продажи (отгрузки) к первичным сделкам`}
                   right={
                     <div className="inline-flex border border-[var(--color-border)] rounded-xl overflow-hidden" role="group" aria-label="Система товарных групп">
                       {([['kc', 'Категория КЦ'], ['by_max', 'По наибольшему']] as const).map(([mode, lbl]) => (
