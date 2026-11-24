@@ -12,73 +12,101 @@
 // Этот файл — КОНТРАКТ между движком (features/dismissal/engine, app/api/dismissal) и UI
 // (features/dismissal/ui). Менять — синхронно с обеих сторон.
 
-/** Что лежит на аккаунте. Порядок массива = порядок исполнения (сделки первыми: БП 171 сам
- *  перепривязывает связанные контакты/компании, исполнитель потом пропускает уже переехавшее). */
+// ── v2 (правка владельца 24.11, после первой выкатки) ─────────────────────────────────────────
+// • сделки делятся на ПЕРВИЧКУ и ПОВТОРКУ; лиды, контакты, компании НЕ трогаем отдельно — БП 171 сам
+//   меняет ответственного у компании, контакта, лида и у дел сделки (проверено по шаблону 24.11);
+// • повторка ранжируется по LTV заказчика, затем по числу отгрузок; топ клиентов — отдельным блоком;
+// • первичка передаётся, только если «бронь+» (стадия с event_type reserved/confirmed/sold) ИЛИ чек ≥ 100 000;
+//   остальное — в автобрак (стадия «НЕ ТРОГАТЬ - ЗАПРЕЩЕНО»: ЧЛ '9', ЮЛ 'C1:9'; в воронках без такой стадии —
+//   Холодные 4, Тендеры 7 — автобрака нет, неквалифицированные по умолчанию передаются);
+// • БП 171 задачи сделки НЕ передаёт (задачи роботов в ЧЛ/ЮЛ он завершает) — открытые задачи, привязанные к сделке,
+//   Увольнятор сам передаёт ВСЛЕД ЗА СДЕЛКОЙ (тот же получатель; сделка в автобраке — задачу закрыть);
+// • задачи/дела, не связанные с его открытыми сделками (УПД и т.п.), — на РОПа + сообщение РОПу со ссылками;
+// • в конце — сообщение и автозадача Анне Кузнецовой (PASSWORD_RESET_BITRIX_ID) сменить пароль на аккаунте.
+
+/** Ассистент CEO, Анна Кузнецова — ей сообщение и задача «сменить пароль на аккаунте уволенного». */
+export const PASSWORD_RESET_BITRIX_ID = 2096;
+/** Порог чека первички «передаём, даже если не бронь» (₽, сумма сделки). */
+export const PRIMARY_MIN_AMOUNT = 100_000;
+/** Сколько повторных заказчиков по умолчанию в блоке «Топ клиентов». */
+export const DEFAULT_TOP_COUNT = 20;
+/** Стадии автобрака первички по воронкам. Нет ключа — автобрака в воронке нет. */
+export const PRIMARY_BRAK_STAGE: Record<number, string> = { 0: '9', 1: 'C1:9' };
+export const PRIMARY_FUNNELS = [0, 1, 4, 7] as const;
+export const REPEAT_FUNNELS = [2, 3] as const;
+
+/** Что лежит на аккаунте. Порядок массива = порядок исполнения (сделки первыми: задачи и дела сделок
+ *  идут следом за ними; дела БП 171 уже перевёл сам — исполнитель такие отметит «уже у получателя»). */
 export const DISMISSAL_KINDS = [
-  'deal_open',        // открытые сделки (ответственный) — только через БП 171
-  'deal_closed',      // закрытые сделки (выиграны/проиграны) — по умолчанию НЕ трогаем (история продаж)
-  'lead',             // открытые лиды (ответственный)
-  'contact',          // контакты (ответственный)
-  'company',          // компании (ответственный)
-  'task_responsible', // незавершённые задачи, где он исполнитель
-  'task_creator',     // незавершённые задачи, где он постановщик (исполнитель — другой)
-  'task_participant', // незавершённые задачи, где он соисполнитель или наблюдатель
-  'activity',         // незавершённые дела CRM (звонки, встречи, to-do), где он ответственный
+  'deal_primary',     // открытые сделки первичных воронок (0, 1, 4, 7)
+  'deal_repeat',      // открытые сделки повторных воронок (2, 3), ранжированы по LTV/отгрузкам
+  'task_deal',        // его незавершённые задачи (исполнитель), привязанные к его открытой сделке из прогона
+  'activity_deal',    // его незакрытые дела в его открытых сделках из прогона
+  'task_other',       // его задачи (исполнитель), НЕ привязанные к его открытым сделкам — на РОПа
+  'activity_other',   // его дела вне его открытых сделок — на РОПа
+  'task_creator',     // задачи, где он постановщик (исполнитель — другой) — постановщиком РОПа
+  'task_participant', // задачи, где он соисполнитель / наблюдатель — убрать
 ] as const;
 export type DismissalKind = typeof DISMISSAL_KINDS[number];
 
 export const DISMISSAL_KIND_LABELS: Record<DismissalKind, string> = {
-  deal_open: 'Открытые сделки',
-  deal_closed: 'Закрытые сделки',
-  lead: 'Лиды',
-  contact: 'Контакты',
-  company: 'Компании',
-  task_responsible: 'Задачи: исполнитель',
-  task_creator: 'Задачи: постановщик',
+  deal_primary: 'Первичные сделки',
+  deal_repeat: 'Повторные сделки',
+  task_deal: 'Задачи по сделкам',
+  activity_deal: 'Дела по сделкам',
+  task_other: 'Задачи без сделок',
+  activity_other: 'Дела без сделок',
+  task_creator: 'Задачи: он постановщик',
   task_participant: 'Задачи: соисполнитель / наблюдатель',
-  activity: 'Дела в CRM',
 };
 
 /**
- * transfer — передать (одному получателю; несколько получателей → по кругу, поровну);
+ * transfer — передать (несколько получателей → по кругу; повторка — «змейкой» по рангу, чтобы LTV делился ровно);
  *            для task_participant — заменить уволенного на получателя в той же роли;
- * close    — закрыть: задачу завершить (task_responsible), дело — отметить выполненным (activity);
- * remove   — убрать уволенного из участников (только task_participant);
+ * brak     — первичка в автобрак: стадия PRIMARY_BRAK_STAGE[воронка], crm.deal.update STAGE_ID
+ *            (ответственный при этом НЕ меняется — БП не запускается);
+ * follow   — вслед за сделкой (task_deal / activity_deal): получатель = получатель сделки; сделка в brak —
+ *            задача завершается / дело закрывается; сделка skip — тоже skip. Разворачивается в start;
+ * close    — задачу завершить / дело отметить выполненным;
+ * remove   — убрать уволенного из участников (task_participant);
  * skip     — не трогать.
  */
-export type DismissalAction = 'transfer' | 'close' | 'remove' | 'skip';
+export type DismissalAction = 'transfer' | 'brak' | 'follow' | 'close' | 'remove' | 'skip';
 
 export const DISMISSAL_ACTION_LABELS: Record<DismissalAction, string> = {
   transfer: 'Передать',
+  brak: 'В автобрак',
+  follow: 'Вслед за сделкой',
   close: 'Закрыть / завершить',
   remove: 'Убрать из участников',
   skip: 'Не трогать',
 };
 
-/** Допустимые действия по виду; первое — действие по умолчанию. */
+/** Допустимые действия по виду; первое — по умолчанию. Для deal_primary умолчание — ПО СТРОКЕ:
+ *  qualified → transfer, иначе brak (если в воронке есть стадия автобрака), иначе transfer.
+ *  brak для строки без стадии автобрака — ошибка валидации. */
 export const DISMISSAL_ALLOWED_ACTIONS: Record<DismissalKind, DismissalAction[]> = {
-  deal_open: ['transfer', 'skip'],
-  deal_closed: ['skip', 'transfer'],
-  lead: ['transfer', 'skip'],
-  contact: ['transfer', 'skip'],
-  company: ['transfer', 'skip'],
-  task_responsible: ['transfer', 'close', 'skip'],
+  deal_primary: ['transfer', 'brak', 'skip'],
+  deal_repeat: ['transfer', 'skip'],
+  task_deal: ['follow', 'close', 'skip'],
+  activity_deal: ['follow', 'close', 'skip'],
+  task_other: ['transfer', 'close', 'skip'],
+  activity_other: ['transfer', 'close', 'skip'],
   task_creator: ['transfer', 'skip'],
   task_participant: ['remove', 'transfer', 'skip'],
-  activity: ['transfer', 'close', 'skip'],
 };
 
-/** Правило на весь вид. targets — Битрикс-id получателей (для transfer обязателен ≥1). */
+/** Правило на весь вид. targets — Битрикс-id получателей. Для task_other / activity_other / task_creator
+ *  пустые targets при transfer = РОП (plan.ropBitrixId). */
 export interface DismissalRule {
   action: DismissalAction;
   targets: number[];
-  /** «Раскидать по отделу» (владелец 24.11): получатели = все АКТИВНЫЕ менеджеры этого отдела
-   *  (без уволенного), поровну по кругу. Состав берётся в момент «Готово» (start), а не при
-   *  сохранении плана; если задан — targets игнорируется. id — как в DismissalDepartment.id. */
+  /** «Раскидать по отделу»: получатели = все АКТИВНЫЕ менеджеры отдела (без уволенного), состав — в момент start;
+   *  если задан — targets игнорируется. id — как в DismissalDepartment.id. */
   departmentId?: string | null;
 }
 
-/** Исключение для одной строки: своё действие и/или свой получатель. */
+/** Исключение для одной строки: своё действие и/или свой получатель (для топ-клиентов — ручной выбор). */
 export interface DismissalOverride {
   action: DismissalAction;
   target?: number | null;
@@ -88,8 +116,41 @@ export interface DismissalPlan {
   rules: Partial<Record<DismissalKind, DismissalRule>>;
   /** ключ — DismissalItem.key */
   overrides: Record<string, DismissalOverride>;
-  /** Комментарий для истории (зачем/кто решил) — попадает в журнал прогона. */
+  /** Размер блока «Топ клиентов» (заказчиков, не сделок), по умолчанию DEFAULT_TOP_COUNT. Топ без ручного
+   *  получателя распределяется вместе с остальными по правилу deal_repeat. */
+  topCount?: number;
+  /** РОП уволенного: получатель задач/дел без сделок и адресат сообщения. Сканирование подставляет
+   *  автоматически (ropOfManager), UI даёт поменять. */
+  ropBitrixId?: number | null;
+  /** Сообщение РОПу со ссылками на задачи без сделок (по умолчанию true). */
+  notifyRop?: boolean;
+  /** Сообщение + задача Кузнецовой сменить пароль (по умолчанию true). */
+  passwordReset?: boolean;
   note?: string;
+}
+
+/** Подробности строки для показа и решений (заполняет сканирование). */
+export interface DismissalItemInfo {
+  funnelId?: number;
+  stageName?: string;
+  amount?: number | null;
+  /** deal_primary: проходит ли критерий «бронь+ или чек ≥ PRIMARY_MIN_AMOUNT» и почему */
+  qualified?: boolean;
+  qualifyReason?: string;
+  /** deal_primary: есть ли в воронке стадия автобрака */
+  brakAvailable?: boolean;
+  /** deal_repeat: заказчик и его ценность */
+  clientKey?: string;
+  clientName?: string;
+  ltv?: number;
+  shipments?: number;
+  /** ранг заказчика (1 — лучший); несколько сделок одного заказчика — один ранг */
+  rank?: number;
+  /** task_deal / activity_deal: ключ сделки в прогоне (`deal_primary:123` / `deal_repeat:123`) */
+  dealKey?: string;
+  /** задачи: крайний срок, роль */
+  deadline?: string | null;
+  role?: string;
 }
 
 /**
@@ -113,6 +174,7 @@ export interface DismissalItem {
   url: string | null;
   /** Короткие подробности для строки: стадия, сумма, срок задачи, роль в задаче и т.п. */
   subtitle: string | null;
+  info: DismissalItemInfo;
   /** Итог исполнения (после «Готово»): какое действие, кому, статус, текст ошибки/пропуска. */
   action: DismissalAction | null;
   target: number | null;
@@ -159,8 +221,19 @@ export interface DismissalRunSummary {
   error: string | null;
 }
 
+/** Завершающие шаги прогона (после всех строк). */
+export interface DismissalFinals {
+  ropMessage: { status: 'pending' | 'done' | 'skipped' | 'error'; detail: string | null };
+  passwordReset: { status: 'pending' | 'done' | 'skipped' | 'error'; detail: string | null; taskId: number | null; taskUrl?: string | null };
+}
+
 export interface DismissalRunDetail extends DismissalRunSummary {
   plan: DismissalPlan;
+  /** Когда закончен последний сбор (после «Пересобрать» — новая дата); null — ещё собирается. */
+  scannedAt: string | null;
+  /** РОП, определённый при сканировании (может быть null — тогда UI требует выбрать) */
+  rop: DismissalUser | null;
+  finals: DismissalFinals;
   items: DismissalItem[];
   /** Имена получателей, встречающихся в плане/строках (bitrixId → имя) */
   userNames: Record<number, string>;

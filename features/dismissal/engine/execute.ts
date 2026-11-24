@@ -3,13 +3,13 @@
 // понятной причиной. После записи — контрольное чтение: Битрикс иногда отвечает true и ничего не меняет.
 //
 // Сделки — ТОЛЬКО бизнес-процессом «Сменить ответственного» (REASSIGN_TEMPLATE_ID = 171), crm.deal.update
-// ASSIGNED_BY_ID запрещён владельцем. Лиды/контакты/компании — crm.*.update (вебхук записи CRM).
-// Задачи — tasks.task.update / complete (+approve при контроле постановщика). Дела — crm.activity.update
+// ASSIGNED_BY_ID запрещён владельцем. Автобрак первички (v2) — crm.deal.update ТОЛЬКО STAGE_ID (вебхук записи
+// CRM), ответственный не меняется, БП не запускается. Задачи — tasks.task.update / complete (+approve при контроле постановщика). Дела — crm.activity.update
 // (дело нового типа CRM_TODO — смена ответственного через crm.activity.todo.updateResponsibleUser).
 //
 // Вызовы Битрикса идут через pace(): воркер держит паузы между ними (≥700 мс, после БП — ≥1.5 с).
 import { REASSIGN_TEMPLATE_ID } from '@/features/repeat-kanban/engine/createDeal';
-import type { DismissalAction, DismissalKind } from '../types';
+import { PRIMARY_BRAK_STAGE, type DismissalAction, type DismissalKind } from '../types';
 import { readOne, writeCrm, writeTask } from './bx';
 
 export interface ExecItem {
@@ -48,18 +48,16 @@ async function get<T>(pace: Pace, method: string, params: Record<string, unknown
   }
 }
 
-// ── CRM: сделки / лиды / контакты / компании ─────────────────────────────────
-const CRM: Record<'lead' | 'contact' | 'company', { entity: string; label: string }> = {
-  lead: { entity: 'lead', label: 'Лид' },
-  contact: { entity: 'contact', label: 'Контакт' },
-  company: { entity: 'company', label: 'Компания' },
-};
+// ── Сделки ──────────────────────────────────────────────────────────────────
+interface BxDeal { ASSIGNED_BY_ID?: string; STAGE_ID?: string; CATEGORY_ID?: string; CLOSED?: string; STAGE_SEMANTIC_ID?: string }
+const dealOpen = (d: BxDeal) => d.CLOSED !== 'Y' && (d.STAGE_SEMANTIC_ID ?? 'P') === 'P';
 
 async function execDeal(it: ExecItem, sourceId: number, pace: Pace): Promise<ExecResult> {
-  const d = await get<{ ASSIGNED_BY_ID?: string }>(pace, 'crm.deal.get', { id: it.entityId });
+  const d = await get<BxDeal>(pace, 'crm.deal.get', { id: it.entityId });
   if (!d) return skipped('Сделка не найдена (удалена?)');
   const cur = num(d.ASSIGNED_BY_ID);
   if (cur !== sourceId) return notOnSource(cur, it.target, 'Сделка');
+  if (!dealOpen(d)) return skipped('Сделка уже закрыта — не трогали');
   await pace('bp');
   const wf = await writeTask<string>('bizproc.workflow.start', {
     TEMPLATE_ID: REASSIGN_TEMPLATE_ID,
@@ -70,17 +68,21 @@ async function execDeal(it: ExecItem, sourceId: number, pace: Pace): Promise<Exe
   return done(`Запущен БП «Сменить ответственного» (${String(wf)})`);
 }
 
-async function execCrm(it: ExecItem & { kind: 'lead' | 'contact' | 'company' }, sourceId: number, pace: Pace): Promise<ExecResult> {
-  const { entity, label } = CRM[it.kind];
-  const e = await get<{ ASSIGNED_BY_ID?: string }>(pace, `crm.${entity}.get`, { id: it.entityId });
-  if (!e) return skipped(`${label} не найден(а) (удалён?)`);
-  const cur = num(e.ASSIGNED_BY_ID);
-  if (cur !== sourceId) return notOnSource(cur, it.target, label);
+/** Автобрак первички: только стадия. Перед записью — всё ещё его и всё ещё открыта. */
+async function execBrak(it: ExecItem, sourceId: number, pace: Pace): Promise<ExecResult> {
+  const d = await get<BxDeal>(pace, 'crm.deal.get', { id: it.entityId });
+  if (!d) return skipped('Сделка не найдена (удалена?)');
+  const stage = PRIMARY_BRAK_STAGE[num(d.CATEGORY_ID)];
+  if (!stage) throw new DismissalItemError(`В воронке ${num(d.CATEGORY_ID)} нет стадии автобрака`);
+  if (d.STAGE_ID === stage) return done('Сделка уже в автобраке');
+  const cur = num(d.ASSIGNED_BY_ID);
+  if (cur !== sourceId) return skipped(cur ? `Сделка уже на другом сотруднике (#${cur}) — в автобрак не переводили` : 'Ответственный пуст — не трогали');
+  if (!dealOpen(d)) return skipped('Сделка уже закрыта — не трогали');
   await pace('call');
-  await writeCrm<boolean>(`crm.${entity}.update`, { id: it.entityId, fields: { ASSIGNED_BY_ID: it.target } });
-  const after = await get<{ ASSIGNED_BY_ID?: string }>(pace, `crm.${entity}.get`, { id: it.entityId });
-  if (after && num(after.ASSIGNED_BY_ID) !== it.target) throw new DismissalItemError(`Битрикс принял запись, но ответственный — #${num(after.ASSIGNED_BY_ID)}`);
-  return done('Ответственный сменён');
+  await writeCrm<boolean>('crm.deal.update', { id: it.entityId, fields: { STAGE_ID: stage } });
+  const after = await get<BxDeal>(pace, 'crm.deal.get', { id: it.entityId });
+  if (after && after.STAGE_ID !== stage) throw new DismissalItemError(`Битрикс принял запись, но стадия — ${after.STAGE_ID}`);
+  return done('Переведена в автобрак');
 }
 
 // ── Задачи ──────────────────────────────────────────────────────────────────
@@ -113,10 +115,11 @@ async function closeTask(pace: Pace, t: BxTask): Promise<string> {
 async function execTask(it: ExecItem, sourceId: number, pace: Pace): Promise<ExecResult> {
   const t = await getTask(pace, it.entityId);
   if (!t) return skipped('Задача не найдена (удалена?)');
-  if (finished(t)) return skipped('Задача уже завершена');
+  // Задачи сделки: БП 171 сам завершает робот-задачи ЧЛ/ЮЛ — это не ошибка.
+  if (finished(t)) return skipped(it.kind === 'task_deal' ? 'Задача уже закрыта (закрыл БП сделки или вручную)' : 'Задача уже завершена');
   const resp = num(t.responsibleId), creator = num(t.createdBy);
 
-  if (it.kind === 'task_responsible') {
+  if (it.kind === 'task_deal' || it.kind === 'task_other') {
     if (resp !== sourceId) return notOnSource(resp, it.action === 'transfer' ? it.target : null, 'Задача');
     if (it.action === 'close') return done(await closeTask(pace, t));
     // Он же постановщик — постановщиком тоже ставим получателя: иначе задача «своя себе» уволенного
@@ -166,6 +169,7 @@ async function execActivity(it: ExecItem, sourceId: number, pace: Pace): Promise
   const a = await get<BxActivity>(pace, 'crm.activity.get', { id: it.entityId });
   if (!a) return skipped('Дело не найдено (удалено?)');
   if (a.COMPLETED === 'Y') return skipped('Дело уже выполнено');
+  // Дела сделки БП 171 переводит сам — тогда здесь «уже у получателя».
   const cur = num(a.RESPONSIBLE_ID);
   if (cur !== sourceId) return notOnSource(cur, it.action === 'transfer' ? it.target : null, 'Дело');
   if (it.action === 'close') {
@@ -188,26 +192,28 @@ async function execActivity(it: ExecItem, sourceId: number, pace: Pace): Promise
   return done('Ответственный дела сменён');
 }
 
-/** Исполнить строку. Бросает: isTransient(e) — повторить позже, иначе — ошибка строки. */
+/** Исполнить строку. Бросает: isTransient(e) — повторить позже, иначе — ошибка строки.
+ *  follow сюда не приходит — start разворачивает его в transfer / close / skip. */
 export async function executeItem(it: ExecItem, sourceId: number, pace: Pace): Promise<ExecResult> {
   if (it.action === 'skip') return skipped('По правилу: не трогать');
+  if (it.action === 'follow') throw new DismissalItemError('«Вслед за сделкой» не развёрнуто — перезапустите прогон');
   if (it.action === 'transfer' && !it.target) throw new DismissalItemError('Не указан получатель');
   if (it.action === 'transfer' && it.target === sourceId) throw new DismissalItemError('Получатель — сам увольняемый');
   switch (it.kind) {
-    case 'deal_open':
-    case 'deal_closed':
+    case 'deal_primary':
+    case 'deal_repeat':
+      if (it.action === 'brak' && it.kind === 'deal_primary') return execBrak(it, sourceId, pace);
       if (it.action !== 'transfer') throw new DismissalItemError(`Для сделки действие ${it.action} недопустимо`);
       return execDeal(it, sourceId, pace);
-    case 'lead':
-    case 'contact':
-    case 'company':
-      if (it.action !== 'transfer') throw new DismissalItemError(`Действие ${it.action} недопустимо`);
-      return execCrm(it as ExecItem & { kind: 'lead' | 'contact' | 'company' }, sourceId, pace);
-    case 'task_responsible':
+    case 'task_deal':
+    case 'task_other':
     case 'task_creator':
     case 'task_participant':
       return execTask(it, sourceId, pace);
-    case 'activity':
+    case 'activity_deal':
+    case 'activity_other':
       return execActivity(it, sourceId, pace);
+    default:
+      throw new DismissalItemError(`Вид строки ${String(it.kind)} не поддерживается (прогон до v2) — пересоберите`);
   }
 }

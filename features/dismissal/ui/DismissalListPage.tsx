@@ -27,14 +27,14 @@ export function DismissalListPage() {
           </button>
         </div>
         <p className="mb-4 max-w-[800px] text-xs text-[var(--color-text-muted)]">
-          Сотрудник уходит — здесь собирается всё, что висит на нём в Битриксе: сделки, лиды, контакты,
-          компании, задачи и дела. Решаете, что передать и кому, жмёте «Готово» — дальше исполнитель
-          спокойно проводит это в Битриксе по одной записи. Ответственный сделки меняется только
-          бизнес-процессом «Сменить ответственного».
+          Сотрудник уходит — здесь собирается всё, что висит на нём в Битриксе: повторные и первичные сделки,
+          задачи и дела. Контакты, компании и дела сделки Битрикс переведёт сам вместе со сделкой. Решаете,
+          что передать и кому, жмёте «Проверить и запустить» — дальше исполнитель спокойно проводит это
+          в Битриксе по одной записи.
         </p>
 
         {runs.isLoading && <div className="py-10 text-center text-sm text-[var(--color-text-muted)]">Загружаю…</div>}
-        {runs.isError && <ErrorBox>Не удалось загрузить список: {runs.error.message}</ErrorBox>}
+        {runs.isError && <ErrorBox onRetry={() => void runs.refetch()}>Не удалось загрузить список: {runs.error.message}</ErrorBox>}
         {runs.data && runs.data.length === 0 && (
           <div className={`${card} px-4 py-10 text-center text-sm text-[var(--color-text-muted)]`}>
             Увольнений ещё не было. Нажмите «Новое увольнение», чтобы выбрать сотрудника.
@@ -61,7 +61,7 @@ function RunRow({ run }: { run: DismissalRunSummary }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="min-w-0 break-words text-sm font-semibold text-[var(--color-text)]">{run.source.name}</span>
-            <RunStatusBadge status={run.status} />
+            <RunStatusBadge status={run.status} errors={run.counts.error} />
             {!run.source.active && <span className="text-[11px] text-[var(--color-text-muted)]">уволен в Битриксе</span>}
           </div>
           <div className="mt-0.5 text-xs text-[var(--color-text-muted)] break-words">
@@ -107,7 +107,7 @@ function NewRunModal({ open, onOpenChange }: { open: boolean; onOpenChange: (o: 
   const submit = () => {
     const id = Number(picked);
     if (!id) return;
-    create.mutate(id, { onSuccess: r => router.push(`/dismissal/${r.id}`) });
+    create.mutate(id, { onSuccess: r => router.push(`/dismissal/${r.id}${r.existing ? '?existing=1' : ''}`) });
   };
 
   return (
@@ -115,10 +115,10 @@ function NewRunModal({ open, onOpenChange }: { open: boolean; onOpenChange: (o: 
       title="Новое увольнение" desktopWidth="sm:max-w-md">
       <div className="flex flex-col gap-3">
         <p className="text-sm text-[var(--color-text-muted)]">
-          Выберите сотрудника — соберу всё, что на нём в Битриксе. Ничего не меняется, пока вы не нажмёте «Готово» на следующем шаге.
+          Выберите сотрудника — соберу всё, что на нём в Битриксе. В Битриксе ничего не меняется, пока вы не проверите план и не нажмёте «Запустить».
         </p>
         {users.isError ? (
-          <ErrorBox>Не удалось загрузить сотрудников: {users.error.message}</ErrorBox>
+          <ErrorBox onRetry={() => void users.refetch()}>Не удалось загрузить сотрудников: {users.error.message}</ErrorBox>
         ) : (
           <SearchSelect
             options={options}
