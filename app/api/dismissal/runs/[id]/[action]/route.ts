@@ -18,7 +18,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     const a = action as Action;
     await assertRunInScope(id, g.scope); // v3: вне среза — 404
     if (a === 'start') await startRun(id, planCheckFor(g.scope));
-    else await runAction(id, a);
+    else await runAction(id, a, { login: g.session.login, name: g.session.displayName || g.session.login });
     console.log(`[dismissal] ${id}: ${a} — ${g.session.login}`);
     if (a !== 'pause' && a !== 'cancel') kickDismissalWorker();
     return NextResponse.json(await scopedRunDetail(id, g.scope));

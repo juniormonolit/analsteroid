@@ -100,16 +100,18 @@ export async function getRunDetail(id: string): Promise<DismissalRunDetail | nul
   return { ...summaryOf(run, counts, (await announcementsFor([id])).get(id) ?? null), plan: run.plan, scannedAt: iso(run.scanned_at), rop, finals: finalsOf(run.finals, run.plan), items, userNames: await userNameMap(ids) };
 }
 
-/** v4: объявления из чата «Увольнения» по прогонам (features/dismissal/watch) — ОДНИМ запросом на все id;
+/** Кейсы «Сторожа увольнений» по прогонам (v5: на любой черновик; v4 — только из чата) (features/dismissal/watch) — ОДНИМ запросом на все id;
  *  на прогон — последний кейс (run_id или resolved_run_id). До наката 291 — пусто. */
 async function announcementsFor(runIds: string[]): Promise<Map<string, DismissalAnnouncement>> {
   const out = new Map<string, DismissalAnnouncement>();
   if (!runIds.length) return out;
   const r = await systemDb().query<{
-    rid: string; chat_id: string; message_id: string; line: string; author_name: string | null; announced_at: Date; deadline: Date; level: number;
+    rid: string; chat_id: string | null; message_id: string | null; line: string | null; author_name: string | null; announced_at: Date; deadline: Date; level: number;
     notifications: { level: number; bitrixId: number; name: string; at: string }[]; resolved_at: Date | null;
+    origin: 'chat' | 'manual' | null; resolution: 'started' | 'cancelled' | null; cancelled_by: string | null;
   }>(
-    `SELECT DISTINCT ON (x.rid) x.rid::text AS rid, c.chat_id, c.message_id::text, c.line, c.author_name, c.announced_at, c.deadline, c.level, c.notifications, c.resolved_at
+    `SELECT DISTINCT ON (x.rid) x.rid::text AS rid, c.chat_id, c.message_id::text, c.line, c.author_name, c.announced_at, c.deadline, c.level, c.notifications, c.resolved_at,
+            c.origin, c.resolution, c.cancelled_by
        FROM unnest($1::uuid[]) AS x(rid)
        JOIN dismissal_watch_cases c ON c.run_id = x.rid OR c.resolved_run_id = x.rid
       ORDER BY x.rid, c.announced_at DESC`, [runIds],
@@ -117,11 +119,15 @@ async function announcementsFor(runIds: string[]): Promise<Map<string, Dismissal
   const lvl = (n: number) => Math.min(2, Math.max(0, n)) as 0 | 1 | 2;
   for (const c of r?.rows ?? []) {
     out.set(String(c.rid), {
-      announcedAt: c.announced_at.toISOString(), authorName: c.author_name ?? '—', text: c.line,
-      messageUrl: `${PORTAL_URL}/online/?IM_DIALOG=${c.chat_id}&IM_MESSAGE=${c.message_id}`,
+      origin: c.origin ?? 'chat',
+      announcedAt: c.announced_at.toISOString(), authorName: c.author_name ?? null, text: c.line ?? null,
+      messageUrl: c.chat_id && c.message_id ? `${PORTAL_URL}/online/?IM_DIALOG=${c.chat_id}&IM_MESSAGE=${c.message_id}` : null,
       deadline: c.deadline.toISOString(), level: lvl(c.level),
       notified: (c.notifications ?? []).map(n => ({ level: lvl(n.level), bitrixId: n.bitrixId, name: n.name, at: n.at })),
       resolvedAt: c.resolved_at ? c.resolved_at.toISOString() : null,
+      // до наката 292 колонки resolution нет — решённый v4-кейс = запуск
+      resolution: c.resolution ?? (c.resolved_at ? 'started' : null),
+      cancelledBy: c.cancelled_by ?? null,
     });
   }
   return out;
@@ -213,7 +219,8 @@ export async function startRun(id: string, check?: PlanCheck): Promise<void> {
         WHERE i.run_id = $1 AND i.key = x.key`,
       [id, JSON.stringify(resolved)],
     );
-    await client.query(`UPDATE dismissal_runs SET status = 'queued', plan = $2, finals = $3, error = NULL, locked_by = NULL, updated_at = now() WHERE id = $1`,
+    // started_at — в момент «Готово» (claimRun сохранит через coalesce): «запущено» для сторожа = отметка, а не захват воркером.
+    await client.query(`UPDATE dismissal_runs SET status = 'queued', started_at = coalesce(started_at, now()), plan = $2, finals = $3, error = NULL, locked_by = NULL, updated_at = now() WHERE id = $1`,
       [id, JSON.stringify(exp.plan), JSON.stringify(finalsOf(null, exp.plan))]);
     await client.query('COMMIT');
   } catch (e) {
@@ -236,13 +243,20 @@ const STATUS_RU: Record<DismissalRunStatus, string> = {
   scanning: 'сбор', draft: 'черновик', queued: 'в очереди', running: 'исполняется', paused: 'на паузе', done: 'завершён', failed: 'ошибка', cancelled: 'отменён',
 };
 
-export async function runAction(id: string, action: 'pause' | 'resume' | 'cancel' | 'retry' | 'rescan'): Promise<void> {
+export async function runAction(id: string, action: 'pause' | 'resume' | 'cancel' | 'retry' | 'rescan', by?: { login: string; name: string }): Promise<void> {
   const run = await getRunRow(id);
   if (!run) throw new DismissalError('Прогон не найден', 404);
   let ok = false;
   if (action === 'pause') ok = await transition(id, ['queued', 'running'], 'paused');
   else if (action === 'resume') ok = await transition(id, ['paused'], 'queued');
-  else if (action === 'cancel') ok = await transition(id, ['scanning', 'draft', 'queued', 'running', 'paused'], 'cancelled', ', finished_at = now()');
+  else if (action === 'cancel') {
+    ok = await transition(id, ['scanning', 'draft', 'queued', 'running', 'paused'], 'cancelled', ', finished_at = now()');
+    // v5: кто удалил черновик — сторож пишет в зеркало «отменено: черновик удалил(а) …». До наката 292 колонок нет — не мешаем отмене.
+    if (ok && by) {
+      await systemDb().query(`UPDATE dismissal_runs SET cancelled_by = $2, cancelled_by_name = $3, cancelled_at = now() WHERE id = $1`, [id, by.login, by.name])
+        .catch(e => console.warn(`[dismissal] ${id}: cancelled_by не записан:`, e instanceof Error ? e.message : e));
+    }
+  }
   else if (action === 'rescan') {
     // Пересобрать можно черновик и прогон, упавший на сборе (до запуска).
     ok = run.status === 'draft' || (run.status === 'failed' && !run.started_at)

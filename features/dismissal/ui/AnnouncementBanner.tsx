@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, ExternalLink, MessageSquare } from 'lucide-react';
+import { ChevronDown, ChevronRight, Clock, ExternalLink, MessageSquare, Trash2 } from 'lucide-react';
 import type { DismissalAnnouncement } from '../types';
 import { fmtDateTime } from './planMath';
+import { btnDanger } from './shared';
 
 // v4 «Сторож увольнений»: черновик заведён ботом по сообщению в чате «Увольнения».
 // Баннер: откуда (автор, время, текст, ссылка), срок с цветом по близости, уровень эскалации,
@@ -48,7 +49,7 @@ function durationText(ms: number): string {
 
 /** Итог после запуска: вовремя / с опозданием (от исходного срока — до первой эскалации). */
 export function resolvedText(a: DismissalAnnouncement): { text: string; late: boolean } | null {
-  if (!a.resolvedAt) return null;
+  if (!a.resolvedAt || a.resolution === 'cancelled') return null;
   const res = Date.parse(a.resolvedAt);
   const firstEsc = a.notified.filter(n => n.level >= 1).map(n => Date.parse(n.at)).filter(Number.isFinite).sort((x, y) => x - y)[0];
   const original = firstEsc ?? Date.parse(a.deadline);
@@ -56,49 +57,87 @@ export function resolvedText(a: DismissalAnnouncement): { text: string; late: bo
   return { text: `Запущено с опозданием на ${durationText(res - original)}`, late: true };
 }
 
-function levelLine(a: DismissalAnnouncement): string {
-  if (a.level === 2) return LEVEL_TITLE[2];
-  const who = [...a.notified].reverse().find(n => n.level === a.level)?.name;
-  return who ? `${LEVEL_TITLE[a.level]} ${who}` : LEVEL_TITLE[a.level];
+/** «Увольнение отменено · удалил(а) X, дата» */
+export function cancelledText(a: DismissalAnnouncement | null | undefined): string | null {
+  if (!a || a.resolution !== 'cancelled') return null;
+  return `Увольнение отменено${a.cancelledBy ? ` · удалил(а) ${a.cancelledBy}` : ''}${a.resolvedAt ? `, ${fmtDateTime(a.resolvedAt)}` : ''}`;
 }
 
-export function AnnouncementBanner({ a }: { a: DismissalAnnouncement }) {
+/** Кого сейчас дёргает бот: «бот напоминает РОПу X» / «эскалировано директору X» / «эскалировано Куликову». */
+function levelLine(a: DismissalAnnouncement, manual = false): string {
+  const who = [...a.notified].reverse().find(n => n.level === a.level)?.name;
+  if (a.level === 0) return `${manual ? 'бот напоминает РОПу' : LEVEL_TITLE[0]}${who ? ` ${who}` : ''}`;
+  if (a.level === 2) return LEVEL_TITLE[2];
+  return who ? `${LEVEL_TITLE[1]} ${who}` : LEVEL_TITLE[1];
+}
+
+export function AnnouncementBanner({ a, onDelete, deleteDisabled }: {
+  a: DismissalAnnouncement;
+  /** Черновик: «Удалить черновик» прямо в баннере (откроет подтверждение) */
+  onDelete?: () => void;
+  deleteDisabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
+  const chat = a.origin === 'chat';
+  const cancelled = a.resolution === 'cancelled';
   const res = resolvedText(a);
+  const isOpen = !a.resolution && !a.resolvedAt;
   const tone = deadlineTone(a);
-  const frame = res
+  const frame = !isOpen
     ? 'border-[var(--color-border)] bg-[var(--color-bg-surface)]'
     : tone === 'overdue' ? 'border-[var(--color-negative)]/40 bg-[var(--color-negative)]/5'
     : tone === 'today' ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5'
     : 'border-[var(--color-border)] bg-[var(--color-bg-surface)]';
+  const Icon = chat ? MessageSquare : Clock;
+  const deadlineChip = (
+    <span className={`rounded-full px-2.5 py-1 text-xs font-medium tabular-nums ${TONE_CLS[tone]}`}>
+      {tone === 'overdue' ? `Просрочено: срок был ${deadlineText(a.deadline).replace(/^до /, '')}` : `Запустить ${deadlineText(a.deadline)}`}
+    </span>
+  );
   return (
     <div className={`mb-3 rounded-xl border p-3 sm:px-4 ${frame}`}>
       <div className="flex flex-col gap-2 md:flex-row md:items-start md:gap-4">
         <div className="flex min-w-0 flex-1 items-start gap-2 text-sm text-[var(--color-text)]">
-          <MessageSquare size={16} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
-          <p className="min-w-0 break-words">
-            <span className="text-[var(--color-text-muted)]">Из чата «Увольнения» · {a.authorName}, {fmtDateTime(a.announcedAt)}: </span>
-            «{a.text}»
-            {a.messageUrl && (
-              <>{' · '}<a href={a.messageUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[var(--color-accent)] hover:underline">сообщение <ExternalLink size={12} /></a></>
-            )}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 pl-6 md:shrink-0 md:pl-0">
-          {res ? (
-            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${res.late ? 'bg-[var(--color-bg-hover)] text-[var(--color-text)]' : 'bg-[var(--color-positive)]/15 text-[var(--color-positive)]'}`}>{res.text}</span>
+          <Icon size={16} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
+          {chat ? (
+            <p className="min-w-0 break-words">
+              <span className="text-[var(--color-text-muted)]">Из чата «Увольнения» · {a.authorName ?? 'кто-то'}, {fmtDateTime(a.announcedAt)}{a.text ? ': ' : ''}</span>
+              {a.text && <>«{a.text}»</>}
+              {a.messageUrl && (
+                <>{' · '}<a href={a.messageUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[var(--color-accent)] hover:underline">сообщение <ExternalLink size={12} /></a></>
+              )}
+            </p>
           ) : (
-            <span className={`rounded-full px-2.5 py-1 text-xs font-medium tabular-nums ${TONE_CLS[tone]}`}>
-              {tone === 'overdue' ? `Просрочено: срок был ${deadlineText(a.deadline).replace(/^до /, '')}` : `Запустить ${deadlineText(a.deadline)}`}
-            </span>
+            <p className="min-w-0 break-words">
+              {isOpen
+                ? <>{tone === 'overdue' ? 'Срок прошёл' : `Срок: запустить ${deadlineText(a.deadline)}`} · {levelLine(a, true)}</>
+                : <span className="text-[var(--color-text-muted)]">Черновик заведён {fmtDateTime(a.announcedAt)}</span>}
+            </p>
           )}
         </div>
+        <div className="flex flex-wrap items-center gap-2 pl-6 md:shrink-0 md:pl-0">
+          {cancelled ? (
+            <span className="rounded-full bg-[var(--color-bg-hover)] px-2.5 py-1 text-xs font-medium text-[var(--color-text)]">{cancelledText(a)}</span>
+          ) : res ? (
+            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${res.late ? 'bg-[var(--color-bg-hover)] text-[var(--color-text)]' : 'bg-[var(--color-positive)]/15 text-[var(--color-positive)]'}`}>{res.text}</span>
+          ) : chat || tone === 'overdue' ? deadlineChip : null}
+        </div>
       </div>
+
+      {isOpen && onDelete && (
+        <div className="mt-2 flex flex-col gap-2 pl-6 sm:flex-row sm:items-center">
+          <p className="min-w-0 flex-1 text-sm text-[var(--color-text)]">Проведите увольнение — или удалите черновик, если увольнение отменено.</p>
+          <button type="button" onClick={onDelete} disabled={deleteDisabled} className={`${btnDanger} shrink-0`}>
+            <Trash2 size={14} /> Удалить черновик
+          </button>
+        </div>
+      )}
+
       <div className="mt-1 pl-6">
         <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
           className="inline-flex min-h-11 items-center gap-1 text-left text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] sm:min-h-7">
           {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          {res ? `${levelLine(a)} · история` : levelLine(a)}{a.notified.length > 0 && ` · уведомлений ${a.notified.length}`}
+          {chat || !isOpen ? `${levelLine(a)}${isOpen ? '' : ' · история'}` : 'История напоминаний'}{a.notified.length > 0 && ` · уведомлений ${a.notified.length}`}
         </button>
         {open && (
           <ul className="mt-1 flex flex-col gap-0.5 text-xs text-[var(--color-text-muted)]">
@@ -106,7 +145,7 @@ export function AnnouncementBanner({ a }: { a: DismissalAnnouncement }) {
             {a.notified.map((n, i) => (
               <li key={i} className="break-words">{fmtDateTime(n.at)} · {LEVEL_TITLE[n.level]}{n.level < 2 ? ` ${n.name}` : ''}</li>
             ))}
-            {a.resolvedAt && <li className="break-words">{fmtDateTime(a.resolvedAt)} · прогон запущен</li>}
+            {a.resolvedAt && <li className="break-words">{fmtDateTime(a.resolvedAt)} · {cancelled ? `черновик удалён${a.cancelledBy ? ` (${a.cancelledBy})` : ''}` : 'прогон запущен'}</li>}
           </ul>
         )}
       </div>

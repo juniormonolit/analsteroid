@@ -125,7 +125,7 @@ export function RunProgress({ run }: { run: DismissalRunDetail }) {
           )}
           {(active || run.status === 'paused') && (
             <button type="button" className={btnDanger} disabled={cmd.isPending} onClick={() => setConfirmCancel(true)}>
-              <XCircle size={14} /> Отменить
+              <XCircle size={14} /> Остановить
             </button>
           )}
           {canRetry && (
@@ -163,9 +163,9 @@ export function RunProgress({ run }: { run: DismissalRunDetail }) {
 
       <ConfirmDialog
         open={confirmCancel}
-        title="Отменить увольнение?"
+        title="Остановить прогон?"
         description={'Оставшиеся строки не будут выполнены.\nУже сделанное в Битриксе не откатывается.'}
-        confirmLabel="Отменить прогон" cancelLabel="Не отменять" tone="danger"
+        confirmLabel="Остановить" cancelLabel="Продолжить работу" tone="danger"
         pending={cmd.isPending}
         onCancel={() => setConfirmCancel(false)}
         onConfirm={() => cmd.mutate('cancel', { onSettled: () => setConfirmCancel(false) })}

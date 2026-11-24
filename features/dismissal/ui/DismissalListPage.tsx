@@ -4,13 +4,13 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ChevronRight, MessageSquare, UserX } from 'lucide-react';
-import { TONE_CLS, deadlineText, deadlineTone } from './AnnouncementBanner';
+import { TONE_CLS, cancelledText, deadlineText, deadlineTone } from './AnnouncementBanner';
 import { Modal } from '@/components/ui/Modal';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { useCreateRun, useDismissalRuns, useDismissalUsers } from './api';
 import { fmtDateTime, fmtNum } from './planMath';
 import { ErrorBox, RunStatusBadge, btnPrimary, btnSecondary, card, userHint } from './shared';
-import type { DismissalAnnouncement, DismissalRunSummary } from '../types';
+import type { DismissalRunSummary } from '../types';
 
 // «Увольнятор» (владелец 24.11): список прогонов + «Новое увольнение».
 
@@ -52,10 +52,10 @@ export function DismissalListPage() {
   );
 }
 
-// v4: у прогонов из чата «Увольнения» сервер может отдать announcement и в списке. В DismissalRunSummary
-// его пока нет (только в DismissalRunDetail) — читаем как необязательное поле, без него бейджа просто нет.
-type RunListItem = DismissalRunSummary & { announcement?: DismissalAnnouncement | null };
-const openAnn = (r: RunListItem) => (r.announcement && !r.announcement.resolvedAt && (r.status === 'draft' || r.status === 'scanning') ? r.announcement : null);
+// v5: announcement есть почти у каждого черновика (origin chat | manual). Срок — у любого открытого кейса;
+// бейдж «из чата» — только origin chat.
+type RunListItem = DismissalRunSummary;
+const openAnn = (r: RunListItem) => (r.announcement && !r.announcement.resolution && !r.announcement.resolvedAt && (r.status === 'draft' || r.status === 'scanning') ? r.announcement : null);
 
 /** Просроченные черновики из чата — наверх, остальные в исходном порядке. */
 function sortRuns(runs: RunListItem[]): RunListItem[] {
@@ -67,7 +67,7 @@ function RunRow({ run }: { run: RunListItem }) {
   const c = run.counts;
   const ann = openAnn(run);
   const tone = ann ? deadlineTone(ann) : null;
-  const started = run.status !== 'scanning' && run.status !== 'draft';
+  const started = !!run.startedAt;
   return (
     <li>
       <Link href={`/dismissal/${run.id}`}
@@ -75,8 +75,8 @@ function RunRow({ run }: { run: RunListItem }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="min-w-0 break-words text-sm font-semibold text-[var(--color-text)]">{run.source.name}</span>
-            <RunStatusBadge status={run.status} errors={run.counts.error} />
-            {run.announcement && <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-bg-hover)] px-2 py-0.5 text-[11px] text-[var(--color-text)]"><MessageSquare size={11} /> из чата</span>}
+            <RunStatusBadge status={run.status} errors={run.counts.error} cancelledDraft={!run.startedAt} />
+            {run.announcement?.origin === 'chat' && <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-bg-hover)] px-2 py-0.5 text-[11px] text-[var(--color-text)]"><MessageSquare size={11} /> из чата</span>}
             {ann && tone && (
               <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums ${tone === 'overdue' ? 'bg-[var(--color-warning)]/15 text-[var(--color-warning)]' : TONE_CLS[tone]}`}>
                 {tone === 'overdue' ? `просрочено · срок был ${deadlineText(ann.deadline).replace(/^до /, '')}` : `запустить ${deadlineText(ann.deadline)}`}
@@ -88,6 +88,9 @@ function RunRow({ run }: { run: RunListItem }) {
             {fmtDateTime(run.createdAt)} · {run.createdByName}
             {userHint(run.source) && <> · {userHint(run.source)}</>}
           </div>
+          {run.status === 'cancelled' && !run.startedAt && cancelledText(run.announcement) && (
+            <div className="mt-0.5 text-xs text-[var(--color-text-muted)] break-words">{cancelledText(run.announcement)}</div>
+          )}
           {run.error && <div className="mt-0.5 text-xs text-[var(--color-negative)] break-words">{run.error}</div>}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-0.5 text-xs tabular-nums text-[var(--color-text-muted)] sm:flex-row sm:gap-3">
@@ -97,7 +100,7 @@ function RunRow({ run }: { run: RunListItem }) {
               {c.error > 0 && <span className="text-[var(--color-negative)]">ошибок <b>{fmtNum(c.error)}</b></span>}
               <span>из <b className="text-[var(--color-text)]">{fmtNum(c.total)}</b></span>
             </>
-          ) : run.status === 'draft' ? (
+          ) : run.status === 'draft' || run.status === 'cancelled' ? (
             <span>всего <b className="text-[var(--color-text)]">{fmtNum(c.total)}</b></span>
           ) : null}
         </div>

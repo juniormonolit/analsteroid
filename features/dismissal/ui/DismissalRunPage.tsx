@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { ArrowLeft, Loader2, RefreshCw } from 'lucide-react';
 import { useDismissalRun, useRunCommand } from './api';
 import { DraftEditor } from './DraftEditor';
-import { AnnouncementBanner } from './AnnouncementBanner';
+import { AnnouncementBanner, cancelledText } from './AnnouncementBanner';
 import { RunProgress } from './RunProgress';
 import { fmtDateTime } from './planMath';
 import { ErrorBox, RunStatusBadge, Skeleton, btnPrimary, btnSecondary, card, runErrors, userHint } from './shared';
@@ -47,7 +47,7 @@ export function DismissalRunPage({ id }: { id: string }) {
             <div className="mb-3">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="min-w-0 break-words text-lg font-semibold text-[var(--color-text)]">Увольнение: {run.source.name}</h1>
-                <RunStatusBadge status={run.status} errors={runErrors(run)} />
+                <RunStatusBadge status={run.status} errors={runErrors(run)} cancelledDraft={!run.startedAt} />
                 {!run.source.active && <span className="text-xs text-[var(--color-text-muted)]">уволен в Битриксе</span>}
               </div>
               <p className="text-xs text-[var(--color-text-muted)] break-words">
@@ -74,7 +74,9 @@ export function DismissalRunPage({ id }: { id: string }) {
 
             {draftDeleted && (
               <div className={`${card} flex flex-col items-center gap-3 px-4 py-10 text-center`}>
-                <div className="text-sm font-medium text-[var(--color-text)]">Черновик удалён — в Битриксе ничего не менялось.</div>
+                {/* с announcement «кто и когда удалил» уже в баннере выше */}
+                {!cancelledText(run.announcement) && <div className="text-sm font-medium text-[var(--color-text)]">Увольнение отменено — черновик удалён</div>}
+                <div className="text-xs text-[var(--color-text-muted)]">В Битриксе ничего не менялось, бот больше не напоминает.</div>
                 <Link href="/dismissal" className={btnSecondary}>К списку</Link>
               </div>
             )}

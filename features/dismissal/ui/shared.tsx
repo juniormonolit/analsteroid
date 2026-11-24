@@ -27,11 +27,13 @@ const RUN_STATUS_TONE: Record<DismissalRunStatus, string> = {
 };
 
 /** Статус прогона; «Готово» с ошибками строк/завершающих шагов — warning: «Готово, ошибок: N». */
-export function RunStatusBadge({ status, errors = 0 }: { status: DismissalRunStatus; errors?: number }) {
+export function RunStatusBadge({ status, errors = 0, cancelledDraft }: { status: DismissalRunStatus; errors?: number; cancelledDraft?: boolean }) {
   const warn = status === 'done' && errors > 0;
+  // v5: отменён до запуска = «Увольнение отменено» (черновик удалён); после запуска = «Прогон остановлен».
+  const label = status === 'cancelled' ? (cancelledDraft ? 'Увольнение отменено' : 'Прогон остановлен') : RUN_STATUS_LABELS[status];
   return (
     <span className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${warn ? 'bg-[var(--color-warning)]/15 text-[var(--color-warning)]' : RUN_STATUS_TONE[status]}`}>
-      {warn ? `Готово, ошибок: ${errors.toLocaleString('ru-RU')}` : RUN_STATUS_LABELS[status]}
+      {warn ? `Готово, ошибок: ${errors.toLocaleString('ru-RU')}` : label}
     </span>
   );
 }

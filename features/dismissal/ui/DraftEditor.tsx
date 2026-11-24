@@ -205,7 +205,7 @@ export function DraftEditor({ run, existing, title }: { run: DismissalRunDetail;
         </div>
       </div>
 
-      {run.announcement && <AnnouncementBanner a={run.announcement} />}
+      {run.announcement && <AnnouncementBanner a={run.announcement} onDelete={() => setDeleteOpen(true)} deleteDisabled={cmd.isPending || starting} />}
       {existing && (
         <WarnBox className="mb-3">
           Открыт незавершённый черновик от {fmtDateTime(run.createdAt)}. Данные могли устареть —{' '}
@@ -254,8 +254,8 @@ export function DraftEditor({ run, existing, title }: { run: DismissalRunDetail;
       )}
 
       <ConfirmDialog
-        open={deleteOpen} title="Удалить черновик?" tone="danger" confirmLabel="Удалить" cancelLabel="Оставить"
-        description={'План и собранный список будут удалены.\nВ Битриксе ничего не менялось и не изменится.'}
+        open={deleteOpen} title="Удалить черновик?" tone="danger" confirmLabel="Удалить — увольнение отменено" cancelLabel="Оставить"
+        description={'Увольнение будет отменено, бот перестанет напоминать.\nВ Битриксе ничего не менялось и не изменится.'}
         pending={cmd.isPending && cmd.variables === 'cancel'}
         onCancel={() => setDeleteOpen(false)}
         onConfirm={() => {
