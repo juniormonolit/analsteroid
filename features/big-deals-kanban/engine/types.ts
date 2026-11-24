@@ -22,6 +22,8 @@ export interface BigDealInfo {
   categoryId?: number | null;
   /** Дата создания сделки (ISO) — РОПы 18.11: «от какой даты сделка». */
   createdAt?: string | null;
+  /** Когда сделка встала в текущую стадию (MOVED_TIME, ISO) — Осипов 24.11: «надо бы дату изменения этапа сделки». */
+  stageAt?: string | null;
   /** Сделка закрыта: won | lost | null (в работе). */
   closed: 'won' | 'lost' | null;
   assigned: BigPerson | null;
@@ -211,3 +213,15 @@ export type BigAction =
   | { type: 'renew'; taskId: number; deadline: string; comment?: string }
   /** Поставить/перенести срок открытой задачи (tasks.task.update DEADLINE). */
   | { type: 'deadline'; taskId: number; deadline: string };
+
+/** Шаг истории стадий сделки (crm.stagehistory.list) — по нажатию на стадию в карточке задачи. */
+export interface BigStageStep {
+  at: string;
+  stageId: string;
+  name: string;
+  color: string | null;
+  /** 1 — создание сделки, 2 — смена стадии, 5 — перенос в другую воронку. */
+  kind: 'created' | 'moved' | 'funnel';
+  /** won / lost — финальная стадия. */
+  semantic: 'won' | 'lost' | null;
+}

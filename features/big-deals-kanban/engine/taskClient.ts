@@ -12,15 +12,20 @@ import { BIG_DEALS_GROUP_IDS } from './config';
 import { canSeeTask } from './visibility';
 import { crmReadWebhook } from './rest';
 
-/** Задача видна сессии → заказчик её сделки (компания, иначе контакт); null — у сделки нет заказчика. */
-export async function taskClientRef(session: Session, taskId: number): Promise<ClientRef | null> {
+/** Задача видна сессии (те же проверки, что у звонков) → id её сделки; 0 — сделки нет. */
+export async function visibleTaskDealId(session: Session, taskId: number): Promise<number> {
   if (!hasPerm(session, 'section.repeat_kanban')) throw new BigActionError('Нет доступа к канбану', 403);
   if (!Number.isInteger(taskId) || taskId <= 0) throw new BigActionError('Некорректная задача', 400);
   const t = await fetchBigTask(taskId);
   if (!t) throw new BigActionError('Задача не найдена в Битриксе', 404);
   if (!BIG_DEALS_GROUP_IDS.includes(Number(t.groupId))) throw new BigActionError('Задача не из проектов больших сделок', 403);
   if (!canSeeTask(await taskPeople(t), await bigActor(session))) throw new BigActionError('Задача не в вашей зоне', 403);
-  const dealId = Number((t.ufCrmTask ?? []).map(String).find(x => /^D_\d+$/.test(x))?.slice(2)) || 0;
+  return Number((t.ufCrmTask ?? []).map(String).find(x => /^D_\d+$/.test(x))?.slice(2)) || 0;
+}
+
+/** Задача видна сессии → заказчик её сделки (компания, иначе контакт); null — у сделки нет заказчика. */
+export async function taskClientRef(session: Session, taskId: number): Promise<ClientRef | null> {
+  const dealId = await visibleTaskDealId(session, taskId);
   if (!dealId) return null;
   const r = await (bx(crmReadWebhook(), 'crm.deal.get', { id: dealId }) as Promise<{ result?: { COMPANY_ID?: string | null; CONTACT_ID?: string | null } }>)
     .catch(() => { throw new BigActionError('Битрикс не отдал сделку', 502); });

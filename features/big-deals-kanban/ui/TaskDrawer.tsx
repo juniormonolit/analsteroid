@@ -27,6 +27,7 @@ const BIG_CHECK_LABELS: TaskCheckLabels = {
 import type { BigPerson, BigRelatedTask, BigTaskCard } from '../engine/types';
 import type { BigChatMessage, BigTaskDetails } from '../engine/taskDetails';
 import { CallsTab } from './CallsTab';
+import { StageBadge } from './StageHistory';
 import { STATE_META, cardAmount, fmtDT, money } from './format';
 import { ChatFileLink, TaskChat } from './TaskDrawerChat';
 import { TaskActions } from './TaskDrawerActions';
@@ -38,13 +39,6 @@ type Pane = 'work' | 'calls' | 'tasks' | 'client';
 
 const linkBtn = 'inline-flex min-h-11 items-center gap-1 rounded-md border border-[var(--color-border)] px-3 text-xs hover:bg-[var(--color-bg-hover)] sm:min-h-8';
 
-/** Читаемый текст поверх цвета стадии Битрикса (там и светлые, и тёмные заливки). */
-function onColor(hex: string): string {
-  const h = hex.replace('#', '');
-  const f = h.length === 3 ? h.split('').map(x => x + x).join('') : h.slice(0, 6);
-  const [r, g, b] = [0, 2, 4].map(i => parseInt(f.slice(i, i + 2), 16));
-  return (r * 299 + g * 587 + b * 114) / 1000 > 150 ? '#1f1f1f' : '#ffffff';
-}
 
 export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; managers: BigPerson[]; onClose: () => void; onChanged: (card?: BigTaskCard) => void; mock?: boolean }) {
   const { card, managers, onClose, onChanged, mock = false } = props;
@@ -103,13 +97,7 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
             {amount != null && <span className="text-[17px] font-bold tabular-nums">{money(amount)}</span>}
             {card.productGroup && <span className="min-w-0 truncate font-semibold">{card.productGroup}</span>}
-            {deal && (
-              <span className={`rounded px-2 py-0.5 text-[12.5px] font-semibold ${deal.stageColor ? '' : deal.closed === 'won' ? 'bg-[var(--color-positive)]/15 text-[var(--color-positive)]' : deal.closed === 'lost' ? 'bg-[var(--color-negative-soft)] text-[var(--color-negative)]' : 'bg-[var(--color-bg-hover)]'}`}
-                style={deal.stageColor ? { background: deal.stageColor, color: onColor(deal.stageColor) } : undefined}
-                title="Стадия сделки">
-                {deal.stageName || (deal.closed === 'won' ? 'сделка выиграна' : deal.closed === 'lost' ? 'сделка проиграна' : '—')}
-              </span>
-            )}
+            {deal && <StageBadge deal={deal} taskId={card.id} mock={mock} />}
             <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${st.cls}`} title="Статус задачи">{st.label}</span>
             <span className={`inline-flex items-center gap-0.5 text-[12px] ${card.stuck ? 'font-semibold text-[var(--color-negative)]' : 'text-[var(--color-text-muted)]'}`} title={`Колонка «${card.stageTitle}»`}>
               <Clock size={12} aria-hidden />{card.daysInColumn} дн. в колонке

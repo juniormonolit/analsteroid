@@ -40,7 +40,7 @@ export function taskState(status: string | number, subStatus?: string | number |
 
 // ── сделки ──────────────────────────────────────────────────────────────────
 let stageNames: { at: number; map: Map<string, { name: string; color: string | null }> } | null = null;
-async function dealStageNames(): Promise<Map<string, { name: string; color: string | null }>> {
+export async function dealStageNames(): Promise<Map<string, { name: string; color: string | null }>> {
   if (stageNames && Date.now() - stageNames.at < 3600_000) return stageNames.map;
   const body = await bx(crmReadWebhook(), 'crm.status.list', {}) as { result: { ENTITY_ID: string; STATUS_ID: string; NAME: string; EXTRA?: { COLOR?: string } }[] };
   const map = new Map<string, { name: string; color: string | null }>();
@@ -54,7 +54,7 @@ async function dealStageNames(): Promise<Map<string, { name: string; color: stri
 
 interface BxDealRow {
   ID: string; TITLE?: string; OPPORTUNITY?: string; STAGE_ID?: string; CATEGORY_ID?: string; ASSIGNED_BY_ID?: string;
-  CONTACT_ID?: string | null; COMPANY_ID?: string | null; CLOSED?: string; STAGE_SEMANTIC_ID?: string; DATE_CREATE?: string;
+  CONTACT_ID?: string | null; COMPANY_ID?: string | null; CLOSED?: string; STAGE_SEMANTIC_ID?: string; DATE_CREATE?: string; MOVED_TIME?: string;
 }
 
 export async function fetchDeals(ids: number[]): Promise<Map<number, BigDealInfo>> {
@@ -65,7 +65,7 @@ export async function fetchDeals(ids: number[]): Promise<Map<number, BigDealInfo
   for (let i = 0; i < uniq.length; i += 50) {
     cmds[`d${i}`] = { method: 'crm.deal.list', params: {
       filter: { '@ID': uniq.slice(i, i + 50) },
-      select: ['ID', 'TITLE', 'OPPORTUNITY', 'STAGE_ID', 'CATEGORY_ID', 'ASSIGNED_BY_ID', 'CONTACT_ID', 'COMPANY_ID', 'CLOSED', 'STAGE_SEMANTIC_ID', 'DATE_CREATE'],
+      select: ['ID', 'TITLE', 'OPPORTUNITY', 'STAGE_ID', 'CATEGORY_ID', 'ASSIGNED_BY_ID', 'CONTACT_ID', 'COMPANY_ID', 'CLOSED', 'STAGE_SEMANTIC_ID', 'DATE_CREATE', 'MOVED_TIME'],
     } };
   }
   const [r, stNames] = await Promise.all([bxBatch<BxDealRow[]>(crmReadWebhook(), cmds), dealStageNames().catch(() => new Map<string, { name: string; color: string | null }>())]);
@@ -82,6 +82,7 @@ export async function fetchDeals(ids: number[]): Promise<Map<number, BigDealInfo
       stageColor: stNames.get(d.STAGE_ID ?? '')?.color ?? null,
       categoryId: d.CATEGORY_ID != null && d.CATEGORY_ID !== '' ? Number(d.CATEGORY_ID) : null,
       createdAt: d.DATE_CREATE ? new Date(d.DATE_CREATE).toISOString() : null,
+      stageAt: d.MOVED_TIME ? new Date(d.MOVED_TIME).toISOString() : null,
       closed: sem === 'S' ? 'won' : sem === 'F' ? 'lost' : null,
       assigned: personOf(d.ASSIGNED_BY_ID),
       contactId: Number(d.CONTACT_ID) || null, companyId: Number(d.COMPANY_ID) || null,
