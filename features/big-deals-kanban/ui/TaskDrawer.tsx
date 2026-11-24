@@ -167,7 +167,7 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
             </div>
             <div className="order-1 flex min-w-0 flex-col gap-3 md:order-2">
               {canManage && <TaskActions card={card} managers={managers} onChanged={changed} questions={d?.questions} mock={mock} />}
-              <TaskChat card={card} messages={d?.chat ?? null} loading={details.isLoading} onSent={changed} questions={d?.questions} rop={d?.rop ?? null} inject={inject} mock={mock} />
+              <TaskChat card={card} messages={d?.chat ?? null} loading={details.isLoading} onSent={changed} questions={d?.questions} rop={d?.rop ?? null} inject={inject} me={d?.viewer?.id ?? null} mock={mock} />
             </div>
           </div>
 

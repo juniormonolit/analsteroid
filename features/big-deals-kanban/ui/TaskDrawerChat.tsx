@@ -10,7 +10,7 @@ import { fmtDT } from './format';
 import { QuestionsBlock } from './QuestionsBlock';
 import { Section, postBigAction } from './TaskDrawerShared';
 
-export function TaskChat({ card, messages, loading, onSent, questions, rop, inject, mock = false }: {
+export function TaskChat({ card, messages, loading, onSent, questions, rop, inject, me = null, mock = false }: {
   card: BigTaskCard; messages: BigChatMessage[] | null; loading: boolean; onSent: (card?: BigTaskCard) => void;
   /** Вопросы из описания задачи — кнопками в блоке «Вопросы и шаблоны» (РОП 18.11: один блок вместо двух). */
   questions?: string[];
@@ -18,6 +18,8 @@ export function TaskChat({ card, messages, loading, onSent, questions, rop, inje
   rop?: { id: string; name: string } | null;
   /** Текст снаружи (ИИ-оценка: «Спросить по красным и жёлтым») — дописывается в черновик; key — чтобы сработал повтор. */
   inject?: { text: string; key: number } | null;
+  /** Bitrix ID того, кто смотрит, — себя в «Отметить» не показываем. */
+  me?: string | null;
   mock?: boolean;
 }) {
   const [text, setText] = useState('');
@@ -25,13 +27,14 @@ export function TaskChat({ card, messages, loading, onSent, questions, rop, inje
   const [err, setErr] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
   const att = useAttachments();
-  // Кого можно отметить: исполнитель, ответственный по сделке (если другой), РОП исполнителя.
+  // Кого можно отметить: ответственный по сделке первым (Осипов 24.11: «не мою фамилию выводить, а ответственного
+  // за сделку» — задача бывает на РОПе), затем исполнитель, РОП. Себя не показываем — отмечать себя незачем.
   const mentions: { id: string; name: string; role: string }[] = [];
   const addM = (p: { id: string; name: string } | null | undefined, role: string) => {
-    if (p?.id && /^\d+$/.test(p.id) && !mentions.some(m => m.id === p.id)) mentions.push({ id: p.id, name: p.name, role });
+    if (p?.id && /^\d+$/.test(p.id) && p.id !== me && !mentions.some(m => m.id === p.id)) mentions.push({ id: p.id, name: p.name, role });
   };
-  addM(card.responsible, 'исполнитель');
   addM(card.deal?.assigned, 'по сделке');
+  addM(card.responsible, 'исполнитель');
   addM(rop, 'РОП');
   // Упоминание РОПа — в начало строки через пробел, остальное — с новой строки.
   const insert = (t: string) => setText(prev => (!prev.trim() ? t : t.startsWith('[USER=') ? `${t}${prev.includes('\n') ? '\n' : ''}${prev.trimStart()}` : `${prev.trimEnd()}\n${t}`));
