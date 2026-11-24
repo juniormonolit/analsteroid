@@ -27,8 +27,11 @@ export function measureWindow(createdAtIso: string, controlDate: string): { from
 export function verdictOf(metric: Pick<TaskerMetricDef, 'higherIsBetter'>, before: number | null, after: Snapshot, target: number | null): TaskerVerdict {
   if (!after.enoughData || after.value === null) return 'not_enough_data';
   const better = (a: number, b: number) => (metric.higherIsBetter ? a >= b : a <= b);
-  if (target !== null && better(after.value, target)) return 'achieved';
-  if (before === null) return target === null ? 'no_change' : 'no_change';
+  // «Достигнуто» — только в правильную сторону: цель, поставленная хуже исходного значения (старые задачи до
+  // правила defaultGoal, баг 24.11), не засчитывается простым удержанием/падением — планка = исходное значение.
+  const bar = target === null ? null : before !== null && better(before, target) && before !== target ? before : target;
+  if (bar !== null && better(after.value, bar)) return 'achieved';
+  if (before === null) return 'no_change';
   const delta = metric.higherIsBetter ? after.value - before : before - after.value;
   const noise = Math.max(Math.abs(before) * NOISE_REL, 1e-9);
   return delta > noise ? 'improved' : 'no_change';

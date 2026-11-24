@@ -25,6 +25,7 @@ import { drainTask, enqueue, type BxOp } from './bitrix';
 import { getTask, OPEN_TASK_SQL, viewerOf } from './repo';
 import { invalidateLive } from './live';
 import { creatorOptions } from './creators';
+import { defaultGoal, goalWorseThanCurrent } from '../goal';
 
 /** Директор/админ может обойти лимит «≤ 3 открытых» (дубль метрики не обходится). */
 export function canOverrideLimits(session: SessionUser, settings: TaskerSettings): boolean {
@@ -206,6 +207,15 @@ export async function createTasks(
   // Тот же кэш, что у формы: снимок в задаче = цифры, которые РОП только что видел.
   const snaps = await computeSnapshots(run, eligible, metric, req.period, { cacheScope: snapshotCacheScope(scope.kind, session.id) });
 
+  // Ручная цель хуже текущего — задача на ухудшение: не ставим никому (кроме «мало данных»). Баг 24.11.
+  if (req.target != null) {
+    const bad = eligible.filter(id => goalWorseThanCurrent(metric, req.target, stripMeta(snaps[id])));
+    if (bad.length) {
+      const who = bad.map(id => `${nameOf(id) ?? `#${id}`} (сейчас ${fmtValue(stripMeta(snaps[id]).value, metric.format)})`).join(', ');
+      throw new TaskerError(`Цель ${fmtValue(req.target, metric.format)} ${metric.higherIsBetter ? 'ниже' : 'выше'} текущего значения: ${who} — это задача на ухудшение. Поставьте цель не хуже текущего или оставьте поле пустым — цель посчитается сама.`);
+    }
+  }
+
   const deadlineIso = toMskIso(req.deadline);
   const sessionCache = new Map<string, number>();
   const touchedSessions = new Map<number, number>(); // sessionId → последняя задача запроса
@@ -219,7 +229,8 @@ export async function createTasks(
     } else if (!snap.enoughData) {
       warnings.push({ managerId: Number(managerId), code: 'not_enough_data', message: `${nameOf(managerId) ?? `#${managerId}`}: мало данных (знаменатель ${snap.denominator ?? 0} < ${MIN_DENOMINATOR}) — вердикт может быть «мало данных»` });
     }
-    const target = req.target ?? snap.deptAvg;
+    // Не передана — по правилу defaultGoal (лучшее из средних; кто уже лучше — +10 % к текущему), у каждого своя.
+    const target = req.target ?? defaultGoal(metric, snap).target;
     const rop = await ropOfManager(managerId).catch(() => null);
     const entry = dir.get(Number(managerId));
     const director = directorFor(settings, entry?.branch);

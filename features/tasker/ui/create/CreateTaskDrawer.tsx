@@ -16,6 +16,7 @@ import {
 import { AvailabilityWarning } from '../shared/AvailabilityWarning';
 import { renderTemplateBody, templateToBitrix } from '../templates/templateBody';
 import { TASKER_METRIC_GROUP_LABELS, type TaskerAvailabilityRequest } from '@/features/tasker/types';
+import { aboveDept, aboveDeptLabel, defaultGoal, goalWorseThanCurrent } from '@/features/tasker/goal';
 
 /**
  * Форма постановки задачи «подтянуть показатель» (Задачник, сессия C; ТЗ —
@@ -220,15 +221,27 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
   });
   const snapshot = snapshotQ.data;
 
-  // Цель по умолчанию — среднее отдела. Один менеджер — подставляем число; несколько —
-  // у каждого своё среднее, поле пустое (= сервер возьмёт среднее его отдела).
+  // Цель по умолчанию — features/tasker/goal.ts (то же правило на сервере): лучшее из (среднее отдела,
+  // своё за 6 мес); кто уже не хуже — текущее +10 %. Один менеджер — подставляем число; несколько —
+  // у каждого своя цель (видна в снимке), поле пустое (= сервер посчитает по каждому).
+  const goals = useMemo(() => {
+    const out: Record<string, ReturnType<typeof defaultGoal>> = {};
+    if (metric && snapshot) for (const id of managerIdNums) out[String(id)] = defaultGoal(metric, snapshot[String(id)]);
+    return out;
+  }, [metric, snapshot, managerIdNums]);
+  const singleGoal = managerIdNums.length === 1 ? goals[String(managerIdNums[0])] : undefined;
   useEffect(() => {
     if (targetTouched) return;
-    if (managerIdNums.length === 1 && snapshot) {
-      const avg = snapshot[String(managerIdNums[0])]?.deptAvg;
-      setTarget(avg !== null && avg !== undefined ? roundForInput(avg, metric?.format) : '');
-    } else setTarget('');
-  }, [snapshot, managerIdNums, targetTouched, metric?.format]);
+    if (managerIdNums.length === 1 && singleGoal?.target != null) setTarget(roundForInput(singleGoal.target, metric?.format));
+    else setTarget('');
+  }, [singleGoal, managerIdNums, targetTouched, metric?.format]);
+  const manualTarget = useMemo(() => {
+    const t = target.trim().replace(/\s/g, '').replace(',', '.');
+    return targetTouched && t !== '' && Number.isFinite(Number(t)) ? Number(t) : null;
+  }, [target, targetTouched]);
+  // Ручная цель хуже текущего (кроме «мало данных») — сервер вернёт 400, предупреждаем заранее.
+  const worseFor = metric && snapshot && manualTarget !== null
+    ? managerIdNums.filter(id => goalWorseThanCurrent(metric, manualTarget, snapshot[String(id)])) : [];
 
   // ── шаблоны ──
   const templatesQ = useQuery({
@@ -405,12 +418,25 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
           managerIds={managerIds} managerName={managerName} metric={metric}
           loading={snapshotQ.isFetching} error={snapshotQ.error as Error | null} data={snapshot}
           ready={managerIdNums.length > 0 && !!metricId}
+          goals={goals} manualTarget={manualTarget}
         />
 
         <Field label={`Цель${unitOf(metric?.format) ? `, ${unitOf(metric?.format)}` : ''}`}
-          hint={managerIdNums.length > 1 && !targetTouched ? 'Пусто — у каждого цель = среднее его отдела' : 'По умолчанию — среднее по отделу'}>
-          <input inputMode="decimal" value={target} placeholder={managerIdNums.length > 1 ? 'Среднее отдела у каждого' : '—'}
+          hint={targetTouched
+            ? (manualTarget !== null ? 'Своя цель — одна на всех выбранных' : managerIdNums.length > 1 ? 'Пусто — у каждого своя цель (см. снимок)' : 'Пусто — цель посчитается сама')
+            : managerIdNums.length > 1 ? 'Пусто — у каждого своя цель (см. снимок): лучшее из средних, а кто уже выше — +10 % к текущему'
+            : singleGoal?.reason ?? 'По умолчанию — лучшее из (среднее по отделу, своё за 6 мес)'}>
+          <input inputMode="decimal" value={target} placeholder={managerIdNums.length > 1 ? 'У каждого своя' : '—'}
             onChange={e => { setTarget(e.target.value); setTargetTouched(true); }} className={`${INPUT} sm:max-w-[200px]`} />
+          {worseFor.length > 0 && (
+            <span className="flex items-start gap-1.5 text-[12px] leading-snug text-[var(--color-warning,#b45309)]">
+              <AlertTriangle size={14} className="mt-px shrink-0" />
+              <span>
+                Цель {metric?.higherIsBetter ? 'ниже' : 'выше'} текущего{managerIdNums.length > 1 ? ` у ${worseFor.map(id => managerName(String(id))).join(', ')}` : ''} — задача на ухудшение?
+                Такую цель сервер не примет: поставьте не хуже текущего или очистите поле.
+              </span>
+            </span>
+          )}
         </Field>
 
         <Field label="Рекомендации" hint="Вариант инструкции и ваш текст уходят в описание задачи Битрикса вместе с целью и снимком. Варианты правят в «Задачник → Шаблоны»">
@@ -535,9 +561,10 @@ function Banner({ tone, children }: { tone: 'warn' | 'error' | 'info'; children:
 /** «2026-11-01» → «01.11» */
 const fmtPeriod = (ymd: string) => (/^\d{4}-\d{2}-\d{2}$/.test(ymd) ? `${ymd.slice(8)}.${ymd.slice(5, 7)}` : ymd || '…');
 
-function SnapshotBlock({ managerIds, managerName, metric, loading, error, data, ready }: {
+function SnapshotBlock({ managerIds, managerName, metric, loading, error, data, ready, goals, manualTarget }: {
   managerIds: string[]; managerName: (id: string) => string; metric: TaskerMetric | undefined;
   loading: boolean; error: Error | null; data: Record<string, Snapshot> | undefined; ready: boolean;
+  goals: Record<string, ReturnType<typeof defaultGoal>>; manualTarget: number | null;
 }) {
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3">
@@ -562,12 +589,23 @@ function SnapshotBlock({ managerIds, managerName, metric, loading, error, data, 
                   мало данных
                 </span>
               )}
+              {metric && aboveDept(metric, s) && (
+                <span className="rounded-full bg-[color-mix(in_srgb,var(--color-positive,#16a34a)_15%,transparent)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-positive,#16a34a)]">
+                  {aboveDeptLabel(metric)}
+                </span>
+              )}
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <SnapCell label="Менеджер" value={s ? fmtValue(s.value, metric?.format) : '…'} accent={worse ? 'neg' : undefined} />
               <SnapCell label="Среднее отдела" value={s ? fmtValue(s.deptAvg, metric?.format) : '…'} />
               <SnapCell label="Свое за 6 мес" value={s ? fmtValue(s.ownAvg6m, metric?.format) : '…'} />
+              <SnapCell label={manualTarget !== null ? 'Цель (ваша)' : 'Цель'}
+                value={s ? fmtValue(manualTarget ?? goals[id]?.target ?? null, metric?.format) : '…'}
+                title={manualTarget === null ? goals[id]?.reason : undefined} />
             </div>
+            {s && manualTarget === null && managerIds.length > 1 && goals[id] && (
+              <span className="text-[11px] leading-snug text-[var(--color-text-muted)]">Цель: {goals[id].reason.charAt(0).toLowerCase() + goals[id].reason.slice(1)}</span>
+            )}
           </div>
         );
       })}
@@ -575,9 +613,9 @@ function SnapshotBlock({ managerIds, managerName, metric, loading, error, data, 
   );
 }
 
-function SnapCell({ label, value, accent }: { label: string; value: string; accent?: 'neg' }) {
+function SnapCell({ label, value, accent, title }: { label: string; value: string; accent?: 'neg'; title?: string }) {
   return (
-    <div className="min-w-0 rounded-lg bg-[var(--color-bg)] px-2 py-1.5">
+    <div className="min-w-0 rounded-lg bg-[var(--color-bg)] px-2 py-1.5" title={title}>
       <div className="truncate text-[10px] text-[var(--color-text-muted)]">{label}</div>
       <div className={`truncate text-sm font-semibold tabular-nums ${accent === 'neg' ? 'text-[var(--color-negative)]' : 'text-[var(--color-text)]'}`}>{value}</div>
     </div>
