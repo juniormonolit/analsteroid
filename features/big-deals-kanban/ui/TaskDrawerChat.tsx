@@ -81,8 +81,13 @@ export function TaskChat({ card, messages, loading, onSent, questions, rop, inje
       )}
       <div className="mt-2 flex min-w-0 flex-col gap-2" {...att.dropZone}>
         <textarea value={text} onChange={e => setText(e.target.value)} onPaste={att.onPaste} rows={3}
-          placeholder="Вопрос менеджеру — уйдёт в чат задачи от вашего имени. Картинку можно отправить и без текста."
-          onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void send(); }}
+          placeholder="Вопрос менеджеру — уйдёт в чат задачи от вашего имени. Enter — отправить, Shift+Enter — новая строка. Картинку можно и без текста."
+          // Enter — отправить, как в чате Битрикса (Осипов 24.11); Shift+Enter — перенос строки. Не во время набора IME.
+          onKeyDown={e => {
+            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+            e.preventDefault();
+            if (!busy) void send();
+          }}
           className={`w-full min-w-0 rounded-md border bg-transparent px-2.5 py-2 text-base sm:text-sm ${att.dragOver ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'}`} />
         <AttachmentsRow a={att} />
         {(err || att.error) && <p role="alert" className="text-[var(--color-negative)]">{err ?? att.error}</p>}
