@@ -8,8 +8,8 @@
 // (дело нового типа CRM_TODO — смена ответственного через crm.activity.todo.updateResponsibleUser).
 //
 // Вызовы Битрикса идут через pace(): воркер держит паузы между ними (≥700 мс, после БП — ≥1.5 с).
-import { REASSIGN_TEMPLATE_ID } from '@/features/repeat-kanban/engine/createDeal';
-import { PRIMARY_BRAK_STAGE, type DismissalAction, type DismissalKind } from '../types';
+import { REASSIGN_TEMPLATE_ID, SOLD_STAGES } from '@/features/repeat-kanban/engine/createDeal';
+import { PRIMARY_BRAK_STAGE, REPEAT_BRAK_REASONS, REPEAT_BRAK_STAGE, type DismissalAction, type DismissalKind, type RepeatBrakReason } from '../types';
 import { readOne, writeCrm, writeTask } from './bx';
 
 export interface ExecItem {
@@ -19,6 +19,8 @@ export interface ExecItem {
   action: DismissalAction;
   target: number | null;
   meta: Record<string, unknown>;
+  /** deal_repeat + brak: причина закрытия (plan.repeatBrakReason; по умолчанию nothing_needed). */
+  brakReason?: RepeatBrakReason | null;
 }
 export interface ExecResult { status: 'done' | 'skipped'; detail: string }
 export type Pace = (what: 'call' | 'bp') => Promise<void>;
@@ -66,6 +68,28 @@ async function execDeal(it: ExecItem, sourceId: number, pace: Pace): Promise<Exe
   });
   // БП отрабатывает асинхронно — контрольное чтение сразу могло бы увидеть старого ответственного.
   return done(`Запущен БП «Сменить ответственного» (${String(wf)})`);
+}
+
+/** Закрытие повторки (v3): отказная стадия по причине, как брак канбана повторных — но заказчика «не звонить»
+ *  НЕ помечаем и комментарий не пишем. Перед записью — всё ещё его, открыта, не «Продано». */
+async function execRepeatBrak(it: ExecItem, sourceId: number, pace: Pace): Promise<ExecResult> {
+  const d = await get<BxDeal>(pace, 'crm.deal.get', { id: it.entityId });
+  if (!d) return skipped('Сделка не найдена (удалена?)');
+  const cat = num(d.CATEGORY_ID);
+  if (cat !== 2 && cat !== 3) return skipped(`Сделка уже не в повторной воронке (воронка ${cat}) — не закрывали`);
+  const reason = it.brakReason ?? 'nothing_needed';
+  const stage = REPEAT_BRAK_STAGE[cat][reason];
+  const label = REPEAT_BRAK_REASONS.find(r => r.value === reason)?.label ?? reason;
+  if (d.STAGE_ID === stage) return done(`Сделка уже закрыта («${label}»)`);
+  const cur = num(d.ASSIGNED_BY_ID);
+  if (cur !== sourceId) return skipped(cur ? `Сделка уже на другом сотруднике (#${cur}) — не закрывали` : 'Ответственный пуст — не трогали');
+  if (!dealOpen(d)) return skipped('Сделка уже закрыта — не трогали');
+  if (d.STAGE_ID && SOLD_STAGES.has(d.STAGE_ID)) return skipped('Сделка на стадии «Продано» — не закрывали');
+  await pace('call');
+  await writeCrm<boolean>('crm.deal.update', { id: it.entityId, fields: { STAGE_ID: stage } });
+  const after = await get<BxDeal>(pace, 'crm.deal.get', { id: it.entityId });
+  if (after && after.STAGE_ID !== stage) throw new DismissalItemError(`Битрикс принял запись, но стадия — ${after.STAGE_ID}`);
+  return done(`Сделка закрыта: «${label}»`);
 }
 
 /** Автобрак первички: только стадия. Перед записью — всё ещё его и всё ещё открыта. */
@@ -202,7 +226,7 @@ export async function executeItem(it: ExecItem, sourceId: number, pace: Pace): P
   switch (it.kind) {
     case 'deal_primary':
     case 'deal_repeat':
-      if (it.action === 'brak' && it.kind === 'deal_primary') return execBrak(it, sourceId, pace);
+      if (it.action === 'brak') return it.kind === 'deal_primary' ? execBrak(it, sourceId, pace) : execRepeatBrak(it, sourceId, pace);
       if (it.action !== 'transfer') throw new DismissalItemError(`Для сделки действие ${it.action} недопустимо`);
       return execDeal(it, sourceId, pace);
     case 'task_deal':

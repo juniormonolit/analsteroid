@@ -24,6 +24,7 @@
 // «ждёт контроля»), срок +5 дней 19:00 без права переноса, привязка к сделке, текст по
 // шаблону: отгрузки со ссылками и суммами, комментарий РОПа, анкета последней отгрузки.
 import { bx } from '@/lib/bitrix/notify';
+import { REPEAT_BRAK_STAGE } from '@/features/dismissal/types';
 import { cached } from '@/lib/cache/redis';
 import { callAsUser } from '@/lib/bitrix/userTokens';
 import { analyticsDb } from '@/lib/db/clients';
@@ -38,7 +39,8 @@ export class DealCreateError extends Error {}
 
 const PREFIX = 'ПОСМОТРИ ЗАДАЧУ';
 const DO_NOT_TOUCH_STAGES = new Set(['C2:2']);
-const SOLD_STAGES = new Set(['C2:FINAL_INVOICE', 'C3:1']);
+/** «Продано» повторных воронок: такую сделку не закрываем в отказ (брак канбана, Увольнятор v3). */
+export const SOLD_STAGES = new Set(['C2:FINAL_INVOICE', 'C3:1']);
 const DEADLINE_DAYS = 5;
 
 /** Анкета последней отгруженной сделки — порядок и подписи как в шаблоне ТЗ. */
@@ -477,10 +479,9 @@ export async function postToTaskChat(taskId: number, authorId: string, comment: 
 // ── Брак → сделка закрывается в Битриксе (владелец 22.10: «да» на «брак сам закрывает сделку в
 // отказ с той же причиной»). Причины брака = отказные стадии повторных воронок; у B2C нет «Объектов
 // больше нет», у B2B — «Больше ничего не нужно»: берём ближайшую по смыслу стадию той же воронки.
-const LOST_STAGE_BY_REASON: Record<2 | 3, Record<string, string>> = {
-  2: { no_objects: 'C2:APOLOGY', nothing_needed: 'C2:APOLOGY', expensive: 'C2:LOSE', failed_client: 'C2:1' },
-  3: { no_objects: 'C3:2', nothing_needed: 'C3:2', expensive: 'C3:LOSE', failed_client: 'C3:APOLOGY' },
-};
+// Один источник с «Увольнятором» (закрытие оставшейся повторки уволенного): таблица живёт в
+// features/dismissal/types.ts (клиентский модуль без зависимостей — его читает и UI).
+const LOST_STAGE_BY_REASON: Record<2 | 3, Record<string, string>> = REPEAT_BRAK_STAGE;
 
 export type CloseResult = 'closed' | 'already_closed' | 'not_repeat' | 'sold' | 'not_client';
 

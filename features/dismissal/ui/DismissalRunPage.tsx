@@ -21,7 +21,7 @@ export function DismissalRunPage({ id }: { id: string }) {
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
       {/* у черновика внизу липкая панель — большой нижний отступ не нужен */}
-      <div className={`mx-auto max-w-[1100px] p-3 sm:p-6 ${isDraft ? 'pb-3 sm:pb-3' : 'pb-24'}`}>
+      <div className={`mx-auto p-3 sm:px-6 sm:pt-6 ${isDraft ? 'max-w-[1680px] pb-3 sm:pb-3' : 'max-w-[1100px] pb-24 sm:pb-24'}`}>
         <Link href="/dismissal" className="mb-2 inline-flex min-h-11 items-center gap-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
           <ArrowLeft size={16} /> Все увольнения
         </Link>
@@ -31,7 +31,17 @@ export function DismissalRunPage({ id }: { id: string }) {
         )}
         {isError && <ErrorBox onRetry={() => void refetch()}>Не удалось загрузить прогон: {error.message}</ErrorBox>}
 
-        {run && (
+        {run && isDraft && (
+          <DraftEditor key={run.id} run={run} existing={existing} title={
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="min-w-0 break-words text-lg font-semibold text-[var(--color-text)]">Увольнение: {run.source.name}</h1>
+              <RunStatusBadge status={run.status} />
+              {userHint(run.source) && <span className="text-xs text-[var(--color-text-muted)]">{userHint(run.source)}</span>}
+            </div>
+          } />
+        )}
+
+        {run && !isDraft && (
           <>
             <div className="mb-3">
               <div className="flex flex-wrap items-center gap-2">
@@ -66,9 +76,7 @@ export function DismissalRunPage({ id }: { id: string }) {
               </div>
             )}
 
-            {isDraft && <DraftEditor key={run.id} run={run} existing={existing} />}
-
-            {!isDraft && run.status !== 'scanning' && !scanFailed && !draftDeleted && <RunProgress run={run} />}
+            {run.status !== 'scanning' && !scanFailed && !draftDeleted && <RunProgress run={run} />}
           </>
         )}
       </div>

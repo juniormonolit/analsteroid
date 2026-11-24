@@ -94,8 +94,9 @@ function NewRunModal({ open, onOpenChange }: { open: boolean; onOpenChange: (o: 
   const [picked, setPicked] = useState('');
 
   // Уволенные (неактивные в Битриксе) — первыми: обычно увольняют того, кого уже отключили.
+  // v3: только тех, кого инициатор может увольнять (сервер режет по иерархии; UI не предлагает недоступных).
   const options = useMemo(() => (users.data ?? [])
-    .slice()
+    .filter(u => u.dismissable)
     .sort((a, b) => Number(a.active) - Number(b.active) || a.name.localeCompare(b.name, 'ru'))
     .map(u => ({
       value: String(u.bitrixId),
@@ -119,6 +120,10 @@ function NewRunModal({ open, onOpenChange }: { open: boolean; onOpenChange: (o: 
         </p>
         {users.isError ? (
           <ErrorBox onRetry={() => void users.refetch()}>Не удалось загрузить сотрудников: {users.error.message}</ErrorBox>
+        ) : users.data && options.length === 0 ? (
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-hover)] px-3 py-4 text-center text-sm text-[var(--color-text-muted)]">
+            Нет подчинённых, которых вы можете уволить.
+          </div>
         ) : (
           <SearchSelect
             options={options}

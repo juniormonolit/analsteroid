@@ -94,7 +94,7 @@ async function doExecute(run: ClaimedRun): Promise<void> {
       }
     }
     try {
-      const res = await executeItem({ key: it.key, kind: it.kind, entityId: it.entityId, action: it.action, target: it.target, meta: it.meta }, run.sourceId, pace);
+      const res = await executeItem({ key: it.key, kind: it.kind, entityId: it.entityId, action: it.action, target: it.target, meta: it.meta, brakReason: run.plan.repeatBrakReason ?? null }, run.sourceId, pace);
       const via = typeof it.meta.viaDepartment === 'string' && res.status === 'done' ? ` (раскидано по отделу «${it.meta.viaDepartment}»)` : '';
       const note = typeof it.meta.planNote === 'string' && res.status === 'done' ? ` (${it.meta.planNote})` : '';
       await finishItem(run.id, it.key, res.status, res.detail + via + note);

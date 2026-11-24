@@ -32,6 +32,20 @@ export const PRIMARY_MIN_AMOUNT = 100_000;
 export const DEFAULT_TOP_COUNT = 20;
 /** Стадии автобрака первички по воронкам. Нет ключа — автобрака в воронке нет. */
 export const PRIMARY_BRAK_STAGE: Record<number, string> = { 0: '9', 1: 'C1:9' };
+/** v3: «закрыть» оставшуюся повторку — отказная стадия по причине, как «брак» канбана повторных
+ *  (LOST_STAGE_BY_REASON в features/repeat-kanban/engine/createDeal.ts; держать синхронно). Заказчика при этом
+ *  НЕ помечаем «не звонить» — закрывается только сделка уволенного. */
+export const REPEAT_BRAK_REASONS = [
+  { value: 'nothing_needed', label: 'Больше ничего не нужно' },
+  { value: 'no_objects', label: 'Объектов больше нет' },
+  { value: 'expensive', label: 'Дорого, предложил другие материалы, больше ничего не нужно' },
+  { value: 'failed_client', label: 'Подвели клиента — не хочет с нами работать' },
+] as const;
+export type RepeatBrakReason = (typeof REPEAT_BRAK_REASONS)[number]['value'];
+export const REPEAT_BRAK_STAGE: Record<2 | 3, Record<RepeatBrakReason, string>> = {
+  2: { no_objects: 'C2:APOLOGY', nothing_needed: 'C2:APOLOGY', expensive: 'C2:LOSE', failed_client: 'C2:1' },
+  3: { no_objects: 'C3:2', nothing_needed: 'C3:2', expensive: 'C3:LOSE', failed_client: 'C3:APOLOGY' },
+};
 export const PRIMARY_FUNNELS = [0, 1, 4, 7] as const;
 export const REPEAT_FUNNELS = [2, 3] as const;
 
@@ -63,7 +77,8 @@ export const DISMISSAL_KIND_LABELS: Record<DismissalKind, string> = {
 /**
  * transfer — передать (несколько получателей → по кругу; повторка — «змейкой» по рангу, чтобы LTV делился ровно);
  *            для task_participant — заменить уволенного на получателя в той же роли;
- * brak     — первичка в автобрак: стадия PRIMARY_BRAK_STAGE[воронка], crm.deal.update STAGE_ID
+ * brak     — первичка в автобрак: стадия PRIMARY_BRAK_STAGE[воронка]; повторка (v3) — «закрыть»:
+ *            REPEAT_BRAK_STAGE[воронка][plan.repeatBrakReason]; crm.deal.update STAGE_ID
  *            (ответственный при этом НЕ меняется — БП не запускается);
  * follow   — вслед за сделкой (task_deal / activity_deal): получатель = получатель сделки; сделка в brak —
  *            задача завершается / дело закрывается; сделка skip — тоже skip. Разворачивается в start;
@@ -87,7 +102,7 @@ export const DISMISSAL_ACTION_LABELS: Record<DismissalAction, string> = {
  *  brak для строки без стадии автобрака — ошибка валидации. */
 export const DISMISSAL_ALLOWED_ACTIONS: Record<DismissalKind, DismissalAction[]> = {
   deal_primary: ['transfer', 'brak', 'skip'],
-  deal_repeat: ['transfer', 'skip'],
+  deal_repeat: ['transfer', 'brak', 'skip'],
   task_deal: ['follow', 'close', 'skip'],
   activity_deal: ['follow', 'close', 'skip'],
   task_other: ['transfer', 'close', 'skip'],
@@ -126,6 +141,8 @@ export interface DismissalPlan {
   notifyRop?: boolean;
   /** Сообщение + задача Кузнецовой сменить пароль (по умолчанию true). */
   passwordReset?: boolean;
+  /** v3: причина закрытия оставшейся повторки (action brak у deal_repeat), по умолчанию 'nothing_needed'. */
+  repeatBrakReason?: RepeatBrakReason;
   note?: string;
 }
 
@@ -191,6 +208,8 @@ export interface DismissalUser {
   /** id отдела (как в DismissalDepartment.id) — чтобы предложить «раскидать по его отделу» */
   departmentId: string | null;
   active: boolean;
+  /** v3: можно ли текущему пользователю запустить Увольнятор на этого сотрудника (выбор «кого увольняем»). */
+  dismissable: boolean;
 }
 
 /** Отдел для «раскидать по отделу»: активные менеджеры, на которых делить поровну. */
@@ -239,8 +258,15 @@ export interface DismissalRunDetail extends DismissalRunSummary {
   userNames: Record<number, string>;
 }
 
+// ── Доступ по иерархии (v3, владелец 24.11: «запускать можно только на подчинённых») ────────────
+// Кого увольнять: Директор — только сотрудников своего среза (getSessionScope/canSeeManager, lib/org/sessionScope.ts);
+// Администратор/суперадмин — всех, КРОМЕ администраторов и суперадминов (по users Монолитики, роль/флаг) и себя.
+// Себя — никогда. Получатели (люди и отделы) — тоже в пределах среза инициатора; РОП уволенного — всегда допустим.
+// Прогоны: список и любой доступ к прогону (GET/PATCH/команды) — только если source в срезе инициатора, иначе 404.
+// Проверка — на сервере во ВСЕХ роутах; UI лишь не предлагает недоступных (dismissable=false не выбрать).
+
 // ── API (все — только для canUseDismissal) ──────────────────────────────────────────────────
-// GET    /api/dismissal/users                       → { users: DismissalUser[] }   (вкл. уволенных)
+// GET    /api/dismissal/users                       → { users: DismissalUser[] }   (вкл. уволенных; только в срезе инициатора, dismissable — кого можно увольнять)
 // GET    /api/dismissal/departments                 → { departments: DismissalDepartment[] }  (только активные менеджеры)
 // GET    /api/dismissal/runs                        → { runs: DismissalRunSummary[] }
 // POST   /api/dismissal/runs        {sourceBitrixId} → { id }   (создаёт прогон status=scanning)

@@ -121,20 +121,28 @@ async function itemKinds(id: string): Promise<Map<string, DismissalKind>> {
   return new Map(r.rows.map(x => [x.key, x.kind]));
 }
 
-export async function savePlan(id: string, raw: unknown): Promise<void> {
+/** Проверка получателей плана по срезу инициатора (features/dismissal/engine/scope.ts): текст ошибки или null. */
+export type PlanCheck = (plan: DismissalPlan, runRop: number | null) => Promise<string | null>;
+
+export async function savePlan(id: string, raw: unknown, check?: PlanCheck): Promise<void> {
   const run = await getRunRow(id);
   if (!run) throw new DismissalError('Прогон не найден', 404);
   if (run.status !== 'draft') throw new DismissalError('Правила меняются только до запуска (в черновике)', 409);
   const res = sanitizePlan(raw, await itemKinds(id), run.plan);
   if ('error' in res) throw new DismissalError(res.error);
+  const bad = check ? await check(res.plan, Number(run.rop_bitrix_id) || null) : null;
+  if (bad) throw new DismissalError(bad);
   await systemDb().query(`UPDATE dismissal_runs SET plan = $2, updated_at = now() WHERE id = $1 AND status = 'draft'`, [id, JSON.stringify(res.plan)]);
 }
 
 /** «Готово»: draft → queued. Разворачивает план в строки (action/target); skip сразу в skipped. */
-export async function startRun(id: string): Promise<void> {
+export async function startRun(id: string, check?: PlanCheck): Promise<void> {
   const run = await getRunRow(id);
   if (!run) throw new DismissalError('Прогон не найден', 404);
   if (run.status !== 'draft') throw new DismissalError('Запустить можно только черновик', 409);
+  // Срез — того, кто запускает (план мог сохранить другой человек).
+  const bad = check ? await check(run.plan, Number(run.rop_bitrix_id) || null) : null;
+  if (bad) throw new DismissalError(bad);
   const r = await systemDb().query<{ key: string; kind: DismissalKind; ord: number; info: DismissalItemInfo | null }>('SELECT key, kind, ord, info FROM dismissal_items WHERE run_id = $1', [id]);
   const old = r.rows.find(x => !(KINDS as readonly string[]).includes(x.kind));
   if (old) throw new DismissalError('Прогон собран старой версией Увольнятора — пересоберите (кнопка «Пересобрать»)', 409);

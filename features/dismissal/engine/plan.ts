@@ -5,7 +5,7 @@
 // follow (задачи/дела сделок) — за итогом своей сделки; task_other / activity_other / task_creator без
 // получателей — на РОПа (plan.ropBitrixId). Прочие виды — по кругу в порядке строк (ord).
 import {
-  DEFAULT_TOP_COUNT, DISMISSAL_ACTION_LABELS, DISMISSAL_ALLOWED_ACTIONS, DISMISSAL_KIND_LABELS, DISMISSAL_KINDS,
+  DEFAULT_TOP_COUNT, DISMISSAL_ACTION_LABELS, REPEAT_BRAK_REASONS, type RepeatBrakReason, DISMISSAL_ALLOWED_ACTIONS, DISMISSAL_KIND_LABELS, DISMISSAL_KINDS,
   type DismissalAction, type DismissalItemInfo, type DismissalKind, type DismissalPlan,
 } from '../types';
 
@@ -59,6 +59,11 @@ export function sanitizePlan(raw: unknown, itemKinds: Map<string, DismissalKind>
   plan.ropBitrixId = 'ropBitrixId' in p ? posInt(p.ropBitrixId) : base.ropBitrixId ?? null;
   plan.notifyRop = 'notifyRop' in p ? p.notifyRop !== false : base.notifyRop !== false;
   plan.passwordReset = 'passwordReset' in p ? p.passwordReset !== false : base.passwordReset !== false;
+  const reason = 'repeatBrakReason' in p ? p.repeatBrakReason : base.repeatBrakReason;
+  if (reason != null && reason !== '') {
+    if (!REPEAT_BRAK_REASONS.some(r => r.value === reason)) return { error: `Неизвестная причина закрытия повторки: ${String(reason)}` };
+    plan.repeatBrakReason = reason as RepeatBrakReason;
+  }
   const note = 'note' in p ? p.note : base.note;
   if (typeof note === 'string' && note.trim()) plan.note = note.trim().slice(0, 2000);
   return { plan };
@@ -117,7 +122,8 @@ export function resolvePlan(plan: DismissalPlan, items: PlanItemRef[], sourceId:
     const ov = plan.overrides[it.key];
     const action = ov?.action ?? ruleAction(it.kind, plan.rules[it.kind], it.info);
     if (!DISMISSAL_ALLOWED_ACTIONS[it.kind].includes(action)) { problems.push(`Строка ${it.key}: действие «${DISMISSAL_ACTION_LABELS[action]}» недопустимо`); continue; }
-    if (action === 'brak' && !it.info.brakAvailable) { problems.push(`Строка ${it.key}: в этой воронке нет стадии автобрака`); continue; }
+    // Повторка (v3): «закрыть» есть в обеих повторных воронках (REPEAT_BRAK_STAGE), проверка стадии — у исполнителя.
+    if (action === 'brak' && it.kind === 'deal_primary' && !it.info.brakAvailable) { problems.push(`Строка ${it.key}: в этой воронке нет стадии автобрака`); continue; }
     actionOf.set(it.key, action);
   }
 
@@ -173,7 +179,7 @@ export function resolvePlan(plan: DismissalPlan, items: PlanItemRef[], sourceId:
     }
     const dealId = dealKey.split(':')[1];
     if (deal.action === 'transfer') out.set(it.key, { key: it.key, action: 'transfer', target: deal.target, note: `вслед за сделкой #${dealId}` });
-    else if (deal.action === 'brak') out.set(it.key, { key: it.key, action: 'close', target: null, note: `сделка #${dealId} в автобраке` });
+    else if (deal.action === 'brak') out.set(it.key, { key: it.key, action: 'close', target: null, note: dealKey.startsWith('deal_repeat:') ? `сделка #${dealId} закрыта` : `сделка #${dealId} в автобраке` });
     else out.set(it.key, { key: it.key, action: 'skip', target: null, note: `сделку #${dealId} не трогаем` });
   }
 

@@ -54,6 +54,7 @@ async function loadUsers(): Promise<UsersSnapshot> {
     out.push({
       bitrixId: id, name, position: u.WORK_POSITION?.trim() || null,
       department: first ? depts.get(Number(first)) ?? null : null, departmentId: first, active: isActive(u.ACTIVE),
+      dismissable: false, // по срезу инициатора проставляет роут (scope.ts)
     });
   }
   // Активные сверху, внутри — по имени.
