@@ -9,7 +9,7 @@ import type {
   Snapshot, TaskerCreateRequest, TaskerCreateResponse, TaskerMetric, TaskerSession, TaskerTaskKind,
 } from '@/features/tasker/types';
 import {
-  createTasks, fetchAssignableManagers, fetchCreators, fetchCustomers, fetchMetrics, fetchSessions, fetchSnapshot,
+  createTasks, fetchAssignableManagers, fetchProductGroups, fetchCreators, fetchCustomers, fetchMetrics, fetchSessions, fetchSnapshot,
   fetchTemplates, fetchUpcomingTrainings, TaskerApiError,
 } from './api';
 // Проверка наложения времени у слота сессии (сессия A).
@@ -144,6 +144,24 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
   // Теория / Практика (сессия A, правка 23.11): исполнитель — тренер из настроек или постановщик (РОП).
   const [kind, setKind] = useState<TaskerTaskKind>(initialKind ?? 'practice');
 
+  // «Теория» — можно отправить на продуктовое обучение: к темам добавляются товарные группы, у которых темы ещё нет
+  // (id pg_<id>_amount — замер по сумме продаж группы; тема заводится сервером при постановке, engine/topics.ts).
+  const pgQ = useQuery({ queryKey: ['tasker', 'product-groups'], queryFn: fetchProductGroups, enabled: kind === 'theory', staleTime: 30 * 60_000 });
+  const topicList = useMemo<TaskerMetric[]>(() => {
+    const own = [...metrics].sort((a, b) => Number(a.kind === 'product_group') - Number(b.kind === 'product_group'));
+    if (kind !== 'theory') return own;
+    const taken = new Set((metricsQ.data?.metrics ?? []).filter(m => m.kind === 'product_group' && m.active !== false).map(m => m.productGroupId));
+    const extra: TaskerMetric[] = (pgQ.data ?? []).filter(g => !taken.has(g.id)).map(g => ({
+      id: `pg_${g.id}_amount`, label: g.name, group: 'product', higherIsBetter: true, format: 'money', tag: g.name.slice(0, 40),
+      sortOrder: 9999, kind: 'product_group', productGroupId: g.id, pgMeasure: 'amount', active: true,
+    }));
+    return [...own, ...extra];
+  }, [metrics, metricsQ.data, pgQ.data, kind]);
+  // Ушли с «Теории» с выбранной группой без темы — выбор сбрасывается (в «Практике» таких пунктов нет).
+  useEffect(() => {
+    if (metricId && metrics.length && !topicList.some(m => m.id === metricId)) setMetricId('');
+  }, [topicList, metricId, metrics.length]);
+
   const [result, setResult] = useState<TaskerCreateResponse | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -156,7 +174,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
     if (pick) setMetricId(pick);
   }, [metrics, metricId, initialMetric, metricCandidates]);
 
-  const metric = metrics.find(m => m.id === metricId);
+  const metric = topicList.find(m => m.id === metricId);
   const managerIdNums = useMemo(() => managerIds.map(Number).filter(Number.isFinite), [managerIds]);
 
   // Варианты менеджеров: серверный список (кому можно ставить) + переданные входом +
@@ -349,7 +367,10 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
           <Field label="Тема" hint={metric ? `${metric.kind === 'product_group' ? (metric.pgMeasure === 'share' ? 'Товарная группа: доля в продажах · ' : 'Товарная группа: сумма продаж · ') : ''}${metric.higherIsBetter ? 'Больше — лучше' : 'Меньше — лучше'}` : undefined}>
             {/* Темы — из конструктора «Задачник → Шаблоны» (миграция 282): показатель каталога или товарная группа. */}
             <SearchSelect
-              options={metrics.map(m => ({ value: m.id, label: m.label, hint: m.kind === 'product_group' ? 'Товарная группа' : TASKER_METRIC_GROUP_LABELS[m.group] }))}
+              searchable
+              options={topicList.map(m => m.kind === 'product_group'
+                ? { value: m.id, label: m.label, group: 'Товарные группы', hint: m.pgMeasure === 'share' ? 'Доля в продажах' : 'Сумма продаж группы' }
+                : { value: m.id, label: m.label, group: 'Показатели', hint: TASKER_METRIC_GROUP_LABELS[m.group] })}
               value={metricId} onChange={setMetricId}
               placeholder={metricsQ.isLoading ? 'Загрузка…' : 'Выберите тему'}
               ariaLabel="Тема" className="w-full" disabled={metricsQ.isLoading}

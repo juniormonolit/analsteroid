@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useRef, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
 import { Popover } from '@/components/ui/Popover';
@@ -19,6 +19,8 @@ export interface SearchSelectOption {
   label: string;
   /** Вторая строка мелко (отдел, роль) — по ней тоже ищется. */
   hint?: string | null;
+  /** Заголовок раздела списка: пункты подряд с одинаковым group идут под одним заголовком (передавать отсортированными). */
+  group?: string | null;
 }
 
 export function SearchSelect({
@@ -118,8 +120,14 @@ export function SearchSelect({
         <div ref={listRef} role="listbox" className="max-h-[min(60vh,420px)] overflow-y-auto p-1">
           {items.map((o, i) => {
             const isSel = o.value === value;
+            const group = 'group' in o ? o.group : null;
+            const prevGroup = i > 0 && 'group' in items[i - 1] ? items[i - 1].group : null;
             return (
-              <button key={o.value || '__all'} type="button" role="option" aria-selected={isSel} data-idx={i}
+              <Fragment key={o.value || '__all'}>
+              {group && group !== prevGroup && (
+                <div className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">{group}</div>
+              )}
+              <button type="button" role="option" aria-selected={isSel} data-idx={i}
                 onClick={() => choose(o.value)} onMouseEnter={() => setActive(i)}
                 className={`flex min-h-11 w-full items-center gap-2 rounded-md px-2 text-left text-sm ${i === active ? 'bg-[var(--color-bg-hover)]' : ''} ${isSel ? 'font-medium text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>
                 <span className="min-w-0 flex-1">
@@ -128,6 +136,7 @@ export function SearchSelect({
                 </span>
                 {isSel && <Check size={14} className="shrink-0" />}
               </button>
+              </Fragment>
             );
           })}
           {items.length === 0 && <div className="px-2 py-3 text-center text-xs text-[var(--color-text-muted)]">Ничего не нашлось</div>}

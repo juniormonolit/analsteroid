@@ -11,7 +11,7 @@ import type { Metric } from '@/lib/metrics/types';
 import type {
   TaskerMetric, TaskerMetricGroup, TaskerPgMeasure, TaskerTopicCatalogResponse, TaskerTopicSaveRequest,
 } from '../types';
-import { TaskerError, loadMetricDefs, publicMetric } from './config';
+import { TaskerError, loadMetricDefs, publicMetric, type TaskerMetricDef } from './config';
 
 const LABEL_MAX = 80;
 
@@ -175,4 +175,78 @@ export async function reorderTopics(session: SessionUser, ids: string[]): Promis
        FROM unnest($1::text[]) WITH ORDINALITY AS x(id, ord) WHERE t.id = x.id`,
     [ids, session.login],
   );
+}
+
+// ── Товарная группа «на лету» (форма обучения / форма задачи, 24.11) ───────────
+// Тренер (trainings.manage) и РОП (assign) темы не заводят, но могут выбрать товарную группу прямо в форме.
+// Клиент шлёт детерминированный id темы pg_<id>_amount (замер по умолчанию — сумма продаж группы, как дефолт
+// конструктора); сервер находит тему или создаёт её при сохранении. Архивная тема по такому выбору
+// возвращается из архива: выбор группы в форме — явное решение.
+
+export const PG_TOPIC_RE = /^pg_(\d+)_(amount|share)$/;
+
+async function productGroupName(pgId: string): Promise<string> {
+  const g = await analyticsDb().query<{ name: string }>(`SELECT name FROM sa.product_groups WHERE id = $1`, [Number(pgId)]);
+  if (!g.rows[0]) throw new TaskerError('Товарная группа не найдена');
+  return g.rows[0].name;
+}
+
+/** Создать (или вернуть из архива) тему товарной группы по её id темы; возвращает id. */
+async function ensurePgTopic(login: string, id: string): Promise<string> {
+  const m = PG_TOPIC_RE.exec(id);
+  if (!m) throw new TaskerError('Тема не из списка Задачника');
+  const [, pgId, measure] = m;
+  const name = await productGroupName(pgId);
+  const label = measure === 'share' ? `${name}: доля в продажах` : name;
+  await systemDb().query(
+    `INSERT INTO tasker_metrics (id, label, grp, higher_is_better, format, tag, denominator_ids, additive, sort_order,
+                                 kind, product_group_id, pg_measure, created_by, updated_by, updated_at)
+     VALUES ($1, $2, 'product', true, $3, $4, '{}', $5, ${nextSort}, 'product_group', $6, $7, $8, $8, now())
+     ON CONFLICT (id) DO UPDATE SET active = true, archived_at = NULL, updated_by = EXCLUDED.updated_by, updated_at = now()
+     WHERE NOT tasker_metrics.active`,
+    [id, label, measure === 'share' ? 'percent' : 'money', label.slice(0, 40), measure === 'amount', pgId, measure, login],
+  );
+  return id;
+}
+
+/**
+ * Тема для создания задачи / снимка. Обычная — как metricDef (только активные). Неизвестный id вида pg_<id>_<замер>:
+ *  - mode 'virtual' (снимок в форме, задача ещё не поставлена) — описание темы в памяти, без записи в БД;
+ *  - mode 'ensure' (сохранение задачи) — тема создаётся / возвращается из архива.
+ */
+export async function resolveTopic(id: string, mode: 'virtual' | { ensureBy: string }): Promise<TaskerMetricDef> {
+  const defs = await loadMetricDefs();
+  const found = defs.find(x => x.id === id);
+  const pg = PG_TOPIC_RE.exec(id);
+  if (found && (found.active || !pg)) {
+    if (!found.active) throw new TaskerError('Тема в архиве — выберите другую');
+    return found;
+  }
+  if (!pg) throw new TaskerError('Тема не из списка Задачника');
+  if (mode !== 'virtual') {
+    await ensurePgTopic(mode.ensureBy, id);
+    const d = (await loadMetricDefs()).find(x => x.id === id);
+    if (!d) throw new TaskerError('Не удалось завести тему товарной группы');
+    return d;
+  }
+  const [, pgId, measure] = pg;
+  const name = await productGroupName(pgId);
+  const label = measure === 'share' ? `${name}: доля в продажах` : name;
+  return {
+    id, label, group: 'product', higherIsBetter: true, format: measure === 'share' ? 'percent' : 'money', tag: label.slice(0, 40),
+    sortOrder: 9999, denominatorIds: [], additive: measure === 'amount', kind: 'product_group', productGroupId: pgId,
+    pgMeasure: measure as TaskerPgMeasure, active: true,
+  };
+}
+
+/** Список id тем из формы обучения: pg_<id>_<замер> без темы — создаются; прочие — как есть. */
+export async function ensureTopicIds(login: string, ids: string[]): Promise<void> {
+  const known = new Set((await loadMetricDefs()).filter(d => d.active).map(d => d.id));
+  for (const id of ids) if (!known.has(id) && PG_TOPIC_RE.test(id)) await ensurePgTopic(login, id);
+}
+
+/** Справочник товарных групп (шкала kc) — для форм обучения и задачи. */
+export async function productGroupOptions(): Promise<{ id: string; name: string }[]> {
+  const r = await analyticsDb().query<{ id: number; name: string }>(`SELECT id, name FROM sa.product_groups WHERE is_active = true ORDER BY name`);
+  return r.rows.map(g => ({ id: String(g.id), name: g.name }));
 }

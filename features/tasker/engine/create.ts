@@ -13,11 +13,12 @@ import { getEmployeeDirectory } from '@/lib/org/employeeDirectory';
 import { ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
 import { TASKER_KIND_LABELS, type Snapshot, type TaskerCreateRequest, type TaskerCreateResponse, type TaskerTask, type TaskerTaskKind, type TaskerWarning } from '../types';
 import {
-  addDaysYmd, appBaseUrl, bxDate, DEFAULT_CONTROL_DAYS, directorFor, fmtValue, isYmd, loadSettings, MAX_OPEN_TASKS, metricDef,
+  addDaysYmd, appBaseUrl, bxDate, DEFAULT_CONTROL_DAYS, directorFor, fmtValue, isYmd, loadSettings, MAX_OPEN_TASKS,
   MIN_DENOMINATOR, NOT_CONFIGURED_MESSAGE, SESSION_BASE_MIN, SESSION_PER_EXTRA_MIN, TaskerError, toMskIso,
   type TaskerMetricDef, type TaskerSettings,
 } from './config';
 import { computeSnapshots, snapshotCacheScope, stripMeta } from './snapshot';
+import { resolveTopic } from './topics';
 import { inRequestRunner, type ReportRunner } from './reportRunner';
 import { crmBindingOf, loadHotCustomers } from './customers';
 import { drainTask, enqueue, type BxOp } from './bitrix';
@@ -146,7 +147,8 @@ export async function createTasks(
   const req = validateCreate(body);
   const settings = await loadSettings();
   if (!settings.groupId) throw new TaskerError(NOT_CONFIGURED_MESSAGE, 'not_configured', 409);
-  const metric = await metricDef(req.metricId);
+  // Товарная группа, выбранная в форме без готовой темы (pg_<id>_amount), — тема заводится тут же (engine/topics.ts).
+  const metric = await resolveTopic(req.metricId, { ensureBy: session.login });
   const ctx: Ctx = { session, scope, settings, metric, req };
   const warnings: TaskerWarning[] = [];
 

@@ -1,5 +1,6 @@
 'use client';
 import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
 import type { TaskerMetric } from '../../types';
 import type { TrainingEvent, TrainingEventInput } from '../types';
@@ -47,6 +48,44 @@ export function TrainingForm({
   const [deptLabel, setDeptLabel] = useState(initial?.departmentLabel ?? preset?.departmentLabel ?? '');
   const [capacity, setCapacity] = useState(initial?.capacity ? String(initial.capacity) : '');
   const [metricIds, setMetricIds] = useState<string[]>(initial?.metricIds ?? []);
+  // «Оценка эффективности»: темы делятся на «Показатели» и «Материалы — товарные группы» (запрос тренера 24.11).
+  // Товарная группа без готовой темы уходит как pg_<id>_amount (замер — сумма продаж группы у менеджера, как дефолт
+  // конструктора тем); сервер заводит тему при сохранении (engine/topics.ts ensureTopicIds).
+  const pgQ = useQuery({
+    queryKey: ['tasker', 'product-groups'],
+    queryFn: async () => {
+      const r = await fetch('/api/tasker/product-groups');
+      const b = r.ok ? await r.json().catch(() => null) : null;
+      return (Array.isArray(b?.groups) ? b.groups : []) as { id: string; name: string }[];
+    },
+    staleTime: 30 * 60_000,
+  });
+  const byId = useMemo(() => new Map(metrics.map(m => [m.id, m])), [metrics]);
+  const pgOfId = (id: string): string | null => byId.get(id)?.productGroupId ?? /^pg_(\d+)_(?:amount|share)$/.exec(id)?.[1] ?? null;
+  const isPgId = (id: string) => byId.get(id)?.kind === 'product_group' || /^pg_\d+_(?:amount|share)$/.test(id);
+  const metricPart = metricIds.filter(id => !isPgId(id));
+  const pgPart = metricIds.filter(isPgId);
+  const pgSelected = pgPart.map(pgOfId).filter((x): x is string => !!x);
+  const setPgSelected = (groups: string[]) => {
+    const keep = pgPart.filter(id => groups.includes(pgOfId(id) ?? ''));
+    const have = new Set(keep.map(pgOfId));
+    const added = groups.filter(g => !have.has(g)).map(g => {
+      // Уже есть активная тема по группе (заведена в конструкторе) — берём её, предпочитая замер по сумме.
+      const own = metrics.filter(m => m.kind === 'product_group' && m.productGroupId === g && m.active !== false)
+        .sort((a, b) => Number(a.pgMeasure === 'share') - Number(b.pgMeasure === 'share'))[0];
+      return own?.id ?? `pg_${g}_amount`;
+    });
+    setMetricIds([...metricPart, ...keep, ...added]);
+  };
+  const pgOptions = useMemo(() => {
+    const opts = (pgQ.data ?? []).map(g => ({ value: g.id, label: g.name }));
+    // Выбранная группа, которой нет в справочнике (стала неактивной), — остаётся видна подписью темы.
+    for (const id of pgPart) {
+      const g = pgOfId(id);
+      if (g && !opts.some(o => o.value === g)) opts.push({ value: g, label: byId.get(id)?.label ?? `Группа #${g}` });
+    }
+    return opts;
+  }, [pgQ.data, pgPart.join(','), byId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [beforeDays, setBeforeDays] = useState(String(initial?.measureBeforeDays ?? 7));
   const [afterDays, setAfterDays] = useState(String(initial?.measureAfterDays ?? 7));
   const [localErr, setLocalErr] = useState<string | null>(null);
@@ -129,14 +168,28 @@ export function TrainingForm({
       </label>
       <fieldset className="flex min-w-0 flex-col gap-3 rounded-lg border border-[var(--color-border)] p-3">
         <legend className="px-1 text-[13px] font-medium">Оценка эффективности</legend>
-        <label className={LABEL}>
-          Какие темы должно подтянуть обучение
-          {/* Архивные темы (миграция 282) не предлагаются, но уже выбранные остаются видны. */}
-          <SearchMultiSelect options={metrics.filter(m => m.active !== false || metricIds.includes(m.id)).map(m => ({ value: m.id, label: m.label }))}
-            value={metricIds} onChange={setMetricIds}
-            allLabel="Не выбраны" unitLabel="темы" searchPlaceholder="Поиск темы" ariaLabel="Темы обучения"
-            className="min-h-11 w-full min-w-0" />
-        </label>
+        <p className="text-[12px] text-[var(--color-text-muted)]">
+          Что должно подтянуть обучение — у записанных менеджеров сравним «до» и «после» с отделом.
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className={LABEL}>
+            Показатели
+            {/* Архивные темы (миграция 282) не предлагаются, но уже выбранные остаются видны. */}
+            <SearchMultiSelect
+              options={metrics.filter(m => m.kind !== 'product_group' && (m.active !== false || metricIds.includes(m.id))).map(m => ({ value: m.id, label: m.label }))}
+              value={metricPart} onChange={ids => setMetricIds([...ids, ...pgPart])}
+              allLabel="Не выбраны" unitLabel="показателя" searchPlaceholder="Поиск показателя" ariaLabel="Показатели обучения"
+              className="min-h-11 w-full min-w-0" />
+          </label>
+          <label className={LABEL}>
+            Материалы — товарные группы
+            <SearchMultiSelect options={pgOptions} value={pgSelected} onChange={setPgSelected}
+              allLabel={pgQ.isLoading ? 'Загрузка…' : 'Не выбраны'} unitLabel="групп" searchPlaceholder="Поиск товарной группы"
+              ariaLabel="Товарные группы обучения" className="min-h-11 w-full min-w-0" />
+            <span className="text-[11px] font-normal text-[var(--color-text-muted)]">Замер — сумма продаж группы у менеджера</span>
+          </label>
+        </div>
+        {metricIds.length > 10 && <p className="text-[12px] text-[var(--color-negative)]">Не больше 10 тем вместе — уберите лишние.</p>}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className={LABEL}>
             Окно «до», дней

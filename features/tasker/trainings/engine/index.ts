@@ -15,7 +15,8 @@ import { systemDb } from '@/lib/db/clients';
 import { getEmployeeDirectory, resolveEmployeeNames } from '@/lib/org/employeeDirectory';
 import { getSalesDepartmentOptions, resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { canSeeManager, getSessionScope, type SessionScope } from '@/lib/org/sessionScope';
-import { loadMetricDefs } from '../../engine/config';
+import { loadMetricDefs, publicMetric } from '../../engine/config';
+import { ensureTopicIds } from '../../engine/topics';
 import type { Snapshot, TaskerMetric } from '../../types';
 import { retryStaleCalendarSyncs, syncTrainingCalendar } from './calendar';
 import { DEFAULT_MEASURE_DAYS, personMetricIds, personOutcome, summarize, trainingWindows } from './effect';
@@ -28,7 +29,7 @@ import type {
 /** Белый список показателей Задачника для ответа клиенту (подписи/формат). Таблицы ещё нет — пусто. */
 export async function publicMetrics(): Promise<TaskerMetric[]> {
   const defs = await loadMetricDefs().catch(() => []);
-  return defs.map(m => ({ id: m.id, label: m.label, group: m.group, higherIsBetter: m.higherIsBetter, format: m.format, tag: m.tag, sortOrder: m.sortOrder }));
+  return defs.map(publicMetric); // с типом темы и признаком архива (миграция 282)
 }
 
 export class TrainingError extends Error {
@@ -272,13 +273,15 @@ interface CleanInput {
   slotId?: number | null; departmentLabel?: string | null;
 }
 
-/** Показатели из белого списка Задачника (неизвестные — ошибка, не тихий пропуск). */
-async function cleanMetricIds(raw: unknown): Promise<string[]> {
+/** Темы Задачника (неизвестные — ошибка, не тихий пропуск). Товарная группа, выбранная в форме (pg_<id>_<замер>),
+ *  которой ещё нет среди тем, — заводится тут же (ensureTopicIds; тренеру конструктор тем не нужен). */
+async function cleanMetricIds(raw: unknown, login: string): Promise<string[]> {
   if (raw == null) return [];
   if (!Array.isArray(raw)) throw new TrainingError('Показатели — списком');
   const ids = [...new Set(raw.map(x => String(x).trim()).filter(Boolean))];
   if (ids.length > 10) throw new TrainingError('Не больше 10 показателей');
   if (!ids.length) return [];
+  await ensureTopicIds(login, ids);
   const known = new Set((await loadMetricDefs()).map(m => m.id));
   const bad = ids.filter(id => !known.has(id));
   if (bad.length) throw new TrainingError(`Показатель не из списка Задачника: ${bad.join(', ')}`);
@@ -291,7 +294,7 @@ function cleanDays(raw: unknown, what: string): number {
   return n;
 }
 
-async function cleanInput(raw: unknown, partial: boolean): Promise<CleanInput> {
+async function cleanInput(raw: unknown, partial: boolean, login: string): Promise<CleanInput> {
   const b = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const out: CleanInput = {};
   if (!partial || b.title !== undefined) {
@@ -336,7 +339,7 @@ async function cleanInput(raw: unknown, partial: boolean): Promise<CleanInput> {
       out.trainerId = String(n);
     }
   }
-  if (b.metricIds !== undefined) out.metricIds = await cleanMetricIds(b.metricIds);
+  if (b.metricIds !== undefined) out.metricIds = await cleanMetricIds(b.metricIds, login);
   if (b.slotId !== undefined) {
     const n = b.slotId == null || b.slotId === '' ? null : Number(b.slotId);
     if (n !== null && (!Number.isInteger(n) || n <= 0)) throw new TrainingError('Некорректный слот');
@@ -357,7 +360,7 @@ function requireManage(actor: TrainingActor) {
 
 export async function createEvent(actor: TrainingActor, raw: unknown): Promise<TrainingEvent> {
   requireManage(actor);
-  const v = await cleanInput(raw, false);
+  const v = await cleanInput(raw, false, actor.session.login);
   const trainer = v.trainerId !== undefined ? v.trainerId : actor.session.bitrixUserId;
   const r = await systemDb().query<{ id: string }>(
     `INSERT INTO tasker_training_events (title, description, start_at, duration_min, place, capacity, trainer_bitrix_user_id, created_by,
@@ -378,7 +381,7 @@ export async function createEvent(actor: TrainingActor, raw: unknown): Promise<T
 
 export async function updateEvent(actor: TrainingActor, id: number, raw: unknown): Promise<TrainingEvent> {
   requireManage(actor);
-  const v = await cleanInput(raw, true);
+  const v = await cleanInput(raw, true, actor.session.login);
   const cols: Record<string, unknown> = {
     title: v.title, description: v.description, start_at: v.startAt, duration_min: v.durationMin,
     place: v.place, capacity: v.capacity, trainer_bitrix_user_id: v.trainerId,
@@ -450,7 +453,7 @@ export async function enroll(
   if (!canTouchManager(actor, managerId)) throw new TrainingError('Этот менеджер вам не подчиняется', 403);
   const taskId = rawTaskId == null || rawTaskId === '' ? null : Number(rawTaskId);
   if (taskId !== null && (!Number.isInteger(taskId) || taskId <= 0)) throw new TrainingError('Некорректная задача');
-  const goalIds = goal.goalMetricIds === undefined ? null : await cleanMetricIds(goal.goalMetricIds);
+  const goalIds = goal.goalMetricIds === undefined ? null : await cleanMetricIds(goal.goalMetricIds, actor.session.login);
   const note = goal.goalNote == null ? null : String(goal.goalNote).trim().slice(0, 2000) || null;
   // Записали из задачи — её показатель и снимок становятся целью (если цель не задали явно).
   const task = taskId ? await taskGoal(taskId, managerId) : null;

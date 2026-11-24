@@ -4,7 +4,8 @@ import { canSeeManager } from '@/lib/org/sessionScope';
 import { taskerAuth } from '@/features/tasker/engine/http';
 import { computeSnapshots, snapshotCacheScope, stripMeta } from '@/features/tasker/engine/snapshot';
 import { inRequestRunner } from '@/features/tasker/engine/reportRunner';
-import { errorResponse, isYmd, metricDef, TaskerError } from '@/features/tasker/engine/config';
+import { errorResponse, isYmd, TaskerError } from '@/features/tasker/engine/config';
+import { resolveTopic } from '@/features/tasker/engine/topics';
 import type { TaskerSnapshotRequest, TaskerSnapshotResponse } from '@/features/tasker/types';
 
 export const dynamic = 'force-dynamic';
@@ -22,7 +23,8 @@ export async function POST(req: NextRequest) {
     if (!b.period || !isYmd(b.period.from) || !isYmd(b.period.to) || b.period.from > b.period.to) throw new TaskerError('Некорректный период');
     const visible = ids.filter(id => canSeeManager(auth.scope, String(id)));
     if (!visible.length) return NextResponse.json({ error: 'Эти менеджеры вам недоступны', code: 'forbidden' }, { status: 403 });
-    const metric = await metricDef(b.metricId);
+    // Товарная группа без готовой темы — описание в памяти, тема заведётся при постановке задачи.
+    const metric = await resolveTopic(b.metricId, 'virtual');
     const snaps = await computeSnapshots(inRequestRunner, visible.map(String), metric, { from: b.period.from, to: b.period.to },
       { cacheScope: snapshotCacheScope(auth.scope.kind, auth.session.id), withOwnAvg: b.withOwnAvg !== false });
     const out: TaskerSnapshotResponse = {};

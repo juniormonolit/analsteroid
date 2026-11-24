@@ -39,6 +39,14 @@ export const fetchSessions = (metricId: string, from: string, to: string) =>
 export const fetchCreators = (managerIds: number[]) =>
   call<TaskerCreatorsResponse>(`/api/tasker/creators?managerIds=${managerIds.join(',')}`);
 
+/** Товарные группы (шкала kc) — выбор «материалы по товарной группе» без готовой темы. Ошибка → []. */
+export async function fetchProductGroups(): Promise<{ id: string; name: string }[]> {
+  const res = await fetch('/api/tasker/product-groups');
+  if (!res.ok) return [];
+  const body = await res.json().catch(() => null);
+  return Array.isArray(body?.groups) ? body.groups : [];
+}
+
 export const createTasks = (req: TaskerCreateRequest) =>
   call<TaskerCreateResponse>('/api/tasker/tasks', json(req));
 
