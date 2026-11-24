@@ -9,7 +9,8 @@
 // sm+: горизонтальная лента колонок с затуханием у краёв, когда правда есть что скроллить.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TaskerTask } from '../../types';
-import { BOARD_COLUMNS, BOARD_COLUMN_LABELS, STATUS_COLOR, boardColumn, moveTargets, type BoardColumn, type MoveTarget } from '../shared/format';
+import { ChevronDown } from 'lucide-react';
+import { BOARD_COLUMNS, BOARD_COLUMN_LABELS, STATUS_COLOR, boardColumn, executorOf, moveTargets, shortName, type BoardColumn, type MoveTarget } from '../shared/format';
 import { TaskCard } from '../shared/TaskCard';
 
 const HINT: Record<BoardColumn, string> = {
@@ -20,6 +21,21 @@ const HINT: Record<BoardColumn, string> = {
   grown: 'Автозамер: показатель вырос',
   not_grown: 'Автозамер: без роста или мало данных',
 };
+
+/** Группы колонки по исполнителю: от GROUP_FROM карточек и если исполнителей больше одного; иначе — одна группа без заголовка. */
+const GROUP_FROM = 6;
+function groupsOf(list: TaskerTask[]): { key: string; label: string | null; tasks: TaskerTask[] }[] {
+  const m = new Map<string, { label: string; tasks: TaskerTask[] }>();
+  for (const t of list) {
+    const ex = executorOf(t);
+    const key = ex ? `${ex.role === 'менеджер' ? 'self' : ex.person.id}` : 'none';
+    const label = !ex ? 'Без исполнителя' : ex.role === 'менеджер' ? 'Ведут сами менеджеры' : `${ex.role ? `${ex.role} ` : ''}${shortName(ex.person.name)}`;
+    if (!m.has(key)) m.set(key, { label, tasks: [] });
+    m.get(key)!.tasks.push(t);
+  }
+  if (list.length < GROUP_FROM || m.size < 2) return [{ key: 'all', label: null, tasks: list }];
+  return [...m.entries()].map(([key, g]) => ({ key, ...g })).sort((a, b) => b.tasks.length - a.tasks.length || a.label.localeCompare(b.label, 'ru'));
+}
 
 export function TaskerBoard({ tasks, dragEnabled, onOpen, onMove }: {
   tasks: TaskerTask[];
@@ -73,6 +89,10 @@ export function TaskerBoard({ tasks, dragEnabled, onOpen, onMove }: {
     measureChips();
   }, [shownPhone, measureChips]);
 
+  const occupied = BOARD_COLUMNS.filter(c => (byStatus.get(c)?.length ?? 0) > 0).length;
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleGroup = (k: string) => setCollapsed(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+
   const canDrop = (s: BoardColumn) => !!drag && (moveTargets(drag) as BoardColumn[]).includes(s);
 
   return (
@@ -100,6 +120,8 @@ export function TaskerBoard({ tasks, dragEnabled, onOpen, onMove }: {
         <div ref={scrollRef} onScroll={measure} className="scroll-x h-full">
           <div className="flex h-full min-w-0 items-stretch gap-2.5">
             {BOARD_COLUMNS.map(s => {
+              // Ширина (правка владельца 24.11): занятые колонки делят свободное место (min 300, max 460;
+              // если занятых ≤ 2 — без потолка, чтобы карточки встали в 2 столбца), пустые — узкая полоса.
               const list = byStatus.get(s) ?? [];
               const dropOk = canDrop(s);
               const dim = !!drag && !dropOk && s !== boardColumn(drag);
@@ -110,7 +132,7 @@ export function TaskerBoard({ tasks, dragEnabled, onOpen, onMove }: {
                   onDragOver={e => { if (dropOk) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (over !== s) setOver(s); } }}
                   onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(o => (o === s ? null : o)); }}
                   onDrop={e => { e.preventDefault(); const c = drag; setDrag(null); setOver(null); if (!c || !dropOk) return; if (s === 'done') onOpen(c); else onMove(c, s as MoveTarget); }}
-                  className={`${s === shownPhone ? 'flex' : 'hidden'} w-full min-w-0 shrink-0 flex-col overflow-hidden rounded-xl bg-[var(--color-bg-surface)] transition-opacity sm:flex sm:h-full ${slim ? 'sm:w-12' : 'sm:w-72'} ${dim ? 'opacity-40' : ''} ${over === s ? 'ring-2 ring-[var(--color-accent)]' : ''}`}>
+                  className={`${s === shownPhone ? 'flex' : 'hidden'} w-full min-w-0 shrink-0 flex-col overflow-hidden rounded-xl bg-[var(--color-bg-surface)] transition-opacity sm:flex sm:h-full ${slim ? 'sm:w-12' : `sm:min-w-[300px] sm:flex-1 ${occupied > 2 ? 'sm:max-w-[460px]' : ''}`} ${dim ? 'opacity-40' : ''} ${over === s ? 'ring-2 ring-[var(--color-accent)]' : ''}`}>
                   {slim && (
                     <div className="hidden h-full flex-col items-center gap-2 py-3 sm:flex" title={`${BOARD_COLUMN_LABELS[s]}: пусто · ${HINT[s]}`}>
                       <span aria-hidden className="h-[3px] w-4 shrink-0 rounded-full" style={{ background: STATUS_COLOR[s] }} />
@@ -126,13 +148,34 @@ export function TaskerBoard({ tasks, dragEnabled, onOpen, onMove }: {
                   </header>
                   <p className="shrink-0 px-3 pb-1 text-[11px] text-[var(--color-text-muted)]">{HINT[s]}</p>
                   <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden p-2">
-                    {list.map(t => (
-                      <TaskCard key={t.id} task={t} onOpen={onOpen}
-                        draggable={dragEnabled && moveTargets(t).length > 0}
-                        dragging={drag?.id === t.id}
-                        onDragStart={setDrag}
-                        onDragEnd={() => { setDrag(null); setOver(null); }} />
-                    ))}
+                    {/* Много карточек — подгруппы по исполнителю (сворачиваются); широкая колонка — карточки в 2+ столбца. */}
+                    {groupsOf(list).map(g => {
+                      const key = `${s}|${g.key}`;
+                      const open = !collapsed.has(key);
+                      return (
+                        <div key={g.key} className="flex min-w-0 flex-col gap-2">
+                          {g.label && (
+                            <button type="button" onClick={() => toggleGroup(key)} aria-expanded={open}
+                              className="flex min-h-9 min-w-0 items-center gap-1.5 rounded-md px-1 text-left text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">
+                              <ChevronDown size={14} className={`shrink-0 transition-transform ${open ? '' : '-rotate-90'}`} aria-hidden />
+                              <span className="min-w-0 break-words">{g.label}</span>
+                              <span className="shrink-0 tabular-nums text-[var(--color-text-muted)]">· {g.tasks.length}</span>
+                            </button>
+                          )}
+                          {open && (
+                            <div className="grid min-w-0 gap-2 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]">
+                              {g.tasks.map(t => (
+                                <TaskCard key={t.id} task={t} onOpen={onOpen}
+                                  draggable={dragEnabled && moveTargets(t).length > 0}
+                                  dragging={drag?.id === t.id}
+                                  onDragStart={setDrag}
+                                  onDragEnd={() => { setDrag(null); setOver(null); }} />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                     {list.length === 0 && <div className="px-1 py-3 text-center text-xs text-[var(--color-text-muted)]">Здесь пока ничего — {HINT[s].toLowerCase()}.</div>}
                   </div>
                   </div>

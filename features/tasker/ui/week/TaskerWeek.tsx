@@ -60,7 +60,7 @@ export function SessionBlock({ session: s, tasks, onOpen }: { session: TaskerSes
         {tasks.length > 0 ? tasks.map(t => (
           <button key={t.id} type="button" onClick={() => onOpen(t)}
             className="inline-flex min-h-9 max-w-full items-center rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[var(--color-text)] hover:border-[var(--color-border-strong)]">
-            <span className="truncate">{shortName(t.manager.name)}</span>
+            <span className="break-words">{shortName(t.manager.name)}</span>
           </button>
         )) : s.managers.map(m => <span key={m.id} className="rounded-md bg-[var(--color-bg)] px-2 py-1">{shortName(m.name)}</span>)}
       </div>
@@ -140,7 +140,7 @@ export function TaskerWeek({ monday, tasks, sessions, trainings, meetings = [], 
                     <button key={t.id} type="button" onClick={() => onOpen(t)} title={`Автозамер: ${t.metricLabel} · ${t.manager.name}`}
                       className="inline-flex min-h-9 max-w-full items-center gap-1 rounded-md bg-[var(--color-bg)] px-2 text-[11.5px] hover:bg-[var(--color-bg-hover)]">
                       <CalendarClock size={12} className="shrink-0 text-[var(--color-text-muted)]" aria-hidden />
-                      <span className="truncate">{shortName(t.manager.name)} · {t.metricLabel}</span>
+                      <span className="min-w-0 break-words text-left">{shortName(t.manager.name)} · {t.metricLabel}</span>
                     </button>
                   ))}
                 </div>

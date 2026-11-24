@@ -92,6 +92,12 @@ export function mockTasks(): TaskerTasksResponse {
     task(13, 'result', { day: addDays(today, -21), control: addDays(today, -7), verdict: 'not_enough_data' }),
     task(11, 'new', { day: addDays(mon, 1), slot: true, hm: '10:00' }),
   ];
+  // ?mock=1&dense=1 — как на проде 24.11: 17 задач в «Новая», длинные ФИО, исполнители с ролями, задачи по сделке.
+  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('dense')) {
+    const keep = tasks.filter(t => t.status === 'new');
+    tasks.length = 0;
+    tasks.push(...keep, ...denseTasks(today));
+  }
   const s1 = tasks.filter(t => t.sessionId === 1);
   const sessions: TaskerSession[] = [{
     id: 1, rop: ROPS[0], metricId: s1[0].metricId, metricLabel: s1[0].metricLabel,
@@ -103,4 +109,36 @@ export function mockTasks(): TaskerTasksResponse {
     { eventId: 32, title: 'Скрипт повторной продажи', startsAt: at(today, '16:00'), durationMin: 60, place: 'Zoom', trainer: P(900, 'Будковский Павел'), manager: MANAGERS[0] },
   ];
   return { tasks, sessions, trainings };
+}
+
+const LONG_MANAGERS = [
+  P(2201, 'Анастасия Фахретдинова'), P(2202, 'Константин Константинопольский'), P(2203, 'Шевкунова Екатерина Александровна'),
+  P(2204, 'Лебединская-Орлова Виктория'), P(2205, 'Генкаревский Ростислав Вячеславович'), P(2206, 'Девришбеков Тимур'),
+  P(2207, 'Архипов-Дмитриевский Святослав'),
+];
+const LONG_ROPS = [P(601, 'Александра Павленко'), P(602, 'Наталья Зарубина-Ковалевская'), P(2054, 'Андрей Будковский')];
+
+/** Плотный набор для приёмки карточек (не на проде — только dev-мок). */
+function denseTasks(today: string): TaskerTask[] {
+  const res: TaskerTask[] = [];
+  for (let k = 0; k < 13; k++) {
+    const base = task(20 + k, 'new', { day: addDays(today, (k % 5) + 1), slot: k % 3 === 0, hm: k % 2 ? '14:30' : '10:00' });
+    const man = LONG_MANAGERS[k % LONG_MANAGERS.length];
+    const ex = k % 4 === 3 ? man : LONG_ROPS[k % 3];
+    const kind: TaskerTask['kind'] = k % 5 === 4 ? 'deal' : ex.id === 2054 ? 'theory' : 'practice';
+    const t: TaskerTask = {
+      ...base, id: 8000 + k, manager: man, rop: LONG_ROPS[k % 2], creator: LONG_ROPS[(k + 1) % 2], assignee: ex, executorBitrixId: String(ex.id), kind,
+      current: k % 3 === 1 ? { value: (base.snapshot.value ?? 10) * (k % 2 ? 1.12 : 0.9), enoughData: true, denominator: 20, from: today, to: today, at: new Date().toISOString() } : null,
+    };
+    if (kind === 'deal') {
+      t.dealId = 990000 + k;
+      t.deal = {
+        dealId: 990000 + k, title: 'Газобетон D500 и облицовочный кирпич на коттедж в Новой Москве, доставка двумя машинами с разгрузкой', client: 'ООО «СтройИнвестГрупп»',
+        amount: 1_250_000, funnel: 'Первичные', stageId: 'C1:PREP', stage: 'Озвучил предложение', stageType: 'called', stageSince: null, stageSinceSource: null,
+        daysInStage: 9, soldAt: null, lostAt: null, managerId: man.id, managerName: man.name, url: 'https://example.bitrix24.ru/crm/deal/details/1/', at: new Date().toISOString(),
+      };
+    }
+    res.push(t);
+  }
+  return res;
 }
