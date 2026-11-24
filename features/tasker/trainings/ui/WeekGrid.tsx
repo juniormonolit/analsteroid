@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Lock, Plus, Users, X } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
@@ -34,6 +34,17 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
   const [focusTheme, setFocusTheme] = useState<string | null>(null);
   // Телефон: показываем один день (лента дней сверху).
   const [phoneDay, setPhoneDay] = useState<string | null>(null);
+  // Сетка ↔ лента дней — по ширине КОНТЕЙНЕРА, а не вьюпорта: при 1024 с сайдбаром контенту остаётся ~760px и
+  // колонки по 110px рвали названия по слогам (прод 24.11). Таблица — только если колонка дня ≥ DAY_MIN.
+  const boxRef = useRef<HTMLElement>(null);
+  const [boxW, setBoxW] = useState(0);
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setBoxW(Math.round(e.contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const sunday = addDaysKey(monday, 6);
   const slotsQ = useQuery({ queryKey: SLOTS_KEY, queryFn: () => getJson<TrainingSlotsResponse>('/api/tasker/trainings/slots') });
   const evQ = useQuery({
@@ -77,6 +88,7 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
   }, [monday, slots, events]);
 
   const loading = slotsQ.isLoading || evQ.isLoading;
+  const asTable = boxW >= SLOT_COL + grid.cols.length * DAY_MIN;
   const error = (slotsQ.error ?? evQ.error) as Error | null;
   const nowMs = Date.now();
   const startMsOf = (day: string, time: string) => Date.parse(`${day}T${time}:00+03:00`);
@@ -107,7 +119,7 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
   const cell = (day: string, time: string, showMeta: boolean) => {
     const evs = grid.evAt.get(`${day}|${time}`) ?? [];
     const slot = grid.slotAt.get(`${isoWeekday(day)}|${time}`) ?? null;
-    if (evs.length) return evs.map(e => <EventCard key={e.id} e={e} past={endOf(e.startsAt, e.durationMin).getTime() < nowMs} onOpen={() => onOpen(e.id)} />);
+    if (evs.length) return evs.map(e => <EventCard key={e.id} e={e} compact={!showMeta} past={endOf(e.startsAt, e.durationMin).getTime() < nowMs} onOpen={() => onOpen(e.id)} />);
     if (!slot) return null;
     const past = startMsOf(day, time) <= nowMs;
     // Подпись, которой нет в заголовке строки, — чипом (закрепление за отделом и т.п.).
@@ -186,16 +198,16 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
     const isToday = d === today;
     const past = d < today;
     return (
-      <span className={`inline-flex min-w-0 items-center gap-1.5 ${past ? 'text-[var(--color-text-muted)]' : ''}`}>
-        <span className="font-semibold">{WEEKDAYS_SHORT[isoWeekday(d)]}</span>
-        <span className="tabular-nums">{ddmm(d)}</span>
-        {isToday && <span className="rounded-full bg-[var(--color-accent)] px-2 py-px text-[11px] font-medium text-white">сегодня</span>}
+      // Перенос вместо наезда: «сегодня» встаёт под дату, если колонке не хватает ширины.
+      <span className={`inline-flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 ${past ? 'text-[var(--color-text-muted)]' : ''}`}>
+        <span className="whitespace-nowrap"><span className="font-semibold">{WEEKDAYS_SHORT[isoWeekday(d)]}</span> <span className="tabular-nums">{ddmm(d)}</span></span>
+        {isToday && <span className="shrink-0 whitespace-nowrap rounded-full bg-[var(--color-accent)] px-2 py-px text-[11px] font-medium text-white">сегодня</span>}
       </span>
     );
   };
 
   return (
-    <section className="flex min-w-0 flex-col gap-3">
+    <section ref={boxRef} className="flex min-w-0 flex-col gap-3">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <div className="flex min-w-0 items-center gap-1">
           <button type="button" aria-label="Предыдущая неделя" onClick={() => setMonday(addDaysKey(monday, -7))}
@@ -237,12 +249,13 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
         </div>
       ) : (
         <>
-          {/* lg+ — таблица как у тренера */}
-          <div className="scroll-x hidden rounded-xl bg-[var(--color-bg-surface)] lg:block">
+          {/* Широкий контейнер — таблица как у тренера */}
+          {asTable && (
+          <div className="scroll-x rounded-xl bg-[var(--color-bg-surface)]">
             <table className="w-full table-fixed border-collapse text-[12.5px]">
               <thead>
                 <tr>
-                  <th className="w-36 border-b border-[var(--color-border)] px-3 py-2.5 text-left text-[12px] font-medium text-[var(--color-text-muted)]">Слот</th>
+                  <th style={{ width: SLOT_COL }} className="border-b border-[var(--color-border)] px-3 py-2.5 text-left text-[12px] font-medium text-[var(--color-text-muted)]">Слот</th>
                   {grid.cols.map(d => (
                     <th key={d} className={`border-b border-l border-[var(--color-border)] px-2 py-2.5 text-left font-normal ${d === today ? 'border-t-2 border-t-[var(--color-accent)] bg-[var(--color-accent-soft)]' : ''}`}>
                       {dayHead(d)}
@@ -270,10 +283,12 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
               </tbody>
             </table>
           </div>
+          )}
 
-          {/* Уже 1024 (телефон и планшет) — лента дней (без скролла: 5–7 равных ячеек) и один день. Раньше на планшете
-              дни шли сеткой в 2 колонки разной высоты — рваная раскладка с дырами (аудит, раунд 2). */}
-          <div className="grid min-w-0 gap-1 lg:hidden" style={{ gridTemplateColumns: `repeat(${grid.cols.length}, minmax(0, 1fr))` }} role="tablist" aria-label="День недели">
+          {/* Узкий контейнер (телефон, планшет, 1024 с сайдбаром) — лента дней (без скролла: 5–7 равных ячеек) и один день.
+              Раньше на планшете дни шли сеткой в 2 колонки разной высоты — рваная раскладка с дырами (аудит, раунд 2). */}
+          {!asTable && (<>
+          <div className="grid min-w-0 gap-1" style={{ gridTemplateColumns: `repeat(${grid.cols.length}, minmax(0, 1fr))` }} role="tablist" aria-label="День недели">
             {grid.cols.map(d => {
               const on = d === shownPhone;
               const n = events.filter(e => mskDateKey(e.startsAt) === d).length;
@@ -291,7 +306,7 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
           </div>
 
           {/* Выбранный день */}
-          <div className="grid min-w-0 grid-cols-1 gap-3 lg:hidden">
+          <div className="grid min-w-0 grid-cols-1 gap-3">
             {grid.cols.map(d => {
               const dayRows = grid.rows.filter(t => grid.evAt.has(`${d}|${t}`) || grid.slotAt.has(`${isoWeekday(d)}|${t}`));
               const shown = dayRows.filter(t => grid.evAt.has(`${d}|${t}`) || startMsOf(d, t) > nowMs);
@@ -317,6 +332,7 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
               );
             })}
           </div>
+          </>)}
         </>
       )}
 
@@ -337,23 +353,29 @@ function slotMeta(s: TrainingSlot): string {
   return [s.label, s.departmentLabel, s.isOffline ? 'очно' : null].filter(Boolean).join(' · ');
 }
 
-function EventCard({ e, past, onOpen }: { e: TrainingEvent; past: boolean; onOpen: () => void }) {
+/** Ширина колонки «Слот» и минимум колонки дня в таблице, px. */
+const SLOT_COL = 128;
+const DAY_MIN = 150;
+
+/** compact — ячейка таблицы: название без разрыва слов (2 строки + «…», полное — в title), одна фамилия «+N». */
+function EventCard({ e, past, compact, onOpen }: { e: TrainingEvent; past: boolean; compact?: boolean; onOpen: () => void }) {
   const names = e.attendees.map(a => surname(a.manager.name));
-  const shown = names.slice(0, 3);
+  const shown = names.slice(0, compact ? 1 : 3);
   const more = e.enrolledCount - shown.length;
   const cap = e.capacity;
   const full = cap != null && e.enrolledCount >= cap;
   const small = cap != null && e.enrolledCount < 3;
   return (
-    <button type="button" onClick={onOpen}
-      className={`flex w-full min-w-0 flex-col gap-0.5 rounded-lg border border-[var(--color-border)] border-l-[3px] bg-[var(--color-bg)] px-2 py-1.5 text-left shadow-sm hover:shadow ${past ? 'border-l-[var(--color-text-muted)] opacity-75' : small ? 'border-l-[var(--color-warning)]' : 'border-l-[var(--color-accent)]'}`}>
-      <span className="line-clamp-2 min-w-0 break-words text-[12.5px] font-semibold leading-snug">{e.title}</span>
+    <button type="button" onClick={onOpen} title={[e.title, e.departmentLabel, names.join(', ')].filter(Boolean).join('\n')}
+      className={`flex w-full min-w-0 flex-col gap-0.5 overflow-hidden rounded-lg border border-[var(--color-border)] border-l-[3px] bg-[var(--color-bg)] px-2 py-1.5 text-left shadow-sm hover:shadow ${past ? 'border-l-[var(--color-text-muted)] opacity-75' : small ? 'border-l-[var(--color-warning)]' : 'border-l-[var(--color-accent)]'}`}>
+      {/* Без break-words: слово не рвётся по слогам; не влезает — обрезается многоточием строки (полное — в title). */}
+      <span className="line-clamp-2 min-w-0 text-[12.5px] font-semibold leading-snug [hyphens:none] [overflow-wrap:normal]">{e.title}</span>
       {e.departmentLabel && <span className="min-w-0 truncate text-[11.5px] text-[var(--color-text-secondary)]">{e.departmentLabel}</span>}
-      <span className={`inline-flex items-center gap-1 text-[11.5px] tabular-nums ${full ? 'text-[var(--color-negative)]' : 'text-[var(--color-text-secondary)]'}`}>
+      <span className={`inline-flex min-w-0 items-center gap-1 whitespace-nowrap text-[11.5px] tabular-nums ${full ? 'text-[var(--color-negative)]' : 'text-[var(--color-text-secondary)]'}`}>
         <Users size={12} className="shrink-0" />{e.enrolledCount}{cap != null ? ` / ${cap}` : ''}
-        {past ? ' · прошло' : small ? ' · набирается' : ''}
+        {compact ? '' : past ? ' · прошло' : small ? ' · набирается' : ''}
       </span>
-      <span className="min-w-0 break-words text-[11.5px] text-[var(--color-text-muted)]">
+      <span className={`min-w-0 text-[11.5px] text-[var(--color-text-muted)] ${compact ? 'truncate' : 'break-words'}`}>
         {shown.length ? shown.join(', ') : e.enrolledCount ? '' : 'никто не записан'}{more > 0 ? ` +${more}` : ''}
       </span>
     </button>
