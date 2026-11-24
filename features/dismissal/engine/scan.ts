@@ -175,7 +175,12 @@ export async function scanAccount(sourceId: number, onProgress?: (stage: string)
     for (const { d, key } of rows) {
       const id = num(d.ID), stageId = String(d.STAGE_ID ?? '');
       const v = key ? values.get(key) : undefined;
-      const clientName = key ? names.get(nameKey(key)) ?? `${key.startsWith('k') ? 'Компания' : 'Контакт'} #${key.slice(1)}` : 'Заказчик не указан';
+      // В Битриксе у части контактов имя буквально «-» (заведены без имени) — такое за имя не считаем.
+      const rawName = key ? names.get(nameKey(key))?.trim() : undefined;
+      const realName = rawName && !/^[-—–.\s]*$/.test(rawName) ? rawName : null;
+      const clientName = key
+        ? realName ?? `${key.startsWith('k') ? 'Компания' : 'Контакт'} #${key.slice(1)}${d.TITLE?.trim() ? ` (${d.TITLE.trim()})` : ''}`
+        : 'Заказчик не указан';
       const ltv = v?.ltv ?? 0, shipments = v?.shipments ?? 0;
       push({
         kind: 'deal_repeat', entityId: id, title: d.TITLE?.trim() || `Сделка #${id}`, url: dealUrl(id),
