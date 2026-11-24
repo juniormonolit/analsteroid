@@ -58,16 +58,17 @@ function fmtDeadline(d: Date): string {
 }
 
 // ── Настройки и аренда опроса ──────────────────────────────────────────────────
-interface Settings { dryRun: boolean; chatId: string; cursor: number | null }
+interface Settings { dryRun: boolean; chatId: string; cursor: number | null; lastError: string | null }
 
 async function claimPoll(): Promise<Settings | null> {
-  const r = await systemDb().query<{ dry_run: boolean; chat_id: string; cursor: string | null }>(
+  // last_error — значение ДО этого опроса (RETURNING видит строку после SET, а last_error здесь не меняется).
+  const r = await systemDb().query<{ dry_run: boolean; chat_id: string; cursor: string | null; last_error: string | null }>(
     `UPDATE dismissal_watch_settings SET next_poll_at = now() + make_interval(mins => $1), last_poll_at = now(), updated_at = now()
       WHERE id = 1 AND enabled AND (next_poll_at IS NULL OR next_poll_at <= now())
-      RETURNING dry_run, chat_id, cursor::text`, [POLL_MIN],
+      RETURNING dry_run, chat_id, cursor::text, last_error`, [POLL_MIN],
   );
   const s = r.rows[0];
-  return s ? { dryRun: s.dry_run, chatId: s.chat_id, cursor: s.cursor ? Number(s.cursor) : null } : null;
+  return s ? { dryRun: s.dry_run, chatId: s.chat_id, cursor: s.cursor ? Number(s.cursor) : null, lastError: s.last_error } : null;
 }
 const saveCursor = (id: number) => systemDb().query(`UPDATE dismissal_watch_settings SET cursor = $1, updated_at = now() WHERE id = 1 AND (cursor IS NULL OR cursor < $1)`, [id]);
 const saveError = (e: string | null) => systemDb().query(`UPDATE dismissal_watch_settings SET last_error = $1, updated_at = now() WHERE id = 1`, [e]);
@@ -320,6 +321,15 @@ export async function dismissalWatchTick(): Promise<void> {
       try { await escalate(); } catch (e) { err = `${err ? `${err}; ` : ''}эскалация: ${errMsg(e)}`; console.error('[dismissal-watch] эскалация:', errMsg(e)); }
     }
     await saveError(err).catch(() => {});
+    // Алерт владельцу (24.11: «пусть пишет мне при ошибке»): только на переходах «работало → ошибка» и
+    // «ошибка → снова работает», чтобы не слать сообщение каждые POLL_MIN минут. Тип ошибки сменился — тоже пишем.
+    const kind = (e: string | null) => (e ? e.replace(/\d+/g, '#').slice(0, 120) : null);
+    if (kind(err) !== kind(s.lastError)) {
+      const text = err
+        ? `[B]Сторож увольнений не работает[/B]\nНе могу прочитать или обработать чат «Увольнения»: ${bbSafe(err).slice(0, 600)}\nЧаще всего — аккаунт вебхука убрали из чата или вебхук отозван. Напишу, когда заработает.`
+        : `[B]Сторож увольнений снова работает[/B]\nЧат «Увольнения» читается, пропущенные сообщения разобраны.`;
+      await sendWithMirror(null, '', text, { mirrorOnly: true, tag: err ? 'ошибка' : 'восстановлено' }).catch(() => {});
+    }
   } catch (e) {
     // До наката миграции 291 таблиц нет — молчим (раз в тик не спамим лог).
     if ((e as { code?: string }).code !== '42P01') console.error('[dismissal-watch] тик:', errMsg(e));
