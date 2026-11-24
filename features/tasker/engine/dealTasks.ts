@@ -12,7 +12,6 @@ import type { SessionUser } from '@/lib/auth/session';
 import { canSeeManager, type SessionScope } from '@/lib/org/sessionScope';
 import { getEmployeeDirectory } from '@/lib/org/employeeDirectory';
 import { resolveClientNames } from '@/lib/bitrix/clientNames';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import { ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
 import {
   TASKER_DEAL_TOPIC_ID, TASKER_VERDICT_LABELS,
@@ -41,7 +40,7 @@ const EMPTY_SNAPSHOT: Snapshot = { value: null, deptAvg: null, ownAvg6m: null, d
 interface DealRow {
   deal_id: string; deal_name: string | null; amount: string | null; stage_id: string | null; stage_name: string | null;
   stage_type: string | null; funnel_name: string | null; manager_id: string | null; updated_at: Date | null;
-  sold_at: Date | null; lost_at: Date | null; client_key: string | null; stage_since: Date | null;
+  sold_at: Date | null; lost_at: Date | null; contact_id: string | null; company_id: string | null; stage_since: Date | null;
 }
 
 const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOString() : null);
@@ -54,7 +53,7 @@ export async function loadDealSnapshots(ids: number[]): Promise<Map<number, Task
   const r = await analyticsDb().query<DealRow>(
     `SELECT d.deal_id, d.deal_name, d.amount, d.stage_id::text AS stage_id, s.name AS stage_name, s.event_type AS stage_type,
             f.name AS funnel_name, d.current_manager_id::text AS manager_id, d.updated_at, d.sold_at, d.lost_at,
-            (${CLIENT_KEY_CASE_SQL}) AS client_key,
+            d.contact_id::text AS contact_id, d.company_id::text AS company_id,
             (SELECT max(e.event_at) FROM sa.deal_events e WHERE e.deal_id = d.deal_id AND e.stage_id = d.stage_id) AS stage_since
        FROM sa.deals d
        LEFT JOIN sa.stages s  ON s.id = d.stage_id
@@ -62,7 +61,14 @@ export async function loadDealSnapshots(ids: number[]): Promise<Map<number, Task
       WHERE d.deal_id = ANY($1::bigint[])`,
     [ids],
   );
-  const keys = [...new Set(r.rows.map(x => x.client_key).filter((k): k is string => !!k))];
+  // Клиент: имя компании, иначе контакта — из того же кэша имён Битрикса, что у карточки заказчика (lib/bitrix/clientNames).
+  // Не через CLIENT_KEY_CASE_SQL: у юр-сделок с company_id IS NULL и у B2C без контакта ключ там NULL — поле было пустым
+  // (сделка 280340, прод 24.11). Пробуем k<company>, затем c<contact> (контакт Битрикса; x-ключи заказчиков в кэш не плодим).
+  const keysOf = (x: DealRow) => [
+    ...(x.company_id && x.company_id !== '0' ? [`k${x.company_id}`] : []),
+    ...(x.contact_id && x.contact_id !== '0' ? [`c${x.contact_id}`] : []),
+  ];
+  const keys = [...new Set(r.rows.flatMap(keysOf))];
   const [names, dir] = await Promise.all([
     resolveClientNames(keys).catch(e => { console.warn('[tasker] имена клиентов:', e instanceof Error ? e.message : e); return new Map<string, string | null>(); }),
     getEmployeeDirectory(),
@@ -75,7 +81,9 @@ export async function loadDealSnapshots(ids: number[]): Promise<Map<number, Task
     out.set(id, {
       dealId: id,
       title: x.deal_name,
-      client: x.client_key ? names.get(x.client_key) ?? null : null,
+      // Имени нет (Битрикс не ответил / пусто) — номер, как в карточке сделки дриллдауна.
+      client: keysOf(x).map(k => names.get(k)).find(n => !!n?.trim())
+        ?? (x.company_id && x.company_id !== '0' ? `компания #${x.company_id}` : x.contact_id && x.contact_id !== '0' ? `контакт #${x.contact_id}` : null),
       amount: x.amount === null ? null : Number(x.amount),
       funnel: x.funnel_name,
       stageId: x.stage_id,
