@@ -179,7 +179,7 @@ export async function scanAccount(sourceId: number, onProgress?: (stage: string)
       const rawName = key ? names.get(nameKey(key))?.trim() : undefined;
       const realName = rawName && !/^[-—–.\s]*$/.test(rawName) ? rawName : null;
       const clientName = key
-        ? realName ?? `${key.startsWith('k') ? 'Компания' : 'Контакт'} #${key.slice(1)}${d.TITLE?.trim() ? ` (${d.TITLE.trim()})` : ''}`
+        ? realName ?? `${key.startsWith('k') ? 'Компания' : 'Контакт'} #${key.slice(1)} (без названия)`
         : 'Заказчик не указан';
       const ltv = v?.ltv ?? 0, shipments = v?.shipments ?? 0;
       push({
