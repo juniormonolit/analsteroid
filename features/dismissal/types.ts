@@ -238,12 +238,30 @@ export interface DismissalRunSummary {
   finishedAt: string | null;
   counts: DismissalCounts;
   error: string | null;
+  /** v4: если увольнение пришло из чата «Увольнения» — откуда и какой срок (и в списке, и в деталях) */
+  announcement: DismissalAnnouncement | null;
 }
 
 /** Завершающие шаги прогона (после всех строк). */
 export interface DismissalFinals {
   ropMessage: { status: 'pending' | 'done' | 'skipped' | 'error'; detail: string | null };
   passwordReset: { status: 'pending' | 'done' | 'skipped' | 'error'; detail: string | null; taskId: number | null; taskUrl?: string | null };
+}
+
+/** v4 «Сторож увольнений»: увольнение объявлено в чате «Увольнения» (Битрикс, чат 226952) — бот «Аналитик»
+ *  сам завёл черновик и ведёт эскалацию (РОП → директор по оргструктуре, нет — Куликов → Куликов; дубли — как
+ *  у «Контроля звонков»). Срок: черновик запущен до 18:00 следующего рабочего дня после объявления; в 18:01 —
+ *  следующий уровень и ещё один рабочий день. Решено = прогон запущен (startedAt). */
+export interface DismissalAnnouncement {
+  announcedAt: string;          // когда написали в чат
+  authorName: string;           // кто написал
+  text: string;                 // строка сообщения про этого сотрудника
+  messageUrl: string | null;    // ссылка на сообщение / чат
+  deadline: string;             // текущий срок (ISO, 18:00 МСК рабочего дня)
+  /** 0 — написали РОПу; 1 — эскалировано директору; 2 — Куликову */
+  level: 0 | 1 | 2;
+  notified: { level: 0 | 1 | 2; bitrixId: number; name: string; at: string }[];
+  resolvedAt: string | null;    // когда прогон запущен
 }
 
 export interface DismissalRunDetail extends DismissalRunSummary {

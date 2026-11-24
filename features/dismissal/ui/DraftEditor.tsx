@@ -13,6 +13,7 @@ import { ApiError, runKey, savePlan, useDismissalDepartments, useDismissalUsers,
 import { fmtDateTime, plural, planTotals, repeatClients, resolveItems, ruleOf, topCountOf, type DeptManagers } from './planMath';
 import { computeStatuses } from './stepStatus';
 import { WizardStepper } from './WizardStepper';
+import { AnnouncementBanner } from './AnnouncementBanner';
 import { ErrorBox, Skeleton, WarnBox, card, recipientOptions } from './shared';
 import { STEP_KEYS, type SaveState, type StepKey, type WizardCtx } from './wizardCtx';
 import { StepTop } from './steps/StepTop';
@@ -204,6 +205,7 @@ export function DraftEditor({ run, existing, title }: { run: DismissalRunDetail;
         </div>
       </div>
 
+      {run.announcement && <AnnouncementBanner a={run.announcement} />}
       {existing && (
         <WarnBox className="mb-3">
           Открыт незавершённый черновик от {fmtDateTime(run.createdAt)}. Данные могли устареть —{' '}

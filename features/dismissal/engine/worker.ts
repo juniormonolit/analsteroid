@@ -16,6 +16,8 @@ import { isTransient, sleep } from './bx';
 import { executeItem, type Pace } from './execute';
 import { runFinals } from './finals';
 import { scanAccount } from './scan';
+import { markFiredDate } from '../watch/firedDate';
+import { dismissalWatchTick } from '../watch/watcher';
 import {
   claimRun, completeRun, getFinals, deferItem, failRun, finishItem, heartbeat, itemDoneAt, nextPending, release, runCounts, runStatus, saveScan,
   type ClaimedRun,
@@ -75,7 +77,13 @@ async function doExecute(run: ClaimedRun): Promise<void> {
     if (!it) {
       await heartbeat(run.id, state.id);
       await runFinals(run, pace).catch(e => console.error(`[dismissal] ${run.id} завершающие шаги:`, errMsg(e)));
-      if (await completeRun(run.id, state.id)) await notifyDone(run);
+      if (await completeRun(run.id, state.id)) {
+        // v4: дата увольнения в «Сотрудниках» (не перетирая уже стоящую).
+        await markFiredDate(run.id, run.sourceId)
+          .then(r => console.log(`[dismissal] ${run.id} «Сотрудники»: ${r}`))
+          .catch(e => console.error(`[dismissal] ${run.id} дата увольнения:`, errMsg(e)));
+        await notifyDone(run);
+      }
       else await release(run.id, state.id);
       return;
     }
@@ -167,6 +175,8 @@ export function startDismissalWorker(): void {
   console.log(`[dismissal] воркер запущен (${state.id})`);
   void drain();
   state.timer = setInterval(() => { void drain(); }, TICK_MS);
+  // v4: «Сторож увольнений» — свой таймер (исполнение прогона может идти долго), опрос чата раз в 3 мин по аренде в БД.
+  setInterval(() => { void dismissalWatchTick(); }, 30_000);
 }
 
 /** Разбудить воркер сразу после действия в API (если он запущен в этом процессе). */

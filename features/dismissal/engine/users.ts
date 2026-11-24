@@ -27,6 +27,8 @@ interface UsersSnapshot {
   /** bitrixId → все отделы пользователя (UF_DEPARTMENT бывает из нескольких) */
   deptIds: Record<number, string[]>;
   deptNames: Record<string, string>;
+  /** bitrixId → LOGIN Битрикса (сторож увольнений сопоставляет «М60» → manager60) */
+  logins: Record<number, string>;
 }
 
 async function loadUsers(): Promise<UsersSnapshot> {
@@ -40,12 +42,14 @@ async function loadUsers(): Promise<UsersSnapshot> {
   const seen = new Set<number>();
   const out: DismissalUser[] = [];
   const deptIds: Record<number, string[]> = {};
+  const logins: Record<number, string> = {};
   for (const u of [...on, ...off]) {
     const id = Number(u.ID);
     if (!id || seen.has(id)) continue;
     // Боты, открытые линии, IMAP и прочие служебные учётки — не сотрудники.
     if (u.EXTERNAL_AUTH_ID && ['bot', 'imconnector', 'replica', 'email', '__controller', 'shop', 'sale', 'saleanonymous'].includes(u.EXTERNAL_AUTH_ID)) continue;
     seen.add(id);
+    if (u.LOGIN?.trim()) logins[id] = u.LOGIN.trim();
     const name = [u.LAST_NAME, u.NAME].map(s => (s ?? '').trim()).filter(Boolean).join(' ') || u.LOGIN || u.EMAIL || `Пользователь #${id}`;
     const all = (Array.isArray(u.UF_DEPARTMENT) ? u.UF_DEPARTMENT : u.UF_DEPARTMENT != null ? [u.UF_DEPARTMENT] : [])
       .map(Number).filter(n => Number.isInteger(n) && n > 0).map(String);
@@ -59,10 +63,10 @@ async function loadUsers(): Promise<UsersSnapshot> {
   }
   // Активные сверху, внутри — по имени.
   out.sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, 'ru'));
-  return { users: out, deptIds, deptNames: Object.fromEntries([...depts].map(([k, v]) => [String(k), v])) };
+  return { users: out, deptIds, logins, deptNames: Object.fromEntries([...depts].map(([k, v]) => [String(k), v])) };
 }
 
-const snapshot = () => cached('dismissal:users:v2', 600, loadUsers);
+const snapshot = () => cached('dismissal:users:v3', 600, loadUsers);
 
 export async function listDismissalUsers(): Promise<DismissalUser[]> {
   return withOrgDepartments();
@@ -144,4 +148,10 @@ export async function userNameMap(ids: Iterable<number>): Promise<Record<number,
 export async function findDismissalUser(bitrixId: number): Promise<DismissalUser | null> {
   const users = await listDismissalUsers();
   return users.find(u => u.bitrixId === bitrixId) ?? null;
+}
+
+/** Справочник для сторожа увольнений: все пользователи Битрикса (вкл. уволенных) с LOGIN. */
+export async function userDirectory(): Promise<{ bitrixId: number; name: string; login: string | null; active: boolean }[]> {
+  const s = await snapshot();
+  return s.users.map(u => ({ bitrixId: u.bitrixId, name: u.name, login: s.logins?.[u.bitrixId] ?? null, active: u.active }));
 }

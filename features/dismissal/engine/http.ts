@@ -10,7 +10,7 @@ import { userNameMap } from './users';
 export async function dismissalGuard(): Promise<{ session: SessionUser; error?: undefined } | { error: NextResponse; session?: undefined }> {
   const session = await getSession().catch(() => null);
   if (!session) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
-  if (!canUseDismissal(session)) return { error: NextResponse.json({ error: 'Только для администратора и директора' }, { status: 403 }) };
+  if (!canUseDismissal(session)) return { error: NextResponse.json({ error: 'Только для администратора, директора и РОПа' }, { status: 403 }) };
   return { session };
 }
 

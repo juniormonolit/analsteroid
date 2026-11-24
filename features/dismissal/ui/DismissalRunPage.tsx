@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { ArrowLeft, Loader2, RefreshCw } from 'lucide-react';
 import { useDismissalRun, useRunCommand } from './api';
 import { DraftEditor } from './DraftEditor';
+import { AnnouncementBanner } from './AnnouncementBanner';
 import { RunProgress } from './RunProgress';
 import { fmtDateTime } from './planMath';
 import { ErrorBox, RunStatusBadge, Skeleton, btnPrimary, btnSecondary, card, runErrors, userHint } from './shared';
@@ -54,6 +55,8 @@ export function DismissalRunPage({ id }: { id: string }) {
                 создал {run.createdByName}, {fmtDateTime(run.createdAt)}
               </p>
             </div>
+
+            {run.announcement && <AnnouncementBanner a={run.announcement} />}
 
             {run.status === 'scanning' && (
               <div className={`${card} flex flex-col items-center gap-3 px-4 py-12 text-center`}>

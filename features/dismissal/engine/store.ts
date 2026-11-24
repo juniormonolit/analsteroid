@@ -2,9 +2,10 @@
 import { systemDb } from '@/lib/db/clients';
 import {
   DISMISSAL_KINDS, PASSWORD_RESET_BITRIX_ID, type DismissalCounts, type DismissalFinals, type DismissalItem, type DismissalItemInfo, type DismissalKind,
-  type DismissalPlan, type DismissalRunDetail, type DismissalRunStatus, type DismissalRunSummary, type DismissalUser,
+  type DismissalAnnouncement, type DismissalPlan, type DismissalRunDetail, type DismissalRunStatus, type DismissalRunSummary, type DismissalUser,
 } from '../types';
 import { defaultPlan, expandDepartments, resolvePlan, sanitizePlan } from './plan';
+import { PORTAL as PORTAL_URL } from './bx';
 import type { ScannedItem } from './scan';
 import { departmentName, departmentTargets, findDismissalUser, userNameMap } from './users';
 
@@ -49,10 +50,10 @@ async function countsFor(ids: string[]): Promise<Map<string, DismissalCounts>> {
   return out;
 }
 
-function summaryOf(r: RunRow, counts: DismissalCounts): DismissalRunSummary {
+function summaryOf(r: RunRow, counts: DismissalCounts, announcement: DismissalAnnouncement | null): DismissalRunSummary {
   return {
     id: r.id, source: r.source, status: r.status, createdByName: r.created_by_name,
-    createdAt: iso(r.created_at)!, startedAt: iso(r.started_at), finishedAt: iso(r.finished_at), counts, error: r.error,
+    createdAt: iso(r.created_at)!, startedAt: iso(r.started_at), finishedAt: iso(r.finished_at), counts, error: r.error, announcement,
   };
 }
 
@@ -67,8 +68,9 @@ export async function getRunRow(id: string): Promise<RunRow | null> {
 
 export async function listRuns(limit = 100): Promise<DismissalRunSummary[]> {
   const r = await systemDb().query<RunRow>(`SELECT ${RUN_COLS} FROM dismissal_runs ORDER BY created_at DESC LIMIT $1`, [limit]);
-  const counts = await countsFor(r.rows.map(x => x.id));
-  return r.rows.map(x => summaryOf(x, counts.get(x.id) ?? emptyCounts()));
+  const ids = r.rows.map(x => x.id);
+  const [counts, ann] = await Promise.all([countsFor(ids), announcementsFor(ids)]);
+  return r.rows.map(x => summaryOf(x, counts.get(x.id) ?? emptyCounts(), ann.get(x.id) ?? null));
 }
 
 export async function getRunDetail(id: string): Promise<DismissalRunDetail | null> {
@@ -95,7 +97,34 @@ export async function getRunDetail(id: string): Promise<DismissalRunDetail | nul
   const ropId = Number(run.rop_bitrix_id) || null;
   if (ropId) ids.add(ropId);
   const rop = ropId ? await findDismissalUser(ropId).catch(() => null) : null;
-  return { ...summaryOf(run, counts), plan: run.plan, scannedAt: iso(run.scanned_at), rop, finals: finalsOf(run.finals, run.plan), items, userNames: await userNameMap(ids) };
+  return { ...summaryOf(run, counts, (await announcementsFor([id])).get(id) ?? null), plan: run.plan, scannedAt: iso(run.scanned_at), rop, finals: finalsOf(run.finals, run.plan), items, userNames: await userNameMap(ids) };
+}
+
+/** v4: объявления из чата «Увольнения» по прогонам (features/dismissal/watch) — ОДНИМ запросом на все id;
+ *  на прогон — последний кейс (run_id или resolved_run_id). До наката 291 — пусто. */
+async function announcementsFor(runIds: string[]): Promise<Map<string, DismissalAnnouncement>> {
+  const out = new Map<string, DismissalAnnouncement>();
+  if (!runIds.length) return out;
+  const r = await systemDb().query<{
+    rid: string; chat_id: string; message_id: string; line: string; author_name: string | null; announced_at: Date; deadline: Date; level: number;
+    notifications: { level: number; bitrixId: number; name: string; at: string }[]; resolved_at: Date | null;
+  }>(
+    `SELECT DISTINCT ON (x.rid) x.rid::text AS rid, c.chat_id, c.message_id::text, c.line, c.author_name, c.announced_at, c.deadline, c.level, c.notifications, c.resolved_at
+       FROM unnest($1::uuid[]) AS x(rid)
+       JOIN dismissal_watch_cases c ON c.run_id = x.rid OR c.resolved_run_id = x.rid
+      ORDER BY x.rid, c.announced_at DESC`, [runIds],
+  ).catch(() => null);
+  const lvl = (n: number) => Math.min(2, Math.max(0, n)) as 0 | 1 | 2;
+  for (const c of r?.rows ?? []) {
+    out.set(String(c.rid), {
+      announcedAt: c.announced_at.toISOString(), authorName: c.author_name ?? '—', text: c.line,
+      messageUrl: `${PORTAL_URL}/online/?IM_DIALOG=${c.chat_id}&IM_MESSAGE=${c.message_id}`,
+      deadline: c.deadline.toISOString(), level: lvl(c.level),
+      notified: (c.notifications ?? []).map(n => ({ level: lvl(n.level), bitrixId: n.bitrixId, name: n.name, at: n.at })),
+      resolvedAt: c.resolved_at ? c.resolved_at.toISOString() : null,
+    });
+  }
+  return out;
 }
 
 /** Активный (незавершённый) прогон по этому сотруднику — второй не заводим. */
@@ -107,11 +136,13 @@ export async function activeRunFor(sourceId: number): Promise<string | null> {
   return r.rows[0]?.id ?? null;
 }
 
-export async function createRun(source: DismissalUser, by: { login: string; name: string; bitrixId: number | null }): Promise<string> {
+export async function createRun(source: DismissalUser, by: { login: string; name: string; bitrixId: number | null }, note?: string): Promise<string> {
+  const plan = defaultPlan();
+  if (note?.trim()) plan.note = note.trim().slice(0, 2000);
   const r = await systemDb().query<{ id: string }>(
     `INSERT INTO dismissal_runs (source_bitrix_id, source, status, plan, created_by, created_by_name, created_by_bitrix_id)
      VALUES ($1, $2, 'scanning', $3, $4, $5, $6) RETURNING id::text`,
-    [source.bitrixId, JSON.stringify(source), JSON.stringify(defaultPlan()), by.login, by.name, by.bitrixId],
+    [source.bitrixId, JSON.stringify(source), JSON.stringify(plan), by.login, by.name, by.bitrixId],
   );
   return r.rows[0].id;
 }

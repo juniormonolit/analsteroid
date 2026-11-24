@@ -6,7 +6,7 @@
 // Себя — никогда (ни увольнять, ни видеть прогон по себе). Получатели в плане — в пределах среза; РОП
 // уволенного, определённый сканированием (dismissal_runs.rop_bitrix_id), допустим всегда.
 import type { SessionUser } from '@/lib/auth/session';
-import { systemDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadDepartments } from '@/lib/org/deptCategories';
 import { canSeeManager, getSessionScope, type SessionScope } from '@/lib/org/sessionScope';
 import type { DismissalPlan } from '../types';
@@ -16,9 +16,21 @@ export interface DismissalScope {
   selfId: number | null;
   /** Битрикс-id администраторов и суперадминов Монолитики — их не увольняет никто. */
   protectedIds: Set<number>;
+  /** Уже НЕактивные (уволенные в Битриксе) сотрудники отделов среза: срез проекта строится по активным,
+   *  а увольняют часто уже деактивированного — без этого РОП не открыл бы черновик из сообщения бота. */
+  inactiveInScope: Set<number>;
 }
 
-async function protectedBitrixIds(): Promise<Set<number>> {
+async function inactiveOfDepts(scope: SessionScope): Promise<Set<number>> {
+  if (scope.kind !== 'depts' || !scope.deptIds.size) return new Set();
+  const r = await analyticsDb().query<{ id: string }>(
+    `SELECT manager_bitrix_user_id::text AS id FROM sa.org_resolved_hierarchy
+      WHERE is_active IS NOT TRUE AND department_id::text = ANY($1::text[])`, [[...scope.deptIds]],
+  );
+  return new Set(r.rows.map(x => Number(x.id)).filter(n => n > 0));
+}
+
+export async function protectedBitrixIds(): Promise<Set<number>> {
   const r = await systemDb().query<{ id: string }>(
     `SELECT DISTINCT u.bitrix_user_id::text AS id
        FROM users u LEFT JOIN roles r ON r.id = u.role_id
@@ -29,12 +41,13 @@ async function protectedBitrixIds(): Promise<Set<number>> {
 
 export async function dismissalScope(session: SessionUser): Promise<DismissalScope> {
   const [scope, protectedIds] = await Promise.all([getSessionScope(session), protectedBitrixIds()]);
-  return { scope, selfId: Number(session.bitrixUserId) || null, protectedIds };
+  const inactiveInScope = await inactiveOfDepts(scope);
+  return { scope, selfId: Number(session.bitrixUserId) || null, protectedIds, inactiveInScope };
 }
 
 /** Сотрудник в срезе инициатора (для списков, получателей, прогонов). */
 export function inScope(s: DismissalScope, bitrixId: number): boolean {
-  return canSeeManager(s.scope, String(bitrixId));
+  return canSeeManager(s.scope, String(bitrixId)) || s.inactiveInScope.has(bitrixId);
 }
 
 /** Можно ли запустить Увольнятор на этого сотрудника. */

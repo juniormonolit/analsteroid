@@ -38,10 +38,14 @@ export function StepTasks({ ctx }: { ctx: WizardCtx }) {
   const [followOpen, setFollowOpen] = useState(false);
   const fT = ctx.totals.follow;
 
+  // РОП уволенного допустим всегда, даже вне среза инициатора (контракт v3) — добавляем его в список, иначе вместо имени — плейсхолдер.
+  const ropOptions = ctx.run.rop && !ctx.recipients.some(o => o.value === String(ctx.run.rop!.bitrixId))
+    ? [{ value: String(ctx.run.rop.bitrixId), label: ctx.run.rop.name, hint: 'РОП уволенного' }, ...ctx.recipients]
+    : ctx.recipients;
   const ropCard = (
     <PanelCard title="РОП и сообщения">
       <div className="flex flex-col gap-1">
-        <SearchSelect options={ctx.recipients} value={ropId ? String(ropId) : ''} onChange={v => ctx.update(p => ({ ...p, ropBitrixId: v ? Number(v) : null }))}
+        <SearchSelect options={ropOptions} value={ropId ? String(ropId) : ''} onChange={v => ctx.update(p => ({ ...p, ropBitrixId: v ? Number(v) : null }))}
           searchable placeholder={ctx.usersReady ? 'Выберите РОПа' : 'Загружаю сотрудников…'} disabled={!ctx.usersReady} searchPlaceholder="Имя, должность, отдел…"
           ariaLabel="РОП уволенного" className={`w-full ${!ropId ? 'border-[var(--color-negative)]' : ''}`} panelClassName={PANEL} />
         {ctx.run.rop && ropId === ctx.run.rop.bitrixId && <span className="text-xs text-[var(--color-text-muted)]">Определён автоматически: {ctx.run.rop.name}</span>}
