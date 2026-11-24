@@ -9,7 +9,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, ListChecks, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3, Megaphone, Tags, GitFork,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3, Megaphone, Tags, GitFork, UserX,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -28,6 +28,7 @@ import { IdeasPanel } from '@/features/ideas/ui/IdeasPanel';
 import { useTheme } from '@/lib/hooks/useTheme';
 import { CreateReportButton } from '@/features/reports/ui/CreateReportButton';
 import { canViewRealizations } from '@/lib/realizations/access';
+import { canUseDismissal } from '@/features/dismissal/access';
 import { MARKETING_PRESETS } from '@/lib/marketing/presets';
 import { BottomTabBar } from '@/components/layout/BottomTabBar';
 
@@ -535,6 +536,9 @@ function SidebarBody({
     // «Снять с продажи» (задача #6260, санкция Серёги 11.09) — ручная очистка
     // sold_at ошибочно проданной сделки. Гейт по действию (как «Чаты»), не по
     // section.*: директор и выше, РОПу право не выдаётся по умолчанию.
+    // «Увольнятор» (задача владельца 24.11) — всё, что на аккаунте уходящего сотрудника, → кому и что
+    // сделать → «Готово», дальше фоном (сделки — только БП 171). Админ/Директор/суперадмин, без матрицы прав.
+    { href: '/dismissal', label: 'Увольнятор', icon: <UserX size={18} />, ok: canUseDismissal(user) },
     { href: '/sales/unsell-deal', label: 'Снять с продажи', icon: <RotateCcw size={18} />, ok: canMore('action.deals.unsell') },
   ].filter(i => i.ok);
   const moreActive = moreItems.some(i => pathname.startsWith(i.href));

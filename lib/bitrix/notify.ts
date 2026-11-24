@@ -121,6 +121,8 @@ export const BOT_FUNCTION_KEYS = [
   'logist_requests',
   // S5 (19.11): логистам очереди — новый запрос / горит SLA / возврат / чат; РОПу — просрочка. Миграция 272, выключено.
   'logist_requests_staff',
+  // «Увольнятор» (24.11): инициатору — итог прогона. Миграция 287, включено (сообщение только тому, кто запустил).
+  'dismissal',
 ] as const;
 export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
 

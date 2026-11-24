@@ -25,6 +25,16 @@ export async function register() {
     startAiWorker();
   }
 
+  // «Увольнятор» (features/dismissal/engine/worker.ts): исполняет прогоны, которые админ/директор запустил
+  // кнопкой «Готово» (и сбор по аккаунту) — работа по явному действию человека, поэтому ДО рубильника
+  // DISABLE_BACKGROUND_JOBS. Локально по умолчанию выключен: dev смотрит в боевую БД и боевой Битрикс и
+  // писать туда сам не должен. DISMISSAL_WORKER=1 — включить в `npm run dev`, =0 — выключить на стенде.
+  const dismissalWorker = process.env.DISMISSAL_WORKER ?? (process.env.NODE_ENV === 'production' ? '1' : '0');
+  if (dismissalWorker === '1') {
+    const { startDismissalWorker } = await import('./features/dismissal/engine/worker');
+    startDismissalWorker();
+  }
+
   // Фоновые джобы НЕ поднимаются при локальной разработке (задача 3045, найдено
   // при подготовке к работе). Почему это важно: `.env.local` в рабочих копиях
   // смотрит в БОЕВЫЕ базы (`YC_SYSTEM_DB=system`, `sa` на Supabase — те же, что
