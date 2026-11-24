@@ -115,7 +115,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
   const trainingsQ = useQuery({ queryKey: ['tasker', 'trainings-upcoming'], queryFn: fetchUpcomingTrainings, staleTime: 60_000, retry: false });
 
   // Архивные темы (миграция 282) в форме не предлагаются.
-  const metrics = useMemo(() => (metricsQ.data?.metrics ?? []).filter(m => m.active !== false), [metricsQ.data]);
+  const metrics = useMemo(() => (metricsQ.data?.metrics ?? []).filter(m => m.active !== false && m.kind !== 'deal'), [metricsQ.data]);
 
   const [managerIds, setManagerIds] = useState<string[]>(initialManagers ?? []);
   const [metricId, setMetricId] = useState('');
@@ -546,7 +546,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
 
 // ── блоки ───────────────────────────────────────────────────────────────────
 
-function Banner({ tone, children }: { tone: 'warn' | 'error' | 'info'; children: React.ReactNode }) {
+export function Banner({ tone, children }: { tone: 'warn' | 'error' | 'info'; children: React.ReactNode }) {
   const color = tone === 'error' ? 'var(--color-negative)' : tone === 'warn' ? 'var(--color-warning, #b45309)' : 'var(--color-accent)';
   const Icon = tone === 'info' ? Info : AlertTriangle;
   return (

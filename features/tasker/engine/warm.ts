@@ -109,6 +109,7 @@ async function warmCurrent(metrics: Map<string, TaskerMetricDef>, st: Stats): Pr
   const rows = (await systemDb().query<Due>(
     `SELECT t.id, t.creator_user_id, t.manager_bitrix_id, t.metric_id, t.created_at FROM tasker_tasks t
       WHERE t.verdict IS NULL AND t.cancelled_at IS NULL AND t.creator_user_id IS NOT NULL
+        AND COALESCE(t.kind, 'practice') <> 'deal' -- задачи по сделке (289) без замера
       ORDER BY t.creator_user_id, t.metric_id, t.created_at`)).rows;
   // Уже свежее — пропускаем.
   const have = await readCurrent(rows.map(r => ({ id: Number(r.id), createdAt: new Date(r.created_at).toISOString() })));
@@ -158,7 +159,7 @@ async function warmForm(metrics: Map<string, TaskerMetricDef>, st: Stats): Promi
   const period = { from: `${today.slice(0, 8)}01`, to: today };
   const rows = (await systemDb().query<{ creator_user_id: string; metric_ids: string[] }>(
     `SELECT creator_user_id, array_agg(DISTINCT metric_id) AS metric_ids FROM tasker_tasks
-      WHERE creator_user_id IS NOT NULL AND created_at > now() - interval '30 days'
+      WHERE creator_user_id IS NOT NULL AND created_at > now() - interval '30 days' AND COALESCE(kind, 'practice') <> 'deal'
       GROUP BY creator_user_id ORDER BY max(created_at) DESC LIMIT 20`)).rows;
   const doneScopes = new Set<string>();
   for (const r of rows) {

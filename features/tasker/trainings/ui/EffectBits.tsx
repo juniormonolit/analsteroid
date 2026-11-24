@@ -8,6 +8,8 @@ import { deltaTone, fmtDelta, fmtMetric, fmtShortDate } from './format';
 // У обучения нет цели, поэтому «Рост, не дотянул» ядра здесь звучит странно — свои подписи.
 const VERDICT_TEXT: Record<TaskerVerdict, string> = {
   achieved: 'рост', improved: 'рост', no_change: 'без изменений', not_enough_data: 'мало данных',
+  // задачи по сделке (289) в эффективность обучений не попадают — подписи для полноты типа
+  deal_won: 'сделка продана', deal_lost: 'сделка проиграна', deal_moved: 'сделка сдвинулась', deal_stuck: 'без движения',
 };
 
 const OUTCOME_CLS: Record<TrainingOutcome, string> = {

@@ -1,7 +1,7 @@
 'use client';
 // Карточка задачи Задачника — одна на доску, неделю и «Сегодня».
 // Строки по важности: тема (метрика) → менеджер → было/цель → срок/слот и сигналы.
-import { AlertTriangle, CalendarClock, CloudOff, Target } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CloudOff, Handshake, Target } from 'lucide-react';
 import { TASKER_VERDICT_LABELS, type TaskerTask } from '../../types';
 import { TASK_KIND_LABELS, VERDICT_CLS, executorOf, fmtD, fmtDT, fmtValue, isOverdue, shortName } from './format';
 
@@ -20,6 +20,8 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
   // Кто ведёт — то же поле и та же роль, что в карточке задачи (executorOf; аудит 23.11, раунд 2).
   // Исполнитель = сам менеджер (старые задачи) — «ведёт сам», без повтора фамилии.
   const executor = executorOf(t);
+  // Задача по сделке (289): вместо темы — сделка, вместо «было → цель» — стадия и дни в ней.
+  const deal = kind === 'deal' ? t.deal ?? null : null;
   return (
     <button
       type="button"
@@ -33,13 +35,15 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
     >
       {overdue && <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-[var(--color-negative)]" />}
       <div className="flex min-w-0 items-start justify-between gap-2">
-        <span className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-semibold leading-snug text-[var(--color-text)]">{t.metricLabel}</span>
+        <span className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-semibold leading-snug text-[var(--color-text)]">
+          {kind === 'deal' ? (deal?.title ? `«${deal.title}»` : `Сделка #${t.dealId ?? '?'}`) : t.metricLabel}
+        </span>
         {t.syncState === 'failed' && <CloudOff size={14} className="mt-0.5 shrink-0 text-[var(--color-negative)]" aria-label="Не ушла в Битрикс" />}
         {t.syncState === 'pending' && <CloudOff size={14} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" aria-label="Отправляется в Битрикс" />}
       </div>
       <div className="flex min-w-0 items-center gap-1.5 text-[var(--color-text-secondary)]">
         <span className="min-w-0 truncate" title={`Менеджер: ${t.manager.name}`}>{shortName(t.manager.name)}</span>
-        {kind && <span className={`shrink-0 rounded px-1.5 py-px text-[11px] font-medium ${kind === 'theory' ? 'bg-[var(--color-warning)]/15 text-[var(--color-warning)]' : 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'}`}>{TASK_KIND_LABELS[kind]}</span>}
+        {kind && <span className={`shrink-0 rounded px-1.5 py-px text-[11px] font-medium ${kind === 'theory' ? 'bg-[var(--color-warning)]/15 text-[var(--color-warning)]' : kind === 'deal' ? 'bg-[var(--color-positive)]/15 text-[var(--color-positive)]' : 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'}`}>{TASK_KIND_LABELS[kind]}</span>}
         {!compact && executor && <>
           <span aria-hidden className="shrink-0 text-[var(--color-text-muted)]">·</span>
           <span className="min-w-0 truncate text-[var(--color-text-muted)]" title={`Ведёт${executor.role ? ` (${executor.role})` : ''}: ${executor.person.name}`}>
@@ -47,7 +51,16 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
           </span>
         </>}
       </div>
-      {!compact && (
+      {!compact && kind === 'deal' && (
+        <div className="flex min-w-0 items-center gap-1 text-[var(--color-text)]" title="Стадия сделки при постановке (дней в стадии)">
+          <Handshake size={12} className="shrink-0 text-[var(--color-text-muted)]" aria-hidden />
+          <span className="truncate">
+            {deal ? `${deal.stage ?? '—'}${deal.daysInStage != null ? ` · ${deal.daysInStage} дн.` : ''}` : `#${t.dealId ?? '?'}`}
+            {t.dealResult && t.dealResult.stageId !== deal?.stageId && <span className="text-[var(--color-text-muted)]"> → {t.dealResult.stage ?? '—'}</span>}
+          </span>
+        </div>
+      )}
+      {!compact && kind !== 'deal' && (
         <div className="flex min-w-0 items-center gap-1 tabular-nums text-[var(--color-text)]" title="Значение при постановке → цель">
           <Target size={12} className="shrink-0 text-[var(--color-text-muted)]" aria-hidden />
           <span className="truncate"><span className="text-[var(--color-text-muted)]">было</span> {fmtValue(t.snapshot.value, t.format)} → <span className="text-[var(--color-text-muted)]">цель</span> {fmtValue(t.target, t.format)}</span>
@@ -63,7 +76,7 @@ export function TaskCard({ task: t, onOpen, draggable, dragging, onDragStart, on
         {t.verdict ? (
           <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${VERDICT_CLS[t.verdict]}`}>{TASKER_VERDICT_LABELS[t.verdict]}</span>
         ) : t.status === 'measuring' ? (
-          <span className="inline-flex items-center gap-1" title="Дата автозамера"><CalendarClock size={12} aria-hidden />замер {fmtD(t.controlDate)}</span>
+          <span className="inline-flex items-center gap-1" title={kind === 'deal' ? 'Проверка сделки к сроку' : 'Дата автозамера'}><CalendarClock size={12} aria-hidden />{kind === 'deal' ? 'проверка' : 'замер'} {fmtD(t.controlDate)}</span>
         ) : (
           <span className={`inline-flex items-center gap-1 ${overdue ? 'font-medium text-[var(--color-negative)]' : ''}`} title="Срок">
             {overdue && <AlertTriangle size={12} aria-hidden />}срок {fmtD(t.deadline)}

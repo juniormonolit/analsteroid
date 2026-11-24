@@ -38,7 +38,7 @@ export function TaskerToday({ tasks, sessions, trainings, meetings = [], onOpen 
       agenda: items.filter(i => i.kind !== 'task' || i.bySlot),
       overdue: tasks.filter(t => isOverdue(t)).sort((a, b) => a.deadline.localeCompare(b.deadline)),
       dueToday: tasks.filter(t => isOpen(t) && !isOverdue(t) && mskDay(t.deadline) === today).sort((a, b) => a.deadline.localeCompare(b.deadline)),
-      measureToday: tasks.filter(t => t.controlDate === today),
+      measureToday: tasks.filter(t => t.controlDate === today && t.kind !== 'deal'),
     };
   }, [today, tasks, sessions, trainings, meetings]);
 

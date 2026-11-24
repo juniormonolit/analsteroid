@@ -1,6 +1,6 @@
 // Фоновая задача Задачника (instrumentation.ts → scheduleTasker, имя для BACKGROUND_JOBS_ALLOW: «tasker»):
 //  - каждую минуту — дослать в Битрикс всё, что не ушло с первого раза (outbox);
-//  - раз в 15 минут — автозамер задач с наступившей контрольной датой;
+//  - раз в 15 минут — автозамер задач с наступившей контрольной датой и проверка задач по сделке к сроку (dealTasks.ts);
 //  - обучения (features/tasker/trainings/engine/measure.ts → trainingsTick): запись из задач, замер эффективности;
 //  - при старте и раз в 15 минут — прогрев снимков («Сейчас» карточек и снимок формы), warm.ts;
 //  - каждую минуту — календарь регулярных собраний: повтор несинхронизированных и перенос «скользящих».
@@ -8,6 +8,7 @@
 import { systemDb } from '@/lib/db/clients';
 import { drainAll } from './bitrix';
 import { measureDue } from './measure';
+import { checkDealsDue } from './dealTasks';
 import { maybeWarm } from './warm';
 import { syncStaleMeetings } from '../meetings/engine/calendar';
 
@@ -29,6 +30,9 @@ export async function taskerTick(): Promise<{ drained: number; measured: number;
       if (Date.now() - lastMeasure >= MEASURE_EVERY_MS) {
         lastMeasure = Date.now();
         m = await measureDue();
+        // Задачи по сделке (289): к сроку — проверка движения сделки.
+        const dl = await checkDealsDue().catch(e => { console.warn('[tasker] проверка сделок:', e instanceof Error ? e.message : e); return { measured: 0, failed: 0 }; });
+        m = { measured: m.measured + dl.measured, failed: m.failed + dl.failed };
       }
       // Обучения (сессия D): запись «из формы задачи» + замер эффективности (свой интервал внутри).
       const { trainingsTick } = await import('../trainings/engine/measure');

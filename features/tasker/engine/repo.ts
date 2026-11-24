@@ -4,7 +4,7 @@ import type { SessionUser } from '@/lib/auth/session';
 import type { SessionScope } from '@/lib/org/sessionScope';
 import { hasPerm } from '@/lib/auth/perms';
 import type {
-  Snapshot, TaskerChecklistItem, TaskerSession, TaskerStatus, TaskerSyncState, TaskerTask, TaskerTaskKind, TaskerTasksQuery, TaskerVerdict,
+  Snapshot, TaskerChecklistItem, TaskerDealSnapshot, TaskerSession, TaskerStatus, TaskerSyncState, TaskerTask, TaskerTaskKind, TaskerTasksQuery, TaskerVerdict,
 } from '../types';
 import { bitrixTaskUrl, directorFor, loadMetricDefs, loadSettings, mskToday, type TaskerMetricDef, type TaskerSettings } from './config';
 import { loadLiveTasks } from './live';
@@ -40,6 +40,8 @@ export interface TaskRow {
   kind: TaskerTaskKind | null; executor_bitrix_id: string | null; executor_name: string | null; auditor_ids: string[] | null;
   done_note: string | null; done_at: Date | null; done_by: string | null;
   calendar_event_id: string | null; calendar_owner_id: string | null;
+  // 289 — задачи по сделке
+  deal_id?: string | null; deal_snapshot?: TaskerDealSnapshot | null; measured_snapshot?: unknown;
 }
 
 /** Кто смотрит (для canChangeStatus): Bitrix ID и право «ставить задачи». */
@@ -135,6 +137,9 @@ export function mapTask(
     sessionId: num(r.session_id),
     trainingEventId: num(r.training_event_id),
     checklist: r.checklist ?? [],
+    dealId: num(r.deal_id),
+    deal: r.kind === 'deal' ? r.deal_snapshot ?? null : null,
+    dealResult: r.kind === 'deal' && r.verdict ? (r.measured_snapshot as TaskerDealSnapshot | null) ?? null : null,
     createdAt: new Date(r.created_at).toISOString(),
   };
 }

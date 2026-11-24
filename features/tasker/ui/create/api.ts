@@ -2,7 +2,7 @@
 // Контракт — features/tasker/types.ts / ai_docs/fresh_docs/TASKER_SPEC.md.
 import type {
   TaskerCreateRequest, TaskerCreateResponse, TaskerCreatorsResponse, TaskerCustomersResponse, TaskerManagerOption, TaskerManagersResponse, TaskerMetricsResponse,
-  TaskerPeriod, TaskerSessionsResponse, TaskerSnapshotResponse, TaskerTemplatesResponse,
+  TaskerDealCreateRequest, TaskerDealPreviewResponse, TaskerPeriod, TaskerSessionsResponse, TaskerSnapshotResponse, TaskerTemplatesResponse,
 } from '@/features/tasker/types';
 
 export class TaskerApiError extends Error {
@@ -81,3 +81,10 @@ export async function fetchUpcomingTrainings(): Promise<TrainingOption[] | null>
     .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
     .slice(0, 30);
 }
+
+// ── Задачи по сделке (миграция 289) ──
+export const fetchDealPreview = (dealIds: number[]) =>
+  call<TaskerDealPreviewResponse>(`/api/tasker/deal-tasks?dealIds=${dealIds.join(',')}`);
+
+export const createDealTasks = (req: TaskerDealCreateRequest) =>
+  call<TaskerCreateResponse>('/api/tasker/deal-tasks', json(req));

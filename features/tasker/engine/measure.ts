@@ -72,6 +72,7 @@ export async function measureDue(limit = 30): Promise<{ measured: number; failed
   const r = await systemDb().query<TaskRow>(
     `SELECT ${TASK_COLUMNS} FROM tasker_tasks t
       WHERE t.verdict IS NULL AND t.cancelled_at IS NULL AND t.control_date <= $1::date
+        AND COALESCE(t.kind, 'practice') <> 'deal' -- задачи по сделке проверяет dealTasks.checkDealsDue
         AND t.measure_attempts < $2 AND (t.measured_at IS NULL OR t.measured_at < now() - interval '1 hour')
       ORDER BY t.control_date, t.id LIMIT $3`,
     [today, MAX_MEASURE_ATTEMPTS, limit]);

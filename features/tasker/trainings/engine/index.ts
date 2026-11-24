@@ -282,7 +282,8 @@ async function cleanMetricIds(raw: unknown, login: string): Promise<string[]> {
   if (ids.length > 10) throw new TrainingError('Не больше 10 показателей');
   if (!ids.length) return [];
   await ensureTopicIds(login, ids);
-  const known = new Set((await loadMetricDefs()).map(m => m.id));
+  // Служебная тема «Сделки» (289) — без замера, в обучения не годится.
+  const known = new Set((await loadMetricDefs()).filter(m => m.kind !== 'deal').map(m => m.id));
   const bad = ids.filter(id => !known.has(id));
   if (bad.length) throw new TrainingError(`Показатель не из списка Задачника: ${bad.join(', ')}`);
   return ids;

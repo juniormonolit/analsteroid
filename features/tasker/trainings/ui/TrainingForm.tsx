@@ -176,7 +176,7 @@ export function TrainingForm({
             Показатели
             {/* Архивные темы (миграция 282) не предлагаются, но уже выбранные остаются видны. */}
             <SearchMultiSelect
-              options={metrics.filter(m => m.kind !== 'product_group' && (m.active !== false || metricIds.includes(m.id))).map(m => ({ value: m.id, label: m.label }))}
+              options={metrics.filter(m => m.kind !== 'product_group' && m.kind !== 'deal' && (m.active !== false || metricIds.includes(m.id))).map(m => ({ value: m.id, label: m.label }))}
               value={metricPart} onChange={ids => setMetricIds([...ids, ...pgPart])}
               allLabel="Не выбраны" unitLabel="показателя" searchPlaceholder="Поиск показателя" ariaLabel="Показатели обучения"
               className="min-h-11 w-full min-w-0" />

@@ -43,11 +43,11 @@ function TaskRow({ t }: { t: TaskerTask }) {
         className="flex min-w-0 flex-col gap-1 rounded-lg border border-[var(--color-border)] px-3 py-2 text-[13px] hover:border-[var(--color-border-strong)]">
         <span className="flex min-w-0 flex-wrap items-center gap-1.5">
           <ClipboardList size={14} className="shrink-0 text-[var(--color-accent)]" aria-hidden />
-          <b className="min-w-0 break-words">{t.metricLabel}</b>
+          <b className="min-w-0 break-words">{t.kind === 'deal' ? `Сделка #${t.dealId ?? '?'}${t.deal?.title ? ` «${t.deal.title}»` : ''}` : t.metricLabel}</b>
           {x.kind && <span className="rounded bg-[var(--color-bg-hover)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-secondary)]">{TASK_KIND_LABELS[x.kind]}</span>}
           {t.verdict ? (
             <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${VERDICT_CLS[t.verdict]}`}>
-              {t.verdict === 'achieved' || t.verdict === 'improved' ? '+ ' : t.verdict === 'no_change' ? '− ' : ''}{TASKER_VERDICT_LABELS[t.verdict]}
+              {t.verdict === 'achieved' || t.verdict === 'improved' || t.verdict === 'deal_won' || t.verdict === 'deal_moved' ? '+ ' : t.verdict === 'no_change' || t.verdict === 'deal_stuck' || t.verdict === 'deal_lost' ? '− ' : ''}{TASKER_VERDICT_LABELS[t.verdict]}
             </span>
           ) : (
             <span className={`rounded px-1.5 py-0.5 text-[11px] ${isOverdue(t) ? 'bg-[var(--color-negative)]/10 text-[var(--color-negative)]' : 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]'}`}>
@@ -58,8 +58,12 @@ function TaskRow({ t }: { t: TaskerTask }) {
         <span className="flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-[var(--color-text-muted)]">
           <span>Исполнитель: {shortName((x.assignee ?? t.rop ?? t.creator).name)}</span>
           <span>Срок {fmtD(t.deadline)}</span>
-          {before && <span>Было {before}{result ? ` → стало ${result}` : ''}</span>}
-          {!result && t.verdict === null && <span>Замер {fmtD(t.controlDate)}</span>}
+          {t.kind === 'deal'
+            ? t.deal && <span>{t.deal.stage ?? '—'}{t.deal.daysInStage != null ? ` · ${t.deal.daysInStage} дн.` : ''}{t.dealResult && t.dealResult.stageId !== t.deal.stageId ? ` → ${t.dealResult.stage ?? '—'}` : ''}</span>
+            : <>
+              {before && <span>Было {before}{result ? ` → стало ${result}` : ''}</span>}
+              {!result && t.verdict === null && <span>Замер {fmtD(t.controlDate)}</span>}
+            </>}
         </span>
         {x.doneNote && <span className="line-clamp-2 break-words text-[12px] text-[var(--color-text-secondary)]">Что сделано: {x.doneNote}</span>}
       </Link>

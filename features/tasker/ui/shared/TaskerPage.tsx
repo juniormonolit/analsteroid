@@ -94,7 +94,7 @@ export function TaskerPage({ canAssign }: { canAssign: boolean }) {
       return true;
     } catch (e) {
       qc.setQueryData(queryKey, prev);
-      setToast(`Не удалось сменить статус задачи «${t.metricLabel}» (${t.manager.name}): ${e instanceof Error ? e.message : String(e)}`);
+      setToast(`Не удалось сменить статус задачи «${t.kind === 'deal' ? `Сделка #${t.dealId ?? '?'}` : t.metricLabel}» (${t.manager.name}): ${e instanceof Error ? e.message : String(e)}`);
       return false;
     } finally {
       setBusy(false);

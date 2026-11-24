@@ -5,7 +5,7 @@
 // ── Справочники ─────────────────────────────────────────────────────────────
 
 /** Группа темы — для группировки/фильтра на доске. */
-export type TaskerMetricGroup = 'conversion' | 'check' | 'activity' | 'repeat' | 'product';
+export type TaskerMetricGroup = 'conversion' | 'check' | 'activity' | 'repeat' | 'product' | 'deal';
 
 export const TASKER_METRIC_GROUP_LABELS: Record<TaskerMetricGroup, string> = {
   conversion: 'Конверсии',
@@ -13,6 +13,7 @@ export const TASKER_METRIC_GROUP_LABELS: Record<TaskerMetricGroup, string> = {
   activity: 'Активность',
   repeat: 'Повторка',
   product: 'Товарные группы',
+  deal: 'Сделки',
 };
 
 /** Метрика из белого списка «прокачиваемых» (таблица tasker_metrics). */
@@ -38,8 +39,13 @@ export interface TaskerMetric {
   active?: boolean;
 }
 
-/** Тема задачи (миграция 282): «metric» — показатель каталога отчётов, «product_group» — товарная группа. */
-export type TaskerTopicKind = 'metric' | 'product_group';
+/** Тема задачи (миграция 282): «metric» — показатель каталога отчётов, «product_group» — товарная группа.
+ *  «deal» (миграция 289) — служебная тема задач по сделке (id 'deal'): только шаблоны текста, без замера,
+ *  в формах показателей не предлагается. */
+export type TaskerTopicKind = 'metric' | 'product_group' | 'deal';
+
+/** id служебной темы задач по сделке (tasker_metrics, миграция 289). */
+export const TASKER_DEAL_TOPIC_ID = 'deal';
 export type TaskerPgMeasure = 'amount' | 'share';
 
 /** Шаблон рекомендаций по метрике (tasker_templates). */
@@ -103,22 +109,56 @@ export const TASKER_STATUS_LABELS: Record<TaskerStatus, string> = {
  *  'done' — только с doneNote («Что сделано»); из «Завершена»/«На замере» без вердикта можно вернуть назад. */
 export type TaskerPatchableStatus = 'new' | 'in_progress' | 'done';
 
-/** Тип задачи (правка 23.11): теория — исполнитель тренер (tasker_settings.trainer), практика — РОП/постановщик. */
-export type TaskerTaskKind = 'theory' | 'practice';
+/** Тип задачи (правка 23.11): теория — исполнитель тренер (tasker_settings.trainer), практика — РОП/постановщик.
+ *  deal (миграция 289) — задача по конкретной сделке из дриллдауна: исполнитель — менеджер сделки. */
+export type TaskerTaskKind = 'theory' | 'practice' | 'deal';
 
 export const TASKER_KIND_LABELS: Record<TaskerTaskKind, string> = {
   theory: 'Теория',
   practice: 'Практика',
+  deal: 'Сделка',
 };
 
-export type TaskerVerdict = 'achieved' | 'improved' | 'no_change' | 'not_enough_data';
+/** achieved…not_enough_data — замер метрики; deal_* — автопроверка задачи по сделке к сроку. */
+export type TaskerVerdict = 'achieved' | 'improved' | 'no_change' | 'not_enough_data'
+  | 'deal_won' | 'deal_lost' | 'deal_moved' | 'deal_stuck';
 
 export const TASKER_VERDICT_LABELS: Record<TaskerVerdict, string> = {
   achieved: 'Достигнуто',
   improved: 'Рост, не дотянул',
   no_change: 'Без изменений',
   not_enough_data: 'Мало данных',
+  deal_won: 'Сделка продана',
+  deal_lost: 'Сделка проиграна',
+  deal_moved: 'Сделка сдвинулась',
+  deal_stuck: 'Без движения',
 };
+
+/** Снимок сделки (задачи kind = deal): при постановке — tasker_tasks.deal_snapshot, на проверке — measured_snapshot. */
+export interface TaskerDealSnapshot {
+  dealId: number;
+  title: string | null;
+  /** Клиент (компания / контакт) — из кэша имён Битрикса; null — не нашли. */
+  client: string | null;
+  amount: number | null;
+  funnel: string | null;
+  stageId: string | null;
+  stage: string | null;
+  /** sa.stages.event_type текущей стадии: created/called/reserved/confirmed/sold/shipped/lost. */
+  stageType: string | null;
+  /** С какого момента сделка в этой стадии (ISO): последний переход по deal_events; нет истории — дата изменения сделки. */
+  stageSince: string | null;
+  stageSinceSource: 'history' | 'updated' | null;
+  daysInStage: number | null;
+  soldAt: string | null;
+  lostAt: string | null;
+  managerId: number | null;
+  managerName: string | null;
+  /** Ссылка на сделку в Битриксе. */
+  url: string;
+  /** ISO — когда снят снимок. */
+  at: string;
+}
 
 /** Состояние синхронизации с Битриксом (outbox). */
 export type TaskerSyncState = 'pending' | 'synced' | 'failed';
@@ -215,6 +255,11 @@ export interface TaskerTask {
   sessionId: number | null;
   trainingEventId: number | null;
   checklist: TaskerChecklistItem[];
+
+  /** Задача по сделке (kind = deal): сделка и снимок при постановке; результат проверки — dealResult. */
+  dealId?: number | null;
+  deal?: TaskerDealSnapshot | null;
+  dealResult?: TaskerDealSnapshot | null;
 
   createdAt: string;
 }
@@ -326,6 +371,8 @@ export interface TaskerCreateRequest {
 }
 
 export type TaskerWarningCode =
+  | 'duplicate_deal'
+  | 'deal_not_found'
   | 'limit_open_tasks'
   | 'duplicate_metric'
   | 'not_enough_data'
@@ -342,6 +389,24 @@ export interface TaskerWarning {
 export interface TaskerCreateResponse {
   created: TaskerTask[];
   warnings: TaskerWarning[];
+}
+
+/** POST /api/tasker/deal-tasks — задачи по сделкам из дриллдауна (по задаче на сделку). Право action.tasker.assign,
+ *  менеджер сделки — в зоне постановщика. Лимит «≤ 3 открытых» не действует; дубль — вторая открытая задача по сделке. */
+export interface TaskerDealCreateRequest {
+  dealIds: number[];
+  body: string;
+  templateId?: number | null;
+  /** ISO datetime или YYYY-MM-DD (тогда 18:00 МСК). К сроку — автопроверка сделки. */
+  deadline: string;
+  creatorBitrixId?: number | null;
+}
+
+/** GET /api/tasker/deal-tasks?dealIds=1,2 — снимки сделок для формы + открытые задачи по ним. */
+export interface TaskerDealPreviewResponse {
+  deals: (TaskerDealSnapshot & { allowed: boolean; openTaskId: number | null })[];
+  /** Сделки, которых нет в sa.deals. */
+  missing: number[];
 }
 
 /** PATCH /api/tasker/tasks/:id */

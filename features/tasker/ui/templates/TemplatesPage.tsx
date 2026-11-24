@@ -7,7 +7,7 @@
 // Удаления темы нет — архив; старые задачи с архивной темой живут и замеряются.
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, BarChart3, ImagePlus, Link2, Loader2, Package, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, BarChart3, Handshake, ImagePlus, Link2, Loader2, Package, Pencil, Plus, Trash2 } from 'lucide-react';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import {
@@ -301,7 +301,9 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
 }
 
 const KindIcon = ({ t, className }: { t: TaskerMetric; className?: string }) =>
-  t.kind === 'product_group' ? <Package size={14} className={className} aria-hidden /> : <BarChart3 size={14} className={className} aria-hidden />;
+  t.kind === 'product_group' ? <Package size={14} className={className} aria-hidden />
+    : t.kind === 'deal' ? <Handshake size={14} className={className} aria-hidden />
+    : <BarChart3 size={14} className={className} aria-hidden />;
 
 // ── Страница ────────────────────────────────────────────────────────────────
 
@@ -401,7 +403,7 @@ export function TemplatesPage() {
 
   const topicOptions = topics.map(m => ({
     value: m.id, label: m.active === false ? `${m.label} (архив)` : m.label,
-    hint: `${m.kind === 'product_group' ? 'Товарная группа' : 'Показатель'} · ${counts.get(m.id) ?? 0} вар.`,
+    hint: `${m.kind === 'product_group' ? 'Товарная группа' : m.kind === 'deal' ? 'Задачи по сделке' : 'Показатель'} · ${counts.get(m.id) ?? 0} вар.`,
   }));
   const archivedTopicsCount = allTopics.filter(t => t.active === false).length;
   const loadErr = (topicsQ.error ?? q.error) as Error | null;
@@ -486,14 +488,18 @@ export function TemplatesPage() {
                       </h2>
                       {metric && (
                         <span className="text-xs text-[var(--color-text-muted)]">
-                          {metric.kind === 'product_group'
-                            ? `Товарная группа · ${metric.pgMeasure === 'share' ? 'доля в продажах' : 'сумма продаж'}`
-                            : TASKER_METRIC_GROUP_LABELS[metric.group]}
-                          {' · '}{metric.higherIsBetter ? 'больше — лучше' : 'меньше — лучше'}
+                          {metric.kind === 'deal'
+                            ? 'Тексты задач по сделке (кнопка в списке сделок отчёта) · без замера — к сроку проверяется движение сделки'
+                            : <>
+                              {metric.kind === 'product_group'
+                                ? `Товарная группа · ${metric.pgMeasure === 'share' ? 'доля в продажах' : 'сумма продаж'}`
+                                : TASKER_METRIC_GROUP_LABELS[metric.group]}
+                              {' · '}{metric.higherIsBetter ? 'больше — лучше' : 'меньше — лучше'}
+                            </>}
                         </span>
                       )}
                     </div>
-                    {metric && (
+                    {metric && metric.kind !== 'deal' && (
                       <div className="flex shrink-0 items-center gap-0.5">
                         {metric.active !== false && (
                           <>

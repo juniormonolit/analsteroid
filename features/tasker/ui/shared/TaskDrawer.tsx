@@ -12,6 +12,7 @@ import {
   TASKER_METRIC_GROUP_LABELS, TASKER_VERDICT_LABELS,
   type Snapshot, type TaskerSnapshotResponse, type TaskerTask,
 } from '../../types';
+import { DealSnapshotCard } from '../create/DealTaskDrawer';
 import { BOARD_COLUMN_LABELS, VERDICT_CLS, boardColumn, cleanName, executorOf, fmtD, fmtDT, fmtValue, isOverdue, moveTargets, mskDay, statusLockReason, TASK_KIND_LABELS, todayMsk, type MoveTarget } from './format';
 import { ManagerTrainingHistory } from '@/features/tasker/trainings/ui/ManagerTrainingHistory';
 
@@ -22,7 +23,8 @@ const MIN_DONE_NOTE = 10;
 function useLiveValue(t: TaskerTask, mock: boolean) {
   const from = mskDay(t.createdAt);
   const to = todayMsk();
-  const enabled = t.status !== 'result' && from <= to;
+  // Задача по сделке (289) без метрики — «Сейчас» не считаем.
+  const enabled = t.kind !== 'deal' && t.status !== 'result' && from <= to;
   // Прогретое значение из ответа /tasks (фоновая задача) — показываем сразу, без запроса.
   const warm = t.current && t.current.from === from && t.current.to === to ? t.current : null;
   return useQuery<Snapshot | null>({
@@ -88,7 +90,7 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
   };
 
   return (
-    <Drawer open onOpenChange={o => { if (!o) onClose(); }} title={`${t.metricLabel} · ${t.manager.name}`} desktopWidth="sm:max-w-lg">
+    <Drawer open onOpenChange={o => { if (!o) onClose(); }} title={kind === 'deal' ? `Сделка #${t.dealId ?? '?'} · ${t.manager.name}` : `${t.metricLabel} · ${t.manager.name}`} desktopWidth="sm:max-w-lg">
       <div className="flex min-w-0 flex-col gap-5 text-sm">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
           <span className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 font-medium text-[var(--color-accent)]">{BOARD_COLUMN_LABELS[boardColumn(t)]}</span>
@@ -105,8 +107,21 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
           </div>
         )}
 
+        {kind === 'deal' && (
+          <section aria-label="Сделка" className="flex min-w-0 flex-col gap-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Сделка</h3>
+            {t.deal ? <DealSnapshotCard s={t.deal} note={<span className="text-[11px] text-[var(--color-text-muted)]">при постановке, {fmtD(t.deal.at)}</span>} />
+              : <p className="text-[var(--color-text-muted)]">Снимка сделки нет (#{t.dealId ?? '?'})</p>}
+            {t.dealResult ? (
+              <DealSnapshotCard s={t.dealResult} note={<span className="text-[11px] text-[var(--color-text-muted)]">на проверке, {fmtD(t.dealResult.at)}</span>} />
+            ) : (
+              <p className="text-xs text-[var(--color-text-muted)]">К сроку ({fmtD(t.deadline)}) Задачник сам проверит сделку: сменила стадию, продана, проиграна или без движения.</p>
+            )}
+          </section>
+        )}
+
         {/* Снимок → текущее → вердикт */}
-        <section aria-label="Цифры" className="min-w-0">
+        {kind !== 'deal' && <section aria-label="Цифры" className="min-w-0">
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
             Цифры {t.higherIsBetter ? '(больше — лучше)' : '(меньше — лучше)'}
           </h3>
@@ -158,7 +173,7 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
             <Row label="Своё среднее за 6 мес.">{fmtValue(t.snapshot.ownAvg6m, t.format)}</Row>
             {!t.snapshot.enoughData && <Row label="Объём при постановке">мало данных{t.snapshot.denominator != null ? ` (${t.snapshot.denominator})` : ''}</Row>}
           </div>
-        </section>
+        </section>}
 
         <section aria-label="Кто и когда" className="min-w-0 divide-y divide-[var(--color-border)]">
           <Row label="Менеджер">{cleanName(t.manager.name)}</Row>
@@ -168,7 +183,7 @@ export function TaskDrawer({ task: t, mock, onClose, onStatus, busy }: {
               {executor.role === 'менеджер' ? `${cleanName(executor.person.name)} (сам)` : cleanName(executor.person.name)}
             </Row>
           )}
-          {t.rop && executor?.role !== 'РОП' && <Row label="РОП">{cleanName(t.rop.name)}</Row>}
+          {t.rop && executor?.role !== 'РОП' && <Row label={kind === 'deal' ? 'Соисполнитель · РОП' : 'РОП'}>{cleanName(t.rop.name)}</Row>}
           {t.director && <Row label="Наблюдатель">{cleanName(t.director.name)}</Row>}
           <Row label="Поставил">{cleanName(t.creator.name)}</Row>
           <Row label="Срок"><span className={overdue ? 'font-medium text-[var(--color-negative)]' : ''}>{fmtDT(t.deadline)}</span></Row>

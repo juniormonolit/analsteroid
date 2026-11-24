@@ -122,7 +122,8 @@ export function TaskerWeek({ monday, tasks, sessions, trainings, meetings = [], 
         const items = byDay.get(d) ?? [];
         const isToday = d === today;
         // Замеры дня — как в «Сегодня» (аудит 23.11, п.36): мелкими чипами внизу, клик — карточка задачи.
-        const measures = tasks.filter(t => t.controlDate === d && !t.verdict);
+        // Задача по сделке проверяется в день срока — уже стоит в дне как задача, второй плашкой не дублируем.
+        const measures = tasks.filter(t => t.controlDate === d && !t.verdict && t.kind !== 'deal');
         return (
           <section key={d} aria-label={fmtDayLong(d)}
             className={`flex min-w-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2 ${isToday ? 'ring-2 ring-[var(--color-accent)]' : ''}`}>

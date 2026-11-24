@@ -219,6 +219,7 @@ export async function resolveTopic(id: string, mode: 'virtual' | { ensureBy: str
   const found = defs.find(x => x.id === id);
   const pg = PG_TOPIC_RE.exec(id);
   if (found && (found.active || !pg)) {
+    if (found.kind === 'deal') throw new TaskerError('Тема «Сделки» — только для задач по сделке (кнопка в списке сделок отчёта)');
     if (!found.active) throw new TaskerError('Тема в архиве — выберите другую');
     return found;
   }

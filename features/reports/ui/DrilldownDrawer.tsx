@@ -1,7 +1,7 @@
 'use client';
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, ArrowLeft, Copy, Check, MessageCircle, ChevronDown, ChevronRight } from 'lucide-react';
+import { X, ArrowLeft, Copy, Check, MessageCircle, ChevronDown, ChevronRight, ListPlus } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import type { DateRange } from '@/lib/period';
@@ -29,6 +29,10 @@ import { computeCalculated } from '@/features/reports/engine/calculated';
 import { ReportTable, type RowDeltas } from './ReportTable';
 import { DealCard } from './DealCard';
 import { DealChatPanel } from './DealChatPanel';
+import { useCanAssignTasks } from '@/features/tasker/ui/create/useCanAssignTasks';
+import { fetchAssignableManagers } from '@/features/tasker/ui/create/api';
+// Форма «Задача по сделке» (Задачник, миграция 289) — лениво: нужна только тем, у кого есть право.
+const DealTaskDrawer = dynamic(() => import('@/features/tasker/ui/create/DealTaskDrawer').then(m => m.DealTaskDrawer), { ssr: false });
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
@@ -276,9 +280,11 @@ type ChatStatusMap = Record<number, { status: 'sent' | 'replied'; unread: boolea
 // (.row-reveal-item — на таче видны всегда, правило CLAUDE.md №5), НО кнопка
 // сообщения с существующим тредом видна всегда: зелёная — отправлено, красная —
 // есть непрочитанный ответ менеджера.
-function DealNameCell({ deal, chat }: {
+function DealNameCell({ deal, chat, onTask }: {
   deal: Deal;
   chat: { map: ChatStatusMap; onOpen: (d: Deal) => void } | null;
+  /** «Поставить задачу по сделке» (Задачник): есть право action.tasker.assign и менеджер сделки в зоне. */
+  onTask?: (d: Deal) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const url = `https://td.monolit-crm.ru/crm/deal/details/${deal.deal_id}/`;
@@ -311,6 +317,15 @@ function DealNameCell({ deal, chat }: {
           title={st?.unread ? 'Есть ответ менеджера' : st ? 'Сообщение отправлено — открыть переписку' : 'Написать менеджеру через бота'}
         >
           <MessageCircle size={13} fill={st ? 'currentColor' : 'none'} />
+        </button>
+      )}
+      {onTask && (
+        <button
+          onClick={e => { e.stopPropagation(); onTask(deal); }}
+          className="row-reveal-item tap-target shrink-0 p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors"
+          title="Поставить задачу по сделке (Задачник)" aria-label="Поставить задачу по сделке"
+        >
+          <ListPlus size={13} />
         </button>
       )}
     </span>
@@ -400,6 +415,15 @@ export function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead
   });
   const chatStatuses: ChatStatusMap | null = chatData?.statuses ?? null;
   const [chatDeal, setChatDeal] = useState<Deal | null>(null);
+  // Задача по сделке (Задачник, 289): право + менеджер сделки в зоне (список /api/tasker/managers — тот же,
+  // что у формы задачи; сервер проверяет canSeeManager ещё раз). На анонимных страницах (showChat=false) — нет.
+  const canAssign = useCanAssignTasks(showChat);
+  const { data: assignable } = useQuery({
+    queryKey: ['tasker', 'managers'], queryFn: fetchAssignableManagers, enabled: canAssign, staleTime: 5 * 60_000, retry: false,
+  });
+  const assignableIds = useMemo(() => new Set((assignable ?? []).map(m => String(m.id))), [assignable]);
+  const [taskDealIds, setTaskDealIds] = useState<number[] | null>(null);
+  const onTask = canAssign && assignableIds.size ? (d: Deal) => setTaskDealIds([d.deal_id]) : undefined;
   // «Масштаб таблиц» ЛК (бриф 09.07, п.3): базовые 7px/12px (text-xs) масштабируются
   // ОБА на tableScale — тот же приём, что basePy/fontSize в ReportTable.tsx (line-height
   // text-xs — унитарный множитель, значит масштабируется вместе с fontSize сам), поэтому
@@ -456,7 +480,8 @@ export function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead
                 <td key={c.key}
                     className={`px-3 py-[var(--deals-row-py)] whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.kind !== 'text' ? 'text-[var(--color-text-muted)]' : ''} ${c.key === 'amount' ? 'font-medium !text-[var(--color-num,#000)]' : ''}`}>
                   {c.key === 'deal_name'
-                    ? <DealNameCell deal={deal} chat={chatStatuses !== null ? { map: chatStatuses, onOpen: setChatDeal } : null} />
+                    ? <DealNameCell deal={deal} chat={chatStatuses !== null ? { map: chatStatuses, onOpen: setChatDeal } : null}
+                        onTask={onTask && assignableIds.has(String(deal.manager_id)) ? onTask : undefined} />
                     : dealCell(deal, c.key)}
                 </td>
               ))}
@@ -474,6 +499,7 @@ export function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead
           onClose={() => setChatDeal(null)}
         />
       )}
+      {taskDealIds && <DealTaskDrawer open dealIds={taskDealIds} onClose={() => setTaskDealIds(null)} />}
     </div>
   );
 }

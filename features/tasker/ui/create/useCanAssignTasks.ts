@@ -5,7 +5,8 @@ import type { SessionUser } from '@/lib/auth/session';
 
 /** Есть ли у текущего пользователя право ставить задачи (action.tasker.assign).
  *  Тот же queryKey ['auth-session'], что у SalesReportPage/SaveReportModal — без второго запроса. */
-export function useCanAssignTasks(): boolean {
+/** enabled=false — не спрашивать сессию вовсе (анонимные страницы, например /today) → false. */
+export function useCanAssignTasks(enabled = true): boolean {
   const { data } = useQuery<SessionUser | null>({
     queryKey: ['auth-session'],
     queryFn: async () => {
@@ -15,6 +16,7 @@ export function useCanAssignTasks(): boolean {
       return body.user ?? null;
     },
     staleTime: 60_000,
+    enabled,
   });
-  return hasPerm(data ?? null, 'action.tasker.assign');
+  return enabled && hasPerm(data ?? null, 'action.tasker.assign');
 }

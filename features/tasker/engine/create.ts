@@ -105,6 +105,7 @@ async function openStats(managerIds: string[], metricId: string, kind: TaskerTas
     `SELECT t.manager_bitrix_id, count(*) AS open,
             count(*) FILTER (WHERE t.metric_id = $2 AND COALESCE(t.kind, 'practice') = $3) AS same
        FROM tasker_tasks t WHERE t.manager_bitrix_id = ANY($1::text[]) AND ${OPEN_TASK_SQL}
+        AND COALESCE(t.kind, 'practice') <> 'deal' -- задачи по сделке в лимит не входят (289)
       GROUP BY t.manager_bitrix_id`, [managerIds, metricId, kind]);
   return new Map(r.rows.map(x => [x.manager_bitrix_id, { open: Number(x.open), sameMetric: Number(x.same) }]));
 }

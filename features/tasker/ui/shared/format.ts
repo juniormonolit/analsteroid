@@ -69,6 +69,10 @@ export const VERDICT_CLS: Record<TaskerVerdict, string> = {
   improved: 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]',
   no_change: 'bg-[var(--color-negative-soft)] text-[var(--color-negative)]',
   not_enough_data: 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]',
+  deal_won: 'bg-[var(--color-positive)]/15 text-[var(--color-positive)]',
+  deal_moved: 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]',
+  deal_lost: 'bg-[var(--color-negative-soft)] text-[var(--color-negative)]',
+  deal_stuck: 'bg-[var(--color-negative-soft)] text-[var(--color-negative)]',
 };
 
 
@@ -86,7 +90,8 @@ export const BOARD_COLUMN_LABELS: Record<BoardColumn, string> = {
 export const STATUS_COLOR: Record<BoardColumn, string> = {
   new: '#4a86e8', in_progress: '#ff9900', done: '#6aa84f', measuring: '#45818e', grown: '#34a853', not_grown: '#ea4335',
 };
-export const isGrown = (v: TaskerVerdict | null) => v === 'achieved' || v === 'improved';
+/** «Вырос»: метрика — достигнуто/рост; сделка — продана или сдвинулась по стадиям. Проиграна/без движения — «Не вырос». */
+export const isGrown = (v: TaskerVerdict | null) => v === 'achieved' || v === 'improved' || v === 'deal_won' || v === 'deal_moved';
 
 export function boardColumn(t: TaskerTask): BoardColumn {
   const s = t.status as string;
