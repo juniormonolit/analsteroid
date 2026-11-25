@@ -47,9 +47,12 @@ export interface IdleWatchSettings {
   mirrorBitrixUserId: string | null;
 }
 
-export type SignalKind = 'call' | 'deal' | 'deal_new' | 'task' | 'mono' | 'kanban';
+// task_touch — «слабый» сигнал: изменение задачи, засчитанное ответственному без автора (changed_at, события
+// payload_raw). Сбрасывает тишину, но сам по себе не делает человека «в работе»: прогон 25.11 показал пачки
+// задач робота в 09:00 (ONTASKADD) и пакетные ONTASKUPDATE в :52 — пустые слоты выглядели «в работе».
+export type SignalKind = 'call' | 'deal' | 'deal_new' | 'task' | 'task_touch' | 'mono' | 'kanban';
 const KIND_LABEL: Record<SignalKind, string> = {
-  call: 'звонок', deal: 'движение сделки', deal_new: 'новая сделка', task: 'задача', mono: 'Монолитика', kanban: 'канбан повторки',
+  call: 'звонок', deal: 'движение сделки', deal_new: 'новая сделка', task: 'задача', task_touch: 'изменение задачи', mono: 'Монолитика', kanban: 'канбан повторки',
 };
 
 interface Signal { at: number; kind: SignalKind }
@@ -218,13 +221,17 @@ export async function fetchSignals(
         `SELECT mid, date_trunc('minute', at) AS at FROM (
            SELECT created_by::text AS mid, created_at AS at FROM sa.bitrix_task_current WHERE created_at >= $2 AND created_at < $3
            UNION ALL
-           SELECT responsible_id::text, changed_at FROM sa.bitrix_task_current WHERE changed_at >= $2 AND changed_at < $3
-           UNION ALL
            SELECT closed_by::text, closed_at FROM sa.bitrix_task_current WHERE closed_at >= $2 AND closed_at < $3
          ) x WHERE mid = ANY($1) GROUP BY 1, 2`, p),
     },
     {
-      name: 'sa.bitrix_task_payload_raw', kind: 'task',
+      name: 'sa.bitrix_task_current/changed', kind: 'task_touch',
+      run: () => an.query(
+        `SELECT responsible_id::text AS mid, date_trunc('minute', changed_at) AS at FROM sa.bitrix_task_current
+          WHERE changed_at >= $2 AND changed_at < $3 AND responsible_id::text = ANY($1) GROUP BY 1, 2`, p),
+    },
+    {
+      name: 'sa.bitrix_task_payload_raw', kind: 'task_touch',
       run: () => an.query(
         `SELECT t.responsible_id::text AS mid, date_trunc('minute', r.received_at) AS at
            FROM sa.bitrix_task_payload_raw r JOIN sa.bitrix_task_current t ON t.task_id = r.task_id
@@ -283,11 +290,12 @@ async function fetchFrontiers(): Promise<{ calls: number | null; tasks: number |
 interface Silence { silenceFrom: number; lastSignal: Signal | null; minutes: number }
 
 /**
- * Тишина менеджера на момент evalAt: null — не «в работе» (сигналов за день до evalAt нет).
+ * Тишина менеджера на момент evalAt: null — не «в работе» (до evalAt нет ни одного своего сигнала;
+ * task_touch не в счёт).
  * Отсчёт — от последнего сигнала ≤ evalAt, но не раньше начала окна.
  */
 export function silenceAt(signals: Signal[] | undefined, evalAt: number, windowStart: number): Silence | null {
-  if (!signals?.length || signals[0].at > evalAt) return null;
+  if (!signals?.some((s) => s.at <= evalAt && s.kind !== 'task_touch')) return null; // не «в работе»
   let last: Signal = signals[0];
   for (const s of signals) { if (s.at > evalAt) break; last = s; }
   const from = Math.max(last.at, windowStart);
@@ -503,7 +511,7 @@ export async function simulateIdleWatchDay(date: string): Promise<IdleWatchSimul
 
   for (const m of managers) {
     const signals = byManager.get(m.id);
-    if (!signals?.some((s) => s.at < windowEnd)) continue;
+    if (!signals?.some((s) => s.at < windowEnd && s.kind !== 'task_touch')) continue;
     result.inWork++;
     const fired = new Set<string>(); // `${silenceFrom}:${ruleId}`
     const silences = new Map<number, number>(); // silenceFrom → max minutes
