@@ -41,7 +41,6 @@ export function mockTaskDetails(card: BigTaskCard): BigTaskDetails {
         { label: 'Форма оплаты', value: 'Нал' },
         { label: 'Дата поставки', value: new Date(Date.now() + 86_400_000).toLocaleDateString('ru-RU'), warn: true },
         { label: 'Есть ли цена дешевле', value: 'Да, есть цена дешевле' },
-        { label: 'Источник', value: 'https://avito.ru/moskva/remont_i_stroitelstvo/gazobeton_123' },
       ],
       managerComment: 'есть дешевле у Бонолита, 1 сорт. Клиент просит доставку в субботу',
       taskProducts: [

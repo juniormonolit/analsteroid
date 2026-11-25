@@ -77,7 +77,7 @@ export function TaskBriefSection({ brief, dealProducts, dealAmount, loading, err
           {brief.fields.length > 0 && (
             <dl className="grid min-w-0 grid-cols-1 gap-x-4 gap-y-1.5 sm:grid-cols-2">
               {brief.fields.map(f => (
-                <div key={f.label} className={`min-w-0 ${f.label === 'Адрес' || f.label === 'Источник' ? 'sm:col-span-2' : ''}`}>
+                <div key={f.label} className={`min-w-0 ${f.label === 'Адрес' ? 'sm:col-span-2' : ''}`}>
                   <dt className="text-[11.5px] text-[var(--color-text-muted)]">{f.label}</dt>
                   <dd className={`min-w-0 break-words ${f.warn ? 'font-semibold text-[var(--color-warning)]' : ''}`}>
                     {/^https?:\/\//.test(f.value)
@@ -117,7 +117,7 @@ export function TaskBriefSection({ brief, dealProducts, dealAmount, loading, err
                 )}
               </div>
               <div className="scroll-x rounded-md border border-[var(--color-border)]">
-                <table className="w-full min-w-[460px] border-collapse text-[12.5px]">
+                <table className="w-full min-w-[420px] border-collapse text-[12.5px]">
                   <thead>
                     <tr className="bg-[var(--color-bg-hover)] text-left text-[11.5px] text-[var(--color-text-muted)]">
                       <th className="sticky left-0 bg-[var(--color-bg-hover)] px-2 py-1.5 font-medium">Товар</th>

@@ -7,10 +7,10 @@
 // Вкладки (собрание РОПов 18.11, заменили три колонки «всё на одном экране» — «глаза разбегаются»):
 // Работа — сделка, товары, ИИ-оценка | действия сверху, чат снизу (телефон — действия и чат первыми);
 // Звонки — все разговоры клиента расшифровкой (CallsTab); Задачи по сделке — с их чатом; Клиент — ClientSummaryPanel.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, ChevronDown, Clock, Copy, ExternalLink, Link2, Phone } from 'lucide-react';
-import { Modal } from '@/components/ui/Modal';
+import { Check, ChevronDown, Clock, Copy, ExternalLink, Link2, Phone, X } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import { LogistRequestButton } from '@/features/logist-kanban/form/LogistRequestForm';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
@@ -29,6 +29,7 @@ import type { BigPerson, BigRelatedTask, BigTaskCard } from '../engine/types';
 import type { BigChatMessage, BigTaskDetails } from '../engine/taskDetails';
 import { CallsTab } from './CallsTab';
 import { StageBadge } from './StageHistory';
+import { BigTaskCardView } from './BigTaskCardView';
 import { STATE_META, cardAmount, fmtDT, money } from './format';
 import { TaskChat } from './TaskDrawerChat';
 import { BbText } from './BbText';
@@ -53,7 +54,7 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
   const qc = useQueryClient();
   const [fullClient, setFullClient] = useState<ClientCardTab | null>(null);
   const [pane, setPane] = useState<Pane>('work');
-  // Телефон: внутри «Работы» — «Чат | Задача» (Fable 25.11), по умолчанию чат.
+  // Телефон и планшет: внутри «Работы» — «Чат | Задача» (Fable 25.11), по умолчанию чат; две колонки — от 1024px.
   const [seg, setSeg] = useState<'chat' | 'task'>('chat');
   const [inject, setInject] = useState<{ text: string; key: number } | null>(null);
   const details = useQuery<BigTaskDetails>({
@@ -96,12 +97,9 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
 
   return (
     <>
-    {/* Полная карточка клиента — свой оверлей; Radix-модалка блокирует клики вне себя, поэтому на это время прячем её. */}
-    <Modal open={fullClient === null} onOpenChange={o => { if (!o && fullClient === null) onClose(); }}
-      desktopWidth="sm:max-w-[1400px] sm:w-[96vw]"
-      contentClassName="flex h-[94dvh] max-h-[94dvh] flex-col overflow-hidden sm:h-[92vh] sm:max-h-[92vh]"
-      bodyClassName="flex min-h-0 flex-1 flex-col p-0"
-      title={<span className="line-clamp-2 break-words">{card.title}</span>}>
+    {/* Слайд справа с приклеенной карточкой доски слева (владелец 25.11: «слайдом с приклеенной карточкой, как в
+        повторных; хоть на 80% экрана»). Полная карточка клиента открывается поверх (z выше), слайд не прячется. */}
+    <BigSlide card={card} onClose={onClose} blockEsc={fullClient !== null}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col text-[13px] text-[var(--color-text)]">
         {/* Шапка в две строки (Fable 25.11): что и на сколько, стадия, статус, срок | клиент, телефон, исполнитель; ссылки — в «⋯». */}
         <div className="flex min-w-0 flex-col gap-1.5 border-b border-[var(--color-border)] px-4 py-2.5">
@@ -128,15 +126,15 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
 
         <div className="px-4"><TabsRibbon tabs={tabs} active={pane} onChange={setPane} /></div>
 
-        <div className={`min-h-0 flex-1 overflow-x-hidden px-4 py-3 ${pane === 'work' ? 'overflow-y-auto md:overflow-hidden' : 'overflow-y-auto'}`}>
+        <div className={`min-h-0 flex-1 overflow-x-hidden px-4 py-3 ${pane === 'work' ? 'overflow-y-auto lg:overflow-hidden' : 'overflow-y-auto'}`}>
           {/* Работа. Десктоп: слева «Задача» (свой скролл), справа действия и чат на всю высоту, ввод прижат к низу.
-              Телефон: «Чат | Задача». Скрываем, не размонтируем: черновик чата не теряется. */}
-          <div className={pane === 'work' ? 'flex min-w-0 flex-col gap-3 md:grid md:h-full md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] md:gap-4' : 'hidden'}>
-            <div className="flex rounded-lg bg-[var(--color-bg-hover)] p-1 md:hidden" role="tablist" aria-label="Чат или задача">
+              Телефон и планшет (< 1024px): «Чат | Задача». Скрываем, не размонтируем: черновик чата не теряется. */}
+          <div className={pane === 'work' ? 'flex min-w-0 flex-col gap-3 lg:grid lg:h-full lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] lg:gap-4' : 'hidden'}>
+            <div className="flex rounded-lg bg-[var(--color-bg-hover)] p-1 lg:hidden" role="tablist" aria-label="Чат или задача">
               <button type="button" role="tab" aria-selected={seg === 'chat'} className={segBtn(seg === 'chat')} onClick={() => setSeg('chat')}>Чат</button>
               <button type="button" role="tab" aria-selected={seg === 'task'} className={segBtn(seg === 'task')} onClick={() => setSeg('task')}>Задача</button>
             </div>
-            <div className={`${seg === 'task' ? 'flex' : 'hidden'} min-w-0 flex-col gap-3 md:flex md:min-h-0 md:overflow-y-auto md:pr-1`}>
+            <div className={`${seg === 'task' ? 'flex' : 'hidden'} min-w-0 flex-col gap-3 lg:flex lg:min-h-0 lg:overflow-y-auto lg:pr-1`}>
               <TaskBriefSection brief={d?.brief} dealProducts={d?.dealProducts} dealAmount={deal?.amount ?? null}
                 loading={details.isLoading} error={details.error ? (details.error as Error).message : null} />
               <CardNoteField card={card} canEdit={canManage} onSaved={c => onChanged(c)} mock={mock} />
@@ -145,11 +143,11 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
               )}
               {d && <ParticipantsField taskId={card.id} auditors={d.auditors ?? card.auditors} me={d.viewer?.id ?? null} canManage={canManage && card.state !== 'done'} onChanged={changed} />}
             </div>
-            <div className={`${seg === 'chat' ? 'flex' : 'hidden'} min-w-0 flex-col gap-2 md:flex md:min-h-0`}>
+            <div className={`${seg === 'chat' ? 'flex' : 'hidden'} min-w-0 flex-col gap-2 lg:flex lg:min-h-0`}>
               {canManage && <TaskActions card={card} managers={managers} onChanged={changed} questions={d?.questions} mock={mock} />}
               <TaskChat card={card} messages={d?.chat ?? null} loading={details.isLoading} onSent={changed} questions={d?.questions}
                 rop={d?.rop ?? null} inject={inject} me={d?.viewer?.id ?? null} lastSeenAt={lastSeenAt} mock={mock}
-                className="h-[70dvh] md:h-auto md:min-h-0 md:flex-1" />
+                className="h-[70dvh] lg:h-auto lg:min-h-0 lg:flex-1" />
             </div>
           </div>
 
@@ -168,11 +166,57 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
           ))}
         </div>
       </div>
-    </Modal>
+    </BigSlide>
     {fullClient !== null && hasClient && (
-      <CustomerCardLoader contactId={ref.contactId} companyId={ref.companyId} initialTab={fullClient} onClose={() => setFullClient(null)} />
+      <CustomerCardLoader contactId={ref.contactId} companyId={ref.companyId} initialTab={fullClient} zIndex={70} onClose={() => setFullClient(null)} />
     )}
     </>
+  );
+}
+
+/** Панель справа на 80% ширины (телефон — во весь экран) + затемнённая полоса слева: клик — закрыть, в ней — карточка
+ *  с доски, «приклеенная» сверху (как ClientCardDrawer повторных), когда полоса шире карточки (от 1280px). Esc — закрыть,
+ *  если поверх не открыто своё окно (формы действий, подтверждения — Radix role=dialog). */
+function BigSlide({ card, onClose, blockEsc, children }: { card: BigTaskCard; onClose: () => void; blockEsc: boolean; children: React.ReactNode }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || blockEsc) return;
+      if (document.querySelector('[role="dialog"]:not([data-big-slide])')) return;
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose, blockEsc]);
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+  if (!mounted) return null;
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex">
+      <div className="relative hidden min-w-0 flex-1 cursor-pointer bg-black/40 sm:block" onClick={onClose}>
+        <div className="pointer-events-none absolute right-3 top-3 hidden w-[min(18rem,calc(100%-24px))] min-[1280px]:block">
+          <div className="pointer-events-auto cursor-default" onClick={e => e.stopPropagation()}>
+            <BigTaskCardView card={card} onOpen={() => {}} />
+          </div>
+        </div>
+      </div>
+      <div role="dialog" aria-modal="true" aria-label={card.title} data-big-slide
+        className="slide-panel-in-right relative flex h-dvh w-full max-w-full shrink-0 flex-col overflow-hidden bg-[var(--color-bg)] shadow-2xl sm:w-[80vw] sm:min-w-[min(100vw,720px)]">
+        <div className="flex min-w-0 items-start gap-2 border-b border-[var(--color-border)] px-4 py-2.5">
+          <h2 className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-semibold">{card.title}</h2>
+          <button type="button" onClick={onClose} aria-label="Закрыть"
+            className="tap-target flex min-h-9 min-w-9 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

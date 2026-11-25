@@ -4,7 +4,7 @@
 //  • описание большой задачи — «[b]Клиент:[/b] …, [b]Товары:[/b] строки «Товар 58.5 м3 по 5100 руб. (298350 руб.)»,
 //    [b]Цели:[/b], [b]Есть ли цена дешевле:[/b], [b]Дата поставки материала:[/b]»;
 //  • сделка — адрес (UF_ADDRESS_COORDS_INPUT), «Для каких целей» (UF_CRM_1789046051), дата поставки (UF_CRM_1744960397885),
-//    источник (SOURCE_DESCRIPTION), комментарий колл-центра (COMMENTS);
+//    комментарий колл-центра (COMMENTS);
 //  • описания связанных задач логиста/снабжения по сделке (бизнес-процесс, 181102): «[B]Форма оплаты:[/B] Нал»,
 //    «[B]Комментарий:[/B] есть дешевле. 1 сорт» (комментарий менеджера), таблица товаров с колонкой «Цена конкурента».
 // Только чтение Битрикса, при открытии карточки.
@@ -72,7 +72,7 @@ export function competitorPrices(raw: string): { name: string; price: number }[]
 const empty = (v: string | null | undefined) => !v || /^[-–—\s]*$/.test(v);
 const mskDay = (iso: string) => new Date(Date.parse(iso) + 3 * 3600_000).toISOString().slice(0, 10);
 
-export interface BriefDeal { ADDRESS?: string | null; PURPOSE?: string | null; DELIVERY?: string | null; SOURCE?: string | null; COMMENTS?: string | null }
+export interface BriefDeal { ADDRESS?: string | null; PURPOSE?: string | null; DELIVERY?: string | null; COMMENTS?: string | null }
 
 export function buildBrief(args: {
   descFields: { label: string; value: string }[];
@@ -99,8 +99,7 @@ export function buildBrief(args: {
   const soon = dIso ? (Date.parse(`${mskDay(dIso)}T00:00:00Z`) - Date.parse(`${mskDay(new Date().toISOString())}T00:00:00Z`)) / 86_400_000 <= 1 : false;
   add('Дата поставки', dText, soon);
   add('Есть ли цена дешевле', fromDesc(/цена дешевле/i));
-  const src = deal?.SOURCE?.trim();
-  add('Источник', src && /^https?:\/\//.test(src) ? src : src || null);
+  // «Источник» (ссылка на Авито и т.п.) убран — владелец 25.11: «информация про источник в целом нахуй не нужна».
 
   const goods = args.taskProductLines.filter(l => !/^общая сумма/i.test(l));
   const totalLine = args.taskProductLines.find(l => /^общая сумма/i.test(l));

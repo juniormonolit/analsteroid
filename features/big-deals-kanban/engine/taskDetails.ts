@@ -94,7 +94,7 @@ export async function fetchTaskDetails(t: BxTaskFull, dealId: number | null): Pr
     descFields: fields, taskProductLines: taskProducts, relatedDescriptions,
     deal: dealRow ? {
       ADDRESS: str(dealRow.UF_ADDRESS_COORDS_INPUT), PURPOSE: str(dealRow.UF_CRM_1789046051), DELIVERY: str(dealRow.UF_CRM_1744960397885),
-      SOURCE: str(dealRow.SOURCE_DESCRIPTION), COMMENTS: str(dealRow.COMMENTS),
+      COMMENTS: str(dealRow.COMMENTS),
     } satisfies BriefDeal : null,
   });
   return {
