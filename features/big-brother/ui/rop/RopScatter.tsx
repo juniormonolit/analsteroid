@@ -1,7 +1,7 @@
 'use client';
 // Scatter «задачи РОПа × показатели отдела»: точка — РОП. Оси выбираются (SearchSelect, без нативных select).
 import { useMemo, useState } from 'react';
-import { CartesianGrid, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from 'recharts';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import type { RopRow } from '../../engine/rop/types';
 import { fmtMoney, fmtOne, fmtPct } from './format';
@@ -64,6 +64,7 @@ export function RopScatter({ rows }: { rows: RopRow[] }) {
                   </div>
                 );
               }} />
+              <ZAxis range={[48, 48]} />
               <Scatter data={pts} fill="var(--color-accent)" />
             </ScatterChart>
           </ResponsiveContainer>

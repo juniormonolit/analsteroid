@@ -7,7 +7,9 @@ import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { SortableTh } from '@/components/ui/SortableTh';
 import type { RopRatingResponse, RopRow, RopSubordinate } from '../../engine/rop/types';
+import { stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { PeriodBar, usePeriod } from './PeriodBar';
+import { AttentionView, LagView, ReportToTaskView, RhythmView } from './RopContextViews';
 import { RopScatter } from './RopScatter';
 import { fmtDate, fmtInt, fmtMoney, fmtOne, fmtPct } from './format';
 
@@ -54,7 +56,7 @@ function Weekly({ r, max }: { r: RopRow; max: number }) {
   );
 }
 
-export function RopRatingPage() {
+function RatingView() {
   const { from, to } = usePeriod();
   const [sort, setSort] = useState<{ key: string; desc: boolean }>({ key: 'tasks', desc: true });
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -86,12 +88,10 @@ export function RopRatingPage() {
   const onSort = (key: string) => setSort(s => ({ key, desc: s.key === key ? !s.desc : key !== 'name' }));
 
   return (
-    <div className="flex min-w-0 flex-col gap-3 px-4 pb-6 pt-3 sm:px-6">
-      <PeriodBar>
-        <p className="min-w-0 basis-full text-xs text-[var(--color-text-muted)] sm:basis-auto">
-          Задачи по дате постановки (МСК). Отдел — подчинённые РОПа + он сам.{isFetching && data && ' Обновляю…'}
-        </p>
-      </PeriodBar>
+    <div className="flex min-w-0 flex-col gap-3">
+      <p className="text-xs text-[var(--color-text-muted)]">
+        Задачи по дате постановки (МСК). Отдел — подчинённые РОПа + он сам.{isFetching && data && ' Обновляю…'}
+      </p>
 
       {error && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-negative)]">{error.message}</div>}
       {isLoading && !data && !error && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">Считаю задачи и показатели отделов…</div>}
@@ -161,6 +161,40 @@ export function RopRatingPage() {
           </ul>
         </>
       ))}
+    </div>
+  );
+}
+
+// Вкладки: рейтинг + контекст рядом с ним (не баллы). flex-wrap вместо горизонтальной ленты (CLAUDE.md, правило 12).
+const VIEWS = [
+  { key: 'rating', label: 'Рейтинг' },
+  { key: 'report-task', label: 'Отчёт → задача' },
+  { key: 'attention', label: 'Внимание' },
+  { key: 'rhythm', label: 'Ритм' },
+  { key: 'lag', label: 'Задачи × продажи' },
+] as const;
+
+export function RopRatingPage() {
+  const [view, setView] = useUrlState('view', stringParam('rating'));
+  const cur = VIEWS.some(v => v.key === view) ? view : 'rating';
+  return (
+    <div className="flex min-w-0 flex-col gap-3 px-4 pb-6 pt-3 sm:px-6">
+      <div role="tablist" aria-label="Вид" className="flex min-w-0 flex-wrap gap-1 rounded-lg bg-[var(--color-bg-surface)] p-0.5 sm:self-start">
+        {VIEWS.map(v => (
+          <button key={v.key} type="button" role="tab" aria-selected={cur === v.key} onClick={() => setView(v.key === 'rating' ? '' : v.key)}
+            className={`min-h-11 rounded-md px-3 text-sm ${cur === v.key ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
+            {v.label}
+          </button>
+        ))}
+      </div>
+      {cur === 'lag'
+        ? <p className="text-xs text-[var(--color-text-muted)]">Последние 18 завершённых недель — период вверху здесь не действует.</p>
+        : <PeriodBar />}
+      {cur === 'rating' && <RatingView />}
+      {cur === 'report-task' && <ReportToTaskView />}
+      {cur === 'attention' && <AttentionView />}
+      {cur === 'rhythm' && <RhythmView />}
+      {cur === 'lag' && <LagView />}
     </div>
   );
 }

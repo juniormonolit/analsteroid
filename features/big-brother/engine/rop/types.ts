@@ -108,3 +108,83 @@ export interface RopRatingResponse {
   /** Что не посчитано и почему — показываем под таблицей. */
   notes: string[];
 }
+
+// ── Контекст рядом с рейтингом (итерация 26.11): НЕ баллы, в рейтинг не суммируется ──────────────────────────
+
+/** Как поставлена задача: из строки отчёта / карточки (origin), после просмотра (эвристика 30 мин), вслепую. */
+export type TaskBasis = 'origin' | 'heuristic' | 'blind' | 'before_journal';
+
+export interface ReportToTaskRow {
+  ropId: string;
+  name: string;
+  tasks: number;
+  origin: number;
+  heuristic: number;
+  blind: number;
+  /** Поставлены до начала журнала — не классифицируются. */
+  beforeJournal: number;
+  /** (origin + heuristic) / (tasks − beforeJournal). */
+  informedPct: number | null;
+}
+
+export interface AttentionCell {
+  id: string;
+  name: string;
+  /** Последний просмотр карточки /manager/<id> или дрилл отчёта по нему (за всё время журнала). */
+  lastSeenAt: string | null;
+  /** Просмотров карточки за период. */
+  views: number;
+  /** Дриллов отчёта по менеджеру за период. */
+  drills: number;
+  /** Продажи менеджера за период и за такой же предыдущий (₽). */
+  salesNow: number | null;
+  salesPrev: number | null;
+  /** Продажи упали больше чем на 20 %. */
+  drop: boolean;
+  /** Не открыт blindWeeks недель (или ни разу с начала журнала). */
+  blind: boolean;
+}
+
+export interface AttentionRow {
+  ropId: string;
+  name: string;
+  blindCount: number;
+  blindWithDrop: number;
+  subs: AttentionCell[];
+}
+
+export interface RhythmRow {
+  ropId: string;
+  name: string;
+  /** [день недели 0=пн..6=вс][час 0..23] — просмотры отчётов и карточек менеджеров (МСК). */
+  grid: number[][];
+  total: number;
+  /** Сессии Задачника РОПа в периоде и из них «подготовленные» — был просмотр отчёта / карточки за 3 ч до начала. */
+  sessions: number;
+  sessionsPrepared: number;
+}
+
+export interface RopContextResponse {
+  period: BbPeriod;
+  /** Первое событие журнала activity_events — до него данных о просмотрах нет. */
+  journalSince: string | null;
+  /** С какого момента в task_create пишется origin (первое событие с origin); раньше — только эвристика. */
+  originSince: string | null;
+  blindWeeks: number;
+  reportToTask: ReportToTaskRow[];
+  attention: AttentionRow[];
+  rhythm: RhythmRow[];
+  notes: string[];
+}
+
+export interface LagPoint { ropId: string; name: string; week: string; x: number; y: number }
+
+export interface RopLagResponse {
+  lag: number;
+  weeks: string[];
+  points: LagPoint[];
+  /** Пирсон по всем точкам; null — точек < 5. */
+  r: number | null;
+  rops: number;
+  notes: string[];
+}

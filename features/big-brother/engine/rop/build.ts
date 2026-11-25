@@ -3,7 +3,7 @@
 //
 // РОП = rop_bitrix_user_id из sa.org_resolved_hierarchy, у которого есть хотя бы один подчинённый-продавец
 // (логин manager*). Подчинённые — действующие сотрудники с этим РОПом, кроме него самого.
-import { loadLogins, loadOrg, loadRopTasks, type OrgPerson } from './sources';
+import { loadRopTasks, loadTeams } from './sources';
 import { aggregate, memberMetrics } from './deptMetrics';
 import { daysOf, isWorkday, mskDay, periodBounds, weekStart, workWeeksOf, type BbPeriod } from './period';
 import type { RopRatingResponse, RopRow, RopSubordinate, RopTask, ServiceCounts } from './types';
@@ -15,22 +15,9 @@ const MEASURED = new Set(['achieved', 'improved', 'no_change']);
 
 export async function buildRopRating(period: BbPeriod, now = Date.now()): Promise<RopRatingResponse> {
   const notes: string[] = [];
-  const [org, logins] = await Promise.all([loadOrg(), loadLogins()]);
-  const isSeller = (id: string) => !logins.size || (logins.get(id) ?? '').toLowerCase().startsWith('manager');
-
-  const byId = new Map(org.map(p => [p.id, p]));
-  const teams = new Map<string, OrgPerson[]>();
-  for (const p of org) {
-    if (!p.ropId || p.ropId === p.id || !isSeller(p.id)) continue;
-    const list = teams.get(p.ropId) ?? [];
-    list.push(p);
-    teams.set(p.ropId, list);
-  }
+  const { byId, teams, shortLoginById } = await loadTeams();
   const ropIds = [...teams.keys()];
   const { fromIso, toExclIso } = periodBounds(period);
-
-  const shortLoginById = new Map<string, string>();
-  for (const p of org) if (p.shortLogin) shortLoginById.set(p.id, p.shortLogin);
 
   const [act, metrics] = await Promise.all([
     loadRopTasks(ropIds, fromIso, toExclIso),

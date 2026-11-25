@@ -41,6 +41,30 @@ export async function loadLogins(): Promise<Map<string, string>> {
   return loadAccountLogins().catch(() => new Map<string, string>());
 }
 
+export interface Teams {
+  org: OrgPerson[];
+  byId: Map<string, OrgPerson>;
+  /** РОП → подчинённые-продавцы (логин manager*), без него самого. */
+  teams: Map<string, OrgPerson[]>;
+  shortLoginById: Map<string, string>;
+}
+
+/** Команды РОПов по текущей оргструктуре (единое правило для рейтинга и контекстных блоков). */
+export async function loadTeams(): Promise<Teams> {
+  const [org, logins] = await Promise.all([loadOrg(), loadLogins()]);
+  const isSeller = (id: string) => !logins.size || (logins.get(id) ?? '').toLowerCase().startsWith('manager');
+  const teams = new Map<string, OrgPerson[]>();
+  for (const p of org) {
+    if (!p.ropId || p.ropId === p.id || !isSeller(p.id)) continue;
+    const list = teams.get(p.ropId) ?? [];
+    list.push(p);
+    teams.set(p.ropId, list);
+  }
+  const shortLoginById = new Map<string, string>();
+  for (const p of org) if (p.shortLogin) shortLoginById.set(p.id, p.shortLogin);
+  return { org, byId: new Map(org.map(p => [p.id, p])), teams, shortLoginById };
+}
+
 export interface ServiceGroups { tasker: number | null; big: readonly number[]; repeat: number }
 
 export async function serviceGroups(): Promise<ServiceGroups> {
