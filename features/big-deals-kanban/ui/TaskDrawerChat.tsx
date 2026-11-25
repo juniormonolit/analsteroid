@@ -8,7 +8,7 @@ import type { BigChatFile, BigChatMessage } from '../engine/taskDetails';
 import { postBigAction } from './TaskDrawerShared';
 import { TaskThread, ThreadComposer, type MentionTarget } from './TaskThread';
 
-export function TaskChat({ card, messages, loading, onSent, questions, rop, inject, me = null, lastSeenAt = null, mock = false, className = '' }: {
+export function TaskChat({ card, messages, loading, onSent, questions, rop, inject, me = null, lastSeenAt = null, mock = false, className = '', title = 'Чат задачи' }: {
   card: BigTaskCard; messages: BigChatMessage[] | null; loading: boolean; onSent: (card?: BigTaskCard) => void;
   /** Вопросы из описания задачи — в «Шаблонах». */
   questions?: string[];
@@ -22,6 +22,8 @@ export function TaskChat({ card, messages, loading, onSent, questions, rop, inje
   lastSeenAt?: string | null;
   mock?: boolean;
   className?: string;
+  /** Заголовок над лентой; null — без него (вкладки задач над чатом уже подписывают, чей это чат). */
+  title?: string | null;
 }) {
   // Кого можно отметить: ответственный по сделке первым (Осипов 24.11), исполнитель, РОП. Себя — нет.
   const mentions: MentionTarget[] = [];
@@ -39,7 +41,7 @@ export function TaskChat({ card, messages, loading, onSent, questions, rop, inje
 
   return (
     <section className={`flex min-h-0 min-w-0 flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] ${className}`}>
-      <h3 className="px-3 pt-3 text-[12px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Чат задачи</h3>
+      {title && <h3 className="px-3 pt-3 text-[12px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">{title}</h3>}
       <TaskThread messages={messages} viewerId={me} roles={roles} lastSeenAt={lastSeenAt} loading={loading}
         className="min-h-40 flex-1 px-3 py-2" />
       <div className="border-t border-[var(--color-border)] p-2">

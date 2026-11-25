@@ -29,6 +29,15 @@ const dayLabel = (iso: string) => {
 const hm = (iso: string) => new Date(iso).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' });
 const fullDT = (iso: string) => new Date(iso).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
+// Цвет автора (владелец 25.11: «баблы разноцветные — исходя из того, кто»): стабильный по Bitrix id, оттенок
+// подмешан к фону (color-mix) — читается и в светлой, и в тёмной теме. Свои — акцентные, как раньше.
+const HUES = ['#2f6bff', '#16a34a', '#ea580c', '#9333ea', '#0891b2', '#db2777', '#ca8a04', '#4f46e5'];
+export function authorHue(id: string): string {
+  let h = 0;
+  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return HUES[h % HUES.length];
+}
+
 const SIGNIFICANT = /(завершил|вернул|просрочен|изменил исполнителя|отметил сообщение как результат|возобновил|принял|отклонил|делегировал)/i;
 const AUTO = /(из Монолитики|из канбана больших чеков)/i;
 
@@ -146,14 +155,16 @@ export function TaskThread({ messages, viewerId, roles = {}, lastSeenAt = null, 
         }
         const m = it.m;
         const role = roles[m.authorId];
+        const hue = it.mine ? null : authorHue(m.authorId);
         return (
           <div key={it.key} className={`flex min-w-0 max-w-[88%] flex-col ${it.mine ? 'self-end items-end' : 'self-start items-start'} ${it.head ? 'mt-1' : ''}`}>
             {it.head && (
               <div className="px-1 text-[11px] text-[var(--color-text-muted)]">
-                {it.mine ? 'Вы' : (m.author ?? `#${m.authorId}`)}{role && !it.mine ? <span className="ml-1 rounded bg-[var(--color-bg-hover)] px-1">{role}</span> : null} · {hm(m.at)}
+                <span style={hue ? { color: hue } : undefined} className={hue ? 'font-medium' : undefined}>{it.mine ? 'Вы' : (m.author ?? `#${m.authorId}`)}</span>{role && !it.mine ? <span className="ml-1 rounded bg-[var(--color-bg-hover)] px-1">{role}</span> : null} · {hm(m.at)}
               </div>
             )}
-            <div className={`min-w-0 max-w-full rounded-2xl px-3 py-1.5 ${it.mine ? 'rounded-tr-md bg-[var(--color-accent-soft)]' : 'rounded-tl-md bg-[var(--color-bg-hover)]'}`} title={it.head ? undefined : fullDT(m.at)}>
+            <div className={`min-w-0 max-w-full rounded-2xl px-3 py-1.5 ${it.mine ? 'rounded-tr-md bg-[var(--color-accent-soft)]' : 'rounded-tl-md'}`}
+              style={hue ? { background: `color-mix(in srgb, ${hue} 13%, var(--color-bg-surface))` } : undefined} title={it.head ? undefined : fullDT(m.at)}>
               {it.bb && <BbText text={it.bb} />}
               {m.files && m.files.length > 0 && (
                 <div className="mt-1 flex flex-wrap gap-1.5">

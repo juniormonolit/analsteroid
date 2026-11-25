@@ -8,7 +8,7 @@ import { ChevronDown, Quote } from 'lucide-react';
 import type { BigDealProduct } from '../engine/taskDetails';
 import type { BigBriefProduct, BigTaskBrief } from '../engine/taskBrief';
 import { money } from './format';
-import { Section } from './TaskDrawerShared';
+import { BxLink, Section } from './TaskDrawerShared';
 
 const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е').replace(/х/g, 'x').replace(/\([^)]*\)/g, ' ').replace(/[^a-zа-я0-9]+/g, ' ').trim();
 const qtyStr = (q: number | null, u: string | null) => (q == null ? '—' : `${q.toLocaleString('ru-RU')} ${u ?? ''}`.trim());
@@ -50,9 +50,11 @@ function Diff({ a, b, fmt }: { a: number | null | undefined; b: number | null | 
 
 type View = 'compare' | 'task' | 'deal';
 
-export function TaskBriefSection({ brief, dealProducts, dealAmount, loading, error }: {
+export function TaskBriefSection({ brief, dealProducts, dealAmount, loading, error, taskUrl, taskId, dealUrl, dealId, clientUrl }: {
   brief: BigTaskBrief | undefined; dealProducts: BigDealProduct[] | null | undefined; dealAmount: number | null;
   loading: boolean; error: string | null;
+  /** Ссылки в Битрикс по месту (владелец 25.11): задача — у заголовка, сделка — у товаров, клиент — у имени. */
+  taskUrl?: string; taskId?: number; dealUrl?: string | null; dealId?: number | null; clientUrl?: string | null;
 }) {
   const task = brief?.taskProducts ?? [];
   const deal = dealProducts ?? [];
@@ -69,7 +71,7 @@ export function TaskBriefSection({ brief, dealProducts, dealAmount, loading, err
   const competitor = brief?.competitor ?? [];
 
   return (
-    <Section title="Задача">
+    <Section title="Задача" extra={<BxLink href={taskUrl}>Задача № {taskId}</BxLink>}>
       {loading && <p className="text-[var(--color-text-muted)]">Загружаю задачу…</p>}
       {error && <p className="text-[var(--color-negative)]">{error}</p>}
       {brief && (
@@ -80,7 +82,9 @@ export function TaskBriefSection({ brief, dealProducts, dealAmount, loading, err
                 <div key={f.label} className={`min-w-0 ${f.label === 'Адрес' ? 'sm:col-span-2' : ''}`}>
                   <dt className="text-[11.5px] text-[var(--color-text-muted)]">{f.label}</dt>
                   <dd className={`min-w-0 break-words ${f.warn ? 'font-semibold text-[var(--color-warning)]' : ''}`}>
-                    {/^https?:\/\//.test(f.value)
+                    {f.label === 'Клиент' && clientUrl
+                      ? <a href={clientUrl} target="_blank" rel="noreferrer" title="Клиент в Битриксе" className="text-[var(--color-accent)] hover:underline">{f.value} ↗</a>
+                      : /^https?:\/\//.test(f.value)
                       ? <a href={f.value} target="_blank" rel="noreferrer" className="break-all text-[var(--color-accent)] underline">{f.value.replace(/^https?:\/\/(www\.)?/, '').slice(0, 60)}{f.value.length > 68 ? '…' : ''}</a>
                       : f.value}
                     {f.warn && <span className="ml-1 text-[11px] font-normal">· скоро</span>}
@@ -104,6 +108,7 @@ export function TaskBriefSection({ brief, dealProducts, dealAmount, loading, err
             <div className="flex min-w-0 flex-col gap-2">
               <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
                 <span className="text-[12px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Товары</span>
+                <BxLink href={dealUrl} title="Товары сделки — в Битриксе">Сделка № {dealId}</BxLink>
                 {hasBoth && (diffs
                   ? <span className="text-[12px] text-[var(--color-warning)]">в сделке изменено позиций: {diffs}{delta ? `, ${delta > 0 ? '+' : '−'}${money(Math.abs(delta))}` : ''}</span>
                   : <span className="text-[12px] text-[var(--color-positive)]">совпадает с задачей</span>)}
