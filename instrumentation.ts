@@ -87,6 +87,7 @@ export async function register() {
     if (allow.has('repeatAutoBrak')) scheduleRepeatAutoBrak();
     if (allow.has('metricMapNightly')) scheduleMetricMapNightly();
     if (allow.has('tasker')) scheduleTasker();
+    if (allow.has('idleWatch')) scheduleIdleWatch();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
@@ -118,6 +119,7 @@ export async function register() {
   scheduleLogistBxSync();
   scheduleLogistRequests();
   scheduleTasker();
+  scheduleIdleWatch();
   scheduleRepeatQueueIssue();
   scheduleRepeatMorning();
   scheduleRepeatAutoBrak();
@@ -980,6 +982,39 @@ function scheduleTasker() {
   };
   setTimeout(() => { void tick(); }, 90 * 1000);
   setInterval(() => { void tick(); }, 60 * 1000);
+}
+
+// «Большой брат» — сторож МОПов (lib/bots/idleWatch.ts): тик раз в 5 мин, бот «Аналитик» пишет менеджеру/РОПу,
+// если в рабочем окне N минут нет звонков, движения сделок и задач. Гейт — idle_watch_settings.enabled в БД
+// (из коробки выключен, dry_run). Один тик на кластер — pg_try_advisory_lock. 42P01 — миграция 295 не накачена.
+// На проде — ключ idleWatch в BACKGROUND_JOBS_ALLOW.
+function scheduleIdleWatch() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    const { systemDb } = await import('./lib/db/clients');
+    const client = await systemDb().connect().catch(() => null);
+    if (!client) { running = false; return; }
+    try {
+      const lock = await client.query<{ ok: boolean }>(`SELECT pg_try_advisory_lock(hashtext('idle_watch_job')) AS ok`);
+      if (!lock.rows[0]?.ok) return;
+      try {
+        const { runIdleWatchCycle } = await import('./lib/bots/idleWatch');
+        const summary = await runIdleWatchCycle();
+        if (summary !== 'disabled') console.log(`[idleWatch] ${summary}`);
+      } finally {
+        await client.query(`SELECT pg_advisory_unlock(hashtext('idle_watch_job'))`).catch(() => {});
+      }
+    } catch (err) {
+      if ((err as { code?: string }).code !== '42P01') console.error('[idleWatch] цикл упал:', err instanceof Error ? err.message : err);
+    } finally {
+      client.release();
+      running = false;
+    }
+  };
+  setTimeout(() => { void tick(); }, 3 * 60 * 1000);
+  setInterval(() => { void tick(); }, 5 * 60 * 1000);
 }
 
 function scheduleLogistBxSync() {

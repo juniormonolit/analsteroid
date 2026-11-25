@@ -123,6 +123,9 @@ export const BOT_FUNCTION_KEYS = [
   'logist_requests_staff',
   // «Увольнятор» (24.11): инициатору — итог прогона. Миграция 287, включено (сообщение только тому, кто запустил).
   'dismissal',
+  // «Большой брат», сторож МОПов (25.11): «N часов нет звонков, движения сделок и задач». Миграция 295, включено —
+  // свои enabled/dry_run у сторожа (/big-brother/watch).
+  'idle_watch',
 ] as const;
 export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
 
