@@ -74,7 +74,7 @@ const deal = (id: number, daysAgo: number, stage: ModuleDeal['stage'], amount: n
   deliveredAt: stage === 'shipped' ? iso(daysAgo) : null,
   lostAt: stage === 'lost' ? iso(daysAgo) : null,
   stageName, stage, managerName: 'Алексей Смирнов',
-  products: [{ name: group, quantity: 10, price: amount / 10, sum: amount, group, isService: false }],
+  products: [{ name: group, quantity: 10, price: amount / 10, sum: amount, group, isService: false, productId: null, unit: null }],
   groups: [group], topGroup: group, objectKey: 'obj1', objectManual: false, looseAddress: null,
 });
 

@@ -8,7 +8,7 @@ import { ClipboardList, ExternalLink } from 'lucide-react';
 import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ClientModuleData, type ModuleDeal, dealSortDate } from '../engine/types';
 import type { HistoryTask } from '../engine/history';
-import { Chip, StageChip, dealTitle, fmtD, shortGroup, type Tone } from './parts';
+import { Chip, StageChip, dealTitle, fmtD, fmtQty, qtyTotals, shortGroup, type Tone } from './parts';
 import { DealLink } from './dealLink';
 
 const TASK_STATE: Record<HistoryTask['state'], { label: string; tone: Tone }> = {
@@ -52,6 +52,26 @@ function TaskRow({ t }: { t: HistoryTask }) {
   );
 }
 
+/** Что и сколько продали/отгрузили (25.11, Коваленко: «объём/кол-во отгруженного и проданного товара»): позиции
+ *  с количеством и единицей, итог по единицам. Длинный список — две строки, по нажатию целиком. */
+function DealGoods({ d }: { d: ModuleDeal }) {
+  const [full, setFull] = useState(false);
+  const goods = d.products.filter(p => !p.isService && p.quantity > 0);
+  if (!goods.length) return null;
+  const total = goods.length > 1 ? qtyTotals(goods) : '';
+  return (
+    <button type="button" onClick={() => setFull(v => !v)} title={full ? 'Свернуть' : 'Показать все позиции'}
+      className="mt-0.5 block w-full text-left text-[12px] text-[var(--color-text-secondary)]">
+      <span className={full ? '' : 'line-clamp-2'}>
+        {total && <b className="font-semibold tabular-nums text-[var(--color-text)]">Всего {total}: </b>}
+        {goods.map((p, i) => (
+          <span key={i}>{i > 0 && '; '}{p.name} — <b className="font-semibold tabular-nums text-[var(--color-text)]">{fmtQty(p.quantity, p.unit)}</b></span>
+        ))}
+      </span>
+    </button>
+  );
+}
+
 function DealBlock({ d, tasks }: { d: ModuleDeal; tasks: HistoryTask[] }) {
   const reason = d.stage === 'lost' && d.stageName ? d.stageName : null;
   return (
@@ -68,6 +88,7 @@ function DealBlock({ d, tasks }: { d: ModuleDeal; tasks: HistoryTask[] }) {
         {reason && <> · <span className="text-[var(--color-negative,#e03131)]">отказ: {reason}</span>{d.lostAt ? ` ${fmtD(d.lostAt)}` : ''}</>}
         {d.managerName && <> · {d.managerName}</>}
       </div>
+      <DealGoods d={d} />
       {tasks.length > 0 && (
         <div className="mt-1 divide-y divide-[var(--color-border)] border-t border-[var(--color-border)]">
           {tasks.map(t => <TaskRow key={t.taskId} t={t} />)}

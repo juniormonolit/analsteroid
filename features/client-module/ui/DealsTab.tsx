@@ -9,7 +9,7 @@ import { Fragment, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ClientModuleData, type ModuleDeal, type DealStage, DEAL_STAGE_LABEL, dealSortDate } from '../engine/types';
-import { StageChip, useSave, shortGroup, fmtD, dealTitle } from './parts';
+import { StageChip, useSave, shortGroup, fmtD, fmtQty, qtyTotals, dealTitle } from './parts';
 import { shortAddress } from '../engine/objectClusters';
 import { DealsTimeline } from './DealsTimeline';
 import { useClientHistory } from './HistoryTabs';
@@ -43,7 +43,7 @@ function DealRowExpanded({ d, data, params }: { d: ModuleDeal; data: ClientModul
           {d.products.map((p, i) => (
             <div key={i} className="flex flex-wrap items-baseline gap-x-3 py-1">
               <span className="min-w-0 flex-1 basis-[220px] break-words">{p.name}</span>
-              <span className="tabular-nums text-[var(--color-text-muted)]">{p.quantity.toLocaleString('ru-RU')} × {fmtMoney(p.price)}{p.group ? ` · ${p.group}` : ''}</span>
+              <span className="tabular-nums text-[var(--color-text-muted)]">{fmtQty(p.quantity, p.unit)} × {fmtMoney(p.price)}{p.group ? ` · ${p.group}` : ''}</span>
               <span className="ml-auto font-medium tabular-nums">{fmtMoney(p.sum)}</span>
             </div>
           ))}
@@ -53,7 +53,7 @@ function DealRowExpanded({ d, data, params }: { d: ModuleDeal; data: ClientModul
         {d.stageName && <span>Стадия в Битриксе: <b className="text-[var(--color-text)]">{d.stageName}</b></span>}
         {d.managerName && <span>· {d.managerName}</span>}
         {d.deliveredAt && <span>· отгружена {fmtD(d.deliveredAt)}</span>}
-        {d.products.length > 0 && <span className="ml-auto">Итого по товарам: <b className="tabular-nums text-[var(--color-text)]">{fmtMoney(total)}</b></span>}
+        {d.products.length > 0 && <span className="ml-auto">Итого по товарам: <b className="tabular-nums text-[var(--color-text)]">{qtyTotals(d.products) ? `${qtyTotals(d.products)} · ` : ''}{fmtMoney(total)}</b></span>}
       </div>
       {data.objects.length > 0 && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">

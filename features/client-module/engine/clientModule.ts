@@ -1,3 +1,4 @@
+import { productMeasures } from '@/lib/bitrix/productMeasures';
 import { analyticsDb } from '@/lib/db/clients';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import { fetchDealAddresses } from '@/lib/bitrix/dealAddress';
@@ -46,7 +47,7 @@ function iso(v: string | Date | null): string | null {
   return (v instanceof Date ? v : new Date(v)).toISOString();
 }
 
-interface RawProduct { name?: string; type?: string; price?: number | string; quantity?: number | string; sum?: number | string; head_group_name?: string }
+interface RawProduct { product_id?: number | string; name?: string; type?: string; price?: number | string; quantity?: number | string; sum?: number | string; head_group_name?: string }
 
 function mapProducts(raw: unknown): ModuleProduct[] {
   if (!Array.isArray(raw)) return [];
@@ -59,6 +60,8 @@ function mapProducts(raw: unknown): ModuleProduct[] {
       sum: Number(p.sum) || 0,
       group,
       isService: (p.type ?? '') === 'услуга' || (group !== null && NON_GOODS_RE.test(group)),
+      productId: Number(p.product_id) > 0 ? Number(p.product_id) : null,
+      unit: null,
     };
   });
 }
@@ -382,6 +385,13 @@ export async function fetchClientModule(ref: ClientRef, opts: { light?: boolean 
     };
     return { ...base, stage: dealStage(base) };
   });
+
+  // Единицы измерения товаров (шт, м³, лист…) — из Битрикса, кэш по товару (lib/bitrix/productMeasures.ts). Свежие сделки — первыми.
+  if (!light) {
+    const order = [...deals].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+    const units = await withTimeout(productMeasures(order.map(d => ({ dealId: d.dealId, productIds: d.products.map(p => p.productId ?? 0) }))), 3000, new Map<number, string>());
+    for (const d of deals) for (const p of d.products) if (p.productId) p.unit = units.get(p.productId) ?? null;
+  }
 
   // ── Подписи объектов: населённый пункт; два объекта в одном пункте — с улицей ──
   for (const o of objects.values()) {

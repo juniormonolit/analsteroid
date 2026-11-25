@@ -28,6 +28,19 @@ export function dealTitle(d: { name: string | null; products: { name: string; is
   return p?.name ?? d.topGroup ?? 'Сделка';
 }
 
+/** Количество с единицей: «8 шт», «2,4 м³» (единица — из Битрикса; не узнали — просто число). */
+export function fmtQty(q: number, unit: string | null): string {
+  const n = q.toLocaleString('ru-RU', { maximumFractionDigits: 3 });
+  return unit ? `${n} ${unit.replace(/^м3$/, 'м³').replace(/^м2$/, 'м²')}` : n;
+}
+
+/** Итог количества по единицам: «13 шт · 2,4 м³» (25.11, объём отгруженного/проданного). Без единицы — «N поз.» не считаем. */
+export function qtyTotals(products: { quantity: number; unit: string | null; isService: boolean }[]): string {
+  const by = new Map<string, number>();
+  for (const p of products) if (!p.isService && p.unit) by.set(p.unit, (by.get(p.unit) ?? 0) + p.quantity);
+  return [...by.entries()].sort((a, b) => b[1] - a[1]).map(([u, q]) => fmtQty(q, u)).join(' · ');
+}
+
 export type Tone = 'muted' | 'neg' | 'warn' | 'ok' | 'accent';
 const TONE_STYLE: Record<Tone, React.CSSProperties> = {
   muted: { color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-hover)' },

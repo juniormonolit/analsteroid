@@ -12,7 +12,9 @@ import { objectKey as addrObjectKey, isPickupAddress } from '@/lib/bitrix/addres
 
 export type ClientRef = `c${number}` | `k${number}`;
 
-export interface ModuleProduct { name: string; quantity: number; price: number; sum: number; group: string | null; isService: boolean }
+export interface ModuleProduct { name: string; quantity: number; price: number; sum: number; group: string | null; isService: boolean; productId: number | null;
+  /** Единица измерения из Битрикса (шт, м³, лист, упак…; lib/bitrix/productMeasures.ts); null — не узнали. */
+  unit: string | null }
 
 /** Стадия сделки для фильтра «Сделок»: отгрузка / продажа / в работе / отказ. */
 export type DealStage = 'shipped' | 'sold' | 'active' | 'lost';
