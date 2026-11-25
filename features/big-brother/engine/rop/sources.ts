@@ -116,8 +116,23 @@ export async function loadRopTasks(creatorIds: string[], fromIso: string, toExcl
 
   // Задачи Монолитики → их bitrix id; состояние подтягиваем из копии Битрикса отдельным запросом.
   const monoBxIds = new Set<string>();
+  const foreignMono = new Set<string>();
   for (const t of tasker) if (t.bitrix_task_id) monoBxIds.add(t.bitrix_task_id);
   for (const e of repeatEv) if (e.task_id && (REPEAT_CREATE_EVENTS as readonly string[]).includes(e.event_type)) monoBxIds.add(e.task_id);
+  // Канбан повторки ставит задачу в Битрикс с постановщиком = РОП менеджера, а не нажавший (сверка 25.11: задача 174888
+  // нажата Будковским, в Битриксе created_by = Павленко). Поэтому задача, известная ЛЮБОМУ журналу Монолитики (кем бы ни
+  // поставлена), «напрямую» не считается — она засчитана тому, кто нажал.
+  const directCand = bx.filter(r => !monoBxIds.has(r.task_id)).map(r => Number(r.task_id));
+  if (directCand.length) {
+    const [ev, tk] = await Promise.all([
+      systemDb().query<{ id: string }>(
+        `SELECT DISTINCT task_id::text AS id FROM repeat_kanban_events WHERE task_id = ANY($1::bigint[]) AND event_type = ANY($2::text[])`,
+        [directCand, [...REPEAT_CREATE_EVENTS]]),
+      systemDb().query<{ id: string }>(
+        `SELECT bitrix_task_id::text AS id FROM tasker_tasks WHERE bitrix_task_id = ANY($1::bigint[])`, [directCand]),
+    ]);
+    for (const r of [...ev.rows, ...tk.rows]) foreignMono.add(r.id);
+  }
   const bxById = new Map<string, BxRow>(bx.map(r => [r.task_id, r]));
   const missing = [...monoBxIds].filter(id => !bxById.has(id)).map(Number).filter(Number.isFinite);
   if (missing.length) {
@@ -156,7 +171,7 @@ export async function loadRopTasks(creatorIds: string[], fromIso: string, toExcl
     });
   }
   for (const b of bx) {
-    if (monoBxIds.has(b.task_id)) continue;
+    if (monoBxIds.has(b.task_id) || foreignMono.has(b.task_id)) continue;
     const service = serviceOfGroup(groups, b.group_id);
     if (!service || !b.created_by) continue;
     tasks.push({

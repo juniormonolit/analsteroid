@@ -7,13 +7,15 @@
 //  - «без движения N дней» — открытая задача (не начата / в работе), у которой changed_at старше N дней (любое изменение
 //    задачи, включая комментарий, считается движением);
 //  - «возвращено» — ручные возвраты канбана повторки (repeat_kanban_events.task_returned) + переходы «ждёт контроля (4) →
-//    в работу/ждёт выполнения» из событий Битрикса sa.bitrix_task_payload_raw (prev/task), если они там есть.
+//    открыта» из событий Битрикса sa.bitrix_task_payload_raw (ONTASKUPDATE, prev/task/changed — сверено на проде 25.11).
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadLogins, loadOrg, serviceGroups } from '../rop/sources';
 import { periodBounds, type BbPeriod } from '../rop/period';
 import type { DisciplineResponse, DisciplineRow, PersonKind, TaskScope } from './types';
 
 export const STALE_DAYS_DEFAULT = 7;
+
+interface BxReturn { rid: string; task_id: string; at: Date }
 
 interface AggRow {
   rid: string; received: number; closed: number; on_time: number; late: number; no_deadline: number;
@@ -68,34 +70,41 @@ export async function buildDiscipline(o: {
           ${groupWhere}
         GROUP BY 1`, params,
     ).then(r => r.rows) : Promise.resolve([] as AggRow[]),
-    systemDb().query<{ manager_id: string; n: number }>(
-      `SELECT manager_id, count(*)::int AS n FROM repeat_kanban_events
+    systemDb().query<{ manager_id: string; task_id: string | null; ts: Date }>(
+      `SELECT manager_id, task_id::text, ts FROM repeat_kanban_events
         WHERE event_type = 'task_returned' AND manager_id IS NOT NULL
-          AND ts >= $1::timestamptz AND ts < $2::timestamptz
-        GROUP BY 1`, [fromIso, toExclIso],
-    ).then(r => r.rows).catch(() => [] as { manager_id: string; n: number }[]),
-    // События Битрикса: prev — состояние до изменения, task — после. Формат подтверждён частично (CHAT_ID в
-    // features/repeat-kanban/engine/taskNotes.ts); если статусов там нет — запрос вернёт пусто, это не ошибка.
-    ids.length ? analyticsDb().query<{ rid: string; n: number }>(
-      `SELECT t.responsible_id::text AS rid, count(DISTINCT p.id)::int AS n
+          AND ts >= $1::timestamptz AND ts < $2::timestamptz`, [fromIso, toExclIso],
+    ).then(r => r.rows).catch(() => [] as { manager_id: string; task_id: string | null; ts: Date }[]),
+    // События Битрикса ONTASKUPDATE: prev — состояние до изменения, task — после (сверено на проде 25.11). STATUS «после»
+    // бывает мета-статусом открытой задачи: −1 просрочена, −2 не просмотрена, −3 почти просрочена — это тоже «в работе».
+    ids.length ? analyticsDb().query<BxReturn>(
+      `SELECT t.responsible_id::text AS rid, p.task_id::text, p.received_at AS at
          FROM sa.bitrix_task_payload_raw p
          JOIN sa.bitrix_task_current t ON t.task_id = p.task_id
         WHERE p.received_at >= $2::timestamptz AND p.received_at < $3::timestamptz
           AND t.responsible_id = ANY($1::int[]) AND NOT t.is_deleted
+          AND p.event = 'ONTASKUPDATE' AND (p.payload->'changed') ? 'STATUS'
           AND coalesce(p.payload#>>'{prev,REAL_STATUS}', p.payload#>>'{prev,STATUS}', p.payload#>>'{prev,status}') = '4'
-          AND coalesce(p.payload#>>'{task,REAL_STATUS}', p.payload#>>'{task,STATUS}', p.payload#>>'{task,status}') IN ('1', '2', '3')
-          ${o.scope === 'services' ? 'AND t.group_id = ANY($4::int[])' : ''}
-        GROUP BY 1`, o.scope === 'services' ? [ids, fromIso, toExclIso, groupIds] : [ids, fromIso, toExclIso],
+          AND coalesce(p.payload#>>'{task,REAL_STATUS}', p.payload#>>'{task,STATUS}', p.payload#>>'{task,status}') IN ('1', '2', '3', '-1', '-2', '-3')
+          ${o.scope === 'services' ? 'AND t.group_id = ANY($4::int[])' : ''}`, o.scope === 'services' ? [ids, fromIso, toExclIso, groupIds] : [ids, fromIso, toExclIso],
     ).then(r => ({ ok: true, rows: r.rows })).catch(e => {
       console.warn('[big-brother tasks] возвраты из событий Битрикса', e instanceof Error ? e.message : e);
-      return { ok: false, rows: [] as { rid: string; n: number }[] };
-    }) : Promise.resolve({ ok: true, rows: [] as { rid: string; n: number }[] }),
+      return { ok: false, rows: [] as BxReturn[] };
+    }) : Promise.resolve({ ok: true, rows: [] as BxReturn[] }),
   ]);
 
   const aggBy = new Map(agg.map(r => [r.rid, r]));
   const returns = new Map<string, number>();
-  for (const r of repeatReturns) returns.set(r.manager_id, (returns.get(r.manager_id) ?? 0) + Number(r.n));
-  for (const r of bxReturns.rows) returns.set(r.rid, (returns.get(r.rid) ?? 0) + Number(r.n));
+  for (const r of bxReturns.rows) returns.set(r.rid, (returns.get(r.rid) ?? 0) + 1);
+  // Возврат из канбана повторки сам меняет статус в Битриксе (сверка 25.11: каждый task_returned виден как 4 → −1 в
+  // событиях) — добавляем только те, у которых в событиях Битрикса нет перехода по той же задаче в пределах часа.
+  const bxAt = new Map<string, number[]>();
+  for (const r of bxReturns.rows) { const l = bxAt.get(r.task_id) ?? []; l.push(new Date(r.at).getTime()); bxAt.set(r.task_id, l); }
+  for (const r of repeatReturns) {
+    const t = new Date(r.ts).getTime();
+    if (r.task_id && (bxAt.get(r.task_id) ?? []).some(x => Math.abs(x - t) < 3600_000)) continue;
+    returns.set(r.manager_id, (returns.get(r.manager_id) ?? 0) + 1);
+  }
 
   const rows: DisciplineRow[] = people.map(p => {
     const a = aggBy.get(p.id);
