@@ -88,6 +88,7 @@ export async function register() {
     if (allow.has('metricMapNightly')) scheduleMetricMapNightly();
     if (allow.has('tasker')) scheduleTasker();
     if (allow.has('idleWatch')) scheduleIdleWatch();
+    if (allow.has('activityDaily')) scheduleActivityDaily();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
@@ -120,6 +121,7 @@ export async function register() {
   scheduleLogistRequests();
   scheduleTasker();
   scheduleIdleWatch();
+  scheduleActivityDaily();
   scheduleRepeatQueueIssue();
   scheduleRepeatMorning();
   scheduleRepeatAutoBrak();
@@ -1015,6 +1017,45 @@ function scheduleIdleWatch() {
   };
   setTimeout(() => { void tick(); }, 3 * 60 * 1000);
   setInterval(() => { void tick(); }, 5 * 60 * 1000);
+}
+
+// «Большой брат», поток D — дневной агрегат activity_daily (features/big-brother/engine/daily/build.ts).
+// Ночь 01:00–01:59 МСК, раз в сутки: вчерашний день начисто + досборка пропущенных дат за год (≤ 30 за ночь) +
+// TTL-чистка подробной ленты (purgeOldActivity — activity_events / activity_minutes старше 90 дней; агрегат бессрочен).
+// Днём раз в 15 мин — пересчёт «сегодня» (вкладка «Люди», календарь). Читает sa/va + system, пишет только activity_*;
+// рассылок нет. На проде с рубильником — ключ activityDaily в BACKGROUND_JOBS_ALLOW. Нет таблиц (миграция 296 не
+// накатана) — тихо ждём.
+function scheduleActivityDaily() {
+  let running = false;
+  let lastNight = '';
+  const quiet = (err: unknown) => (err as { code?: string }).code === '42P01';
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const msk = new Date(Date.now() + 3 * 3600_000);
+      const date = msk.toISOString().slice(0, 10);
+      if (msk.getUTCHours() === 1 && lastNight !== date) {
+        const outcome = await runOnceADayMsk('activity-daily:nightly', date, async () => {
+          const { runActivityDailyNightly } = await import('./features/big-brother/engine/daily/build');
+          const { purgeOldActivity } = await import('./lib/activity/log');
+          const log = await runActivityDailyNightly();
+          const purged = await purgeOldActivity();
+          console.log(`[activityDaily] ночь: ${log.join('; ')}; TTL: событий ${purged.events}, минут ${purged.minutes}`);
+        });
+        if (outcome === 'ran' || outcome === 'already') lastNight = date;
+      } else {
+        const { runActivityDailyToday } = await import('./features/big-brother/engine/daily/build');
+        console.log(`[activityDaily] сегодня ${await runActivityDailyToday()}`);
+      }
+    } catch (err) {
+      if (!quiet(err)) console.error('[activityDaily] не удалось:', err instanceof Error ? err.message : err);
+    } finally {
+      running = false;
+    }
+  };
+  setTimeout(() => { void tick(); }, 4 * 60 * 1000);
+  setInterval(() => { void tick(); }, 15 * 60 * 1000);
 }
 
 function scheduleLogistBxSync() {
