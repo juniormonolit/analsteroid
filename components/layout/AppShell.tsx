@@ -9,7 +9,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, ListChecks, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3, Megaphone, Tags, GitFork, UserX,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3, Megaphone, Tags, GitFork, UserX, Eye,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -29,6 +29,8 @@ import { useTheme } from '@/lib/hooks/useTheme';
 import { CreateReportButton } from '@/features/reports/ui/CreateReportButton';
 import { canViewRealizations } from '@/lib/realizations/access';
 import { canUseDismissal } from '@/features/dismissal/access';
+import { canViewBigBrother } from '@/lib/activity/access';
+import { ActivityTracker } from '@/components/activity/ActivityTracker';
 import { MARKETING_PRESETS } from '@/lib/marketing/presets';
 import { BottomTabBar } from '@/components/layout/BottomTabBar';
 
@@ -495,6 +497,8 @@ function SidebarBody({
     { href: '/tasker', label: 'Задачник', icon: <ListChecks size={18} />, ok: canMore('section.tasker') },
     // «Карта показателей» (задача владельца 23.11) — дерево связанных показателей с весами.
     { href: '/metric-map', label: 'Карта показателей', icon: <GitFork size={18} />, ok: canMore('section.metric_map') },
+    // «Большой брат» (BIG_BROTHER_SPEC.md, 25.11) — журнал активности; директор и выше или явное право.
+    { href: '/big-brother', label: 'Большой брат', icon: <Eye size={18} />, ok: canViewBigBrother(user) },
     // Чаты по сделкам (задача владельца 20.07) — переписки РОПа с менеджерами через
     // бота «Аналитик»; гейт по действию, не по section.* (право включается ролям).
     { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: canMore('action.deal_chats') },
@@ -973,6 +977,7 @@ export function AppShell({ children, user, initialCollapsed = false }: { childre
     <QueryProvider>
       <TooltipProvider>
       <ThemeSync />
+      <ActivityTracker />
       {/* Иконка валюты MLT (задача 2747): defs регистрируются один раз на весь
           авторизованный контур — дальше везде лёгкий <MltCoin/> через <use>. */}
       <MltCoinDefs />

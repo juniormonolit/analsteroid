@@ -4,6 +4,7 @@ import { taskerAuth, intParam } from '@/features/tasker/engine/http';
 import { patchTask } from '@/features/tasker/engine/patch';
 import { errorResponse } from '@/features/tasker/engine/config';
 import type { TaskerPatchResponse } from '@/features/tasker/types';
+import { logTaskerPatched } from '@/lib/activity/services';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +16,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   try {
     const body = await req.json().catch(() => null);
     const { task, warning } = await patchTask(auth.session, auth.scope, id, body);
+    void logTaskerPatched(auth.session, task, body);
     const out: TaskerPatchResponse = { task, warning };
     return NextResponse.json(out);
   } catch (e) {

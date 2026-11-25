@@ -4,6 +4,7 @@ import { BigActionError } from '@/features/big-deals-kanban/engine/actions';
 import { bigActor } from '@/features/big-deals-kanban/engine/actor';
 import { visibleTaskDealId } from '@/features/big-deals-kanban/engine/taskClient';
 import { NOTE_MAX, saveNote } from '@/features/big-deals-kanban/engine/taskNotes';
+import { logBigOther } from '@/lib/activity/services';
 
 // Комментарий к карточке задачи (Осипов 25.11). PUT { text } — сохранить, пустой текст — удалить.
 // Писать может РОП (canManage), задача должна быть в его зоне (visibleTaskDealId — те же проверки, что у звонков).
@@ -22,6 +23,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
     const actor = await bigActor(session);
     if (!actor.canManage) return NextResponse.json({ error: 'Комментарий к карточке пишет РОП' }, { status: 403 });
     const note = await saveNote(taskId, body.text, { id: actor.userId, name: actor.name ?? session.login });
+    void logBigOther(session, 'note', { taskId });
     console.info(`[big-deals note] ${session.login} task=${taskId} ${note ? `${note.text.length} симв.` : 'удалён'}`);
     return NextResponse.json({ note });
   } catch (e) {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { NO_STORE, jsonBody, parseId, withActor } from '@/features/logist-kanban/engine/requests/http';
 import { listMessages, postMessage } from '@/features/logist-kanban/engine/requests/repo';
 import { InputError, str } from '@/features/logist-kanban/engine/requests/validate';
+import { logLogist } from '@/lib/activity/services';
 
 // GET  /api/logist-kanban/request/:id/messages?after=<id> → MessagesResponse (поллинг чата + лента событий)
 // POST /api/logist-kanban/request/:id/messages  PostMessageBody → PostMessageResponse
@@ -19,11 +20,13 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
-  return withActor('messages:post', async a => {
+  return withActor('messages:post', async (a, s) => {
     const b = (await jsonBody(req)) as Record<string, unknown>;
     const body = str(b.body, 8000);
     if (!body) throw new InputError('Пустое сообщение');
     const fileIds = Array.isArray(b.fileIds) ? b.fileIds.map(Number).filter(n => Number.isInteger(n) && n > 0).slice(0, 20) : [];
-    return NextResponse.json(await postMessage(a, parseId(id), body, fileIds), { status: 201, headers: NO_STORE });
+    const out = await postMessage(a, parseId(id), body, fileIds);
+    void logLogist(s, 'message', parseId(id));
+    return NextResponse.json(out, { status: 201, headers: NO_STORE });
   });
 }

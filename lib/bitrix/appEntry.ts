@@ -98,7 +98,7 @@ export async function bitrixAppEntry(req: NextRequest, page: string, loading: st
     console.log('[bitrix/app] создан аккаунт для bitrix_user_id', identity.bitrixUserId);
   }
 
-  const token = await createSession(resolved.userId);
+  const token = await createSession(resolved.userId, { via: 'bitrix_iframe', surface: 'bx_iframe' });
   // Токен приложения (17.09): методы placement.* работают только в контексте
   // приложения, вебхуку они недоступны. Запоминаем AUTH_ID на его срок жизни —
   // супер-админ из «Настроек» сможет привязать «Монолитику» в левое меню портала.

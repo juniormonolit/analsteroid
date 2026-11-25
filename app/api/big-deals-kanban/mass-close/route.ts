@@ -4,6 +4,7 @@ import { hasPerm } from '@/lib/auth/perms';
 import { bigActor } from '@/features/big-deals-kanban/engine/actor';
 import { MassCloseError, getMassCloseJob, planMassClose, startMassClose, type MassCloseInput } from '@/features/big-deals-kanban/engine/massClose';
 import { normalizeFilters } from '@/features/big-deals-kanban/engine/filters';
+import { logBigOther } from '@/lib/activity/services';
 
 // Массовое закрытие задач канбана больших чеков (engine/massClose.ts, контракт BigMassCloseJob в types.ts).
 // POST { taskIds } | { filters } + { dryRun?, comment?, expectedCount? }:
@@ -31,6 +32,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ count: p.count, matched: p.matched, limited: p.limited, skipped: p.skipped, sample: p.sample }, { headers: { 'Cache-Control': 'no-store' } });
     }
     const r = await startMassClose(input, actor, session.login, Number(body.expectedCount));
+    void logBigOther(session, 'mass_close', { count: r.total });
     return NextResponse.json(r);
   } catch (e) {
     if (e instanceof MassCloseError) return NextResponse.json({ error: e.message }, { status: e.status });

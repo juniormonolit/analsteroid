@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
   }
   await limiter.recordSuccess(ip, normLogin);
 
-  const token = await createSession(user.id);
+  const token = await createSession(user.id, { via: 'password' });
 
   const response = NextResponse.json({ ok: true });
   response.cookies.set(SESSION_COOKIE, token, {

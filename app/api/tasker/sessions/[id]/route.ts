@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { taskerAuth, intParam } from '@/features/tasker/engine/http';
 import { patchSession } from '@/features/tasker/engine/sessionActions';
 import { errorResponse } from '@/features/tasker/engine/config';
+import { logTaskerSession } from '@/lib/activity/services';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,7 +14,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!id) return NextResponse.json({ error: 'Некорректный id', code: 'bad_request' }, { status: 400 });
   try {
     const body = await req.json().catch(() => null);
-    return NextResponse.json(await patchSession(auth.session, auth.scope, id, body));
+    const out = await patchSession(auth.session, auth.scope, id, body);
+    void logTaskerSession(auth.session, id, body);
+    return NextResponse.json(out);
   } catch (e) {
     return errorResponse(e);
   }

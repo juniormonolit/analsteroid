@@ -5,6 +5,7 @@ import { errorResponse } from '@/features/tasker/engine/config';
 import { createMeeting, getMeeting, listMeetings } from '@/features/tasker/meetings/engine/store';
 import { syncMeetingCalendar } from '@/features/tasker/meetings/engine/calendar';
 import type { TaskerMeetingResponse, TaskerMeetingsResponse } from '@/features/tasker/types';
+import { logTaskerMeeting } from '@/lib/activity/services';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +29,7 @@ export async function POST(req: NextRequest) {
   if (auth instanceof Response) return auth;
   try {
     const id = await createMeeting(auth.session, auth.scope, await req.json().catch(() => null));
+    void logTaskerMeeting(auth.session, id, 'create');
     await syncMeetingCalendar(id); // не бросает: сбой календаря — состояние «не синхронизировано», повтор фоном
     const out: TaskerMeetingResponse = { meeting: await getMeeting(auth.session, auth.scope, id) };
     return NextResponse.json(out);

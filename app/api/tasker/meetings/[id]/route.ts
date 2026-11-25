@@ -6,6 +6,7 @@ import { errorResponse, TaskerError } from '@/features/tasker/engine/config';
 import { cancelMeeting, canEditMeeting, getMeeting, getMeetingRow, updateMeeting } from '@/features/tasker/meetings/engine/store';
 import { syncMeetingCalendar } from '@/features/tasker/meetings/engine/calendar';
 import type { TaskerMeetingResponse } from '@/features/tasker/types';
+import { logTaskerMeeting } from '@/lib/activity/services';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -31,6 +32,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   try {
     const id = await idOf(ctx);
     await updateMeeting(auth.session, auth.scope, id, await req.json().catch(() => null));
+    void logTaskerMeeting(auth.session, id, 'update');
     await syncMeetingCalendar(id);
     const out: TaskerMeetingResponse = { meeting: await getMeeting(auth.session, auth.scope, id) };
     return NextResponse.json(out);
@@ -43,6 +45,7 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
   try {
     const id = await idOf(ctx);
     await cancelMeeting(auth.session, auth.scope, id);
+    void logTaskerMeeting(auth.session, id, 'cancel');
     await syncMeetingCalendar(id);
     const out: TaskerMeetingResponse = { meeting: await getMeeting(auth.session, auth.scope, id) };
     return NextResponse.json(out);

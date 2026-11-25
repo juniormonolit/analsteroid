@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL('/login?from=bitrix', origin));
   }
 
-  const session = await createSession(userId);
+  const session = await createSession(userId, { via: 'bitrix_handoff' });
   // Куда вести после входа — только из белого списка (никаких произвольных адресов из URL).
   const TARGETS: Record<string, string> = { 'repeat-kanban': '/repeat-kanban', 'big-deals-kanban': '/big-deals-kanban', 'logist-kanban': '/logist-kanban' };
   // Вкладка сделки «Запросы логисту» — та же встроенная страница, но в обычной вкладке; id сделки — только цифры.

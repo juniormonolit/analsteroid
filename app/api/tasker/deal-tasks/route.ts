@@ -6,6 +6,7 @@ import { permError } from '@/lib/auth/perms';
 import { taskerAuth } from '@/features/tasker/engine/http';
 import { errorResponse } from '@/features/tasker/engine/config';
 import { createDealTasks, previewDeals } from '@/features/tasker/engine/dealTasks';
+import { logTaskerCreated } from '@/lib/activity/services';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -29,7 +30,9 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
   try {
     const body = await req.json().catch(() => null);
-    return NextResponse.json(await createDealTasks(auth.session, auth.scope, body));
+    const out = await createDealTasks(auth.session, auth.scope, body);
+    void logTaskerCreated(auth.session, out.created, 'deal');
+    return NextResponse.json(out);
   } catch (e) {
     return errorResponse(e);
   }

@@ -30,7 +30,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   ]);
   await db.query(`UPDATE invite_tokens SET used_at = now() WHERE token = $1`, [token]);
 
-  const sessionToken = await createSession(invite.user_id);
+  const sessionToken = await createSession(invite.user_id, { via: 'invite' });
   const response = NextResponse.json({ ok: true });
   response.cookies.set(SESSION_COOKIE, sessionToken, {
     httpOnly: true,

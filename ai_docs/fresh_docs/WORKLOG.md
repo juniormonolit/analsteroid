@@ -5,6 +5,44 @@
 > изменение кода/конфига/инфраструктуры или принятое решение → запись сюда.
 
 ---
+## 2026-11-25 — «Большой брат», поток A: журнал активности Монолитики и оболочка раздела
+
+- **Контракт** `lib/activity/types.ts` (первый коммит, b9793857): `kind` (mono_view / mono_action / session в
+  `activity_events`; call / deal_stage / deal_new / task / kanban / logist — производные адаптеров, в журнал не пишутся),
+  `MonoAction` (task_create/update/reschedule/close/return/delete/comment, deal_move/update, request_create/update/assign,
+  settings_update, other — исходная операция сервиса всегда в `payload.op`), `ActivitySurface` (web/mobile/pwa/bx_iframe/server
+  ← `useAppMode`), `MinuteSource`, бакет 5 мин, TTL 90 дней. Менять только добавлением.
+- **Миграция 296** `migrations/296_activity_journal.sql`: `activity_events`, `activity_minutes` (PK = человек+бакет+source+surface+section,
+  у пользователя без Битрикс-id ключ `u:<users.id>`), `activity_daily` (для потока D; отдел/РОП на дату, counts/sections/surfaces jsonb).
+  Гранты — копией с `repeat_kanban_events` (+ USAGE на `activity_events_id_seq`). **На прод НЕ накатана.** Накат (до деплоя, иначе
+  журнал молча не пишется — logActivity не бросает, а «Обзор» покажет «не подключён»):
+  `docker exec -i <pg> psql -U monolitik -d monolitika < migrations/296_activity_journal.sql` (как 291–294), затем проверить
+  `\dp activity_*` — у роли приложения SELECT/INSERT/UPDATE/DELETE.
+- `lib/activity/log.ts`: `logActivity(session, …)`, `logActivityByUserId(userId, …)` (вход/выход — INSERT…SELECT из users),
+  `recordMinute(…)` (ON CONFLICT DO NOTHING), `purgeOldActivity()` — TTL 90 дней порциями. Ничто не бросает.
+  `lib/activity/services.ts` — маппинг мутаций сервисов в mono_action, `lib/activity/access.ts` — гейты, `lib/activity/section.ts`.
+- **Вход/выход**: `createSession(userId, { via, surface })` пишет session/login только когда `via` передан (password, invite,
+  bitrix_iframe с surface=bx_iframe, bitrix_handoff); служебные сессии `reportRunner` не передают — в журнал не попадают.
+  `deleteSession(token, { logout: true })` — только из `/api/auth/logout`.
+- **Трекер** `components/activity/ActivityTracker.tsx` (одна строка в AppShell): mono_view при смене маршрута (пачкой через 3 с
+  или с пульсом, подряд одинаковые разделы схлопываются на сервере), пульс раз в 60 с только при видимой вкладке и вводе за 2 мин
+  (pointermove/pointerdown/keydown/wheel/touchstart в документе — в iframe это ввод внутри фрейма), sendBeacon на pagehide.
+  API `POST /api/activity/beat` → бакет в `activity_minutes` + mono_view; всегда 204. Нагрузка — ≤ 1 запрос/мин на вкладку + редкие пачки.
+- **mono_action** в API: Задачник (tasks POST, tasks/:id PATCH, deal-tasks POST, sessions/:id PATCH, meetings POST/PATCH/DELETE),
+  канбан больших (action, mass-close, task/:id/note), канбан логистов (request/:id/action, request/:id PATCH, messages POST, drafts POST).
+  Не покрыто сознательно: обучения/шаблоны/темы/колонки/настройки — это настройка, а не работа с задачами; добавить при нужде через services.ts.
+  Канбан повторки не трогали (свой журнал).
+- **Оболочка**: `section.big_brother` (PERM_SECTIONS + MORE_MENU_PERMS), `action.big_brother_rop`; пункт «Большой брат» в «Ещё»
+  (`canViewBigBrother`: superadmin / Администратор / Директор / право). `app/(app)/big-brother/layout.tsx` — гейт, шапка, вкладки
+  Обзор / РОПы (только `canViewBigBrotherRop`) / Задачи / Люди / Сторож (flex-wrap, правило 12) и page-root со скроллом —
+  страницам вкладок свой h-full-скролл и h1 не нужны; страница «РОПы» гейтит себя сама. «Обзор» — сегодня (МСК): люди, активное
+  время, открытия, действия, входы, топ разделов, режимы входа, действия по сервисам.
+- **Осталось подключить** (instrumentation.ts — у потока C/D): `runOnceADayMsk('activityPurge', () => purgeOldActivity())` ночью +
+  ключ `activityPurge` в `BACKGROUND_JOBS_ALLOW` на проде.
+- Проверки: typecheck чистый; lint:responsive — новых нарушений в файлах потока нет (3 новых — в чужом `features/dashboard-test`).
+  Превью: локальная БД отвечала таймаутом на всех разделах (и на `/metric-map`) — экран с данными на 375px не посмотрен.
+
+---
 ## 2026-11-25 — «Большой брат»: ТЗ и решения владельца
 
 - Новая фича — журнал активности пользователей и связь с показателями, раздел в «Ещё» (`/big-brother`).

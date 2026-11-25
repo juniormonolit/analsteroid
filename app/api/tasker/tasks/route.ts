@@ -8,6 +8,7 @@ import { errorResponse } from '@/features/tasker/engine/config';
 import { getTrainingActor, listEnrollments } from '@/features/tasker/trainings/engine';
 import { listMeetings } from '@/features/tasker/meetings/engine/store';
 import type { TaskerTasksQuery, TaskerTasksResponse, TaskerView } from '@/features/tasker/types';
+import { logTaskerCreated } from '@/lib/activity/services';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -58,7 +59,9 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
   try {
     const body = await req.json().catch(() => null);
-    return NextResponse.json(await createTasks(auth.session, auth.scope, body));
+    const out = await createTasks(auth.session, auth.scope, body);
+    void logTaskerCreated(auth.session, out.created, 'metric');
+    return NextResponse.json(out);
   } catch (e) {
     return errorResponse(e);
   }

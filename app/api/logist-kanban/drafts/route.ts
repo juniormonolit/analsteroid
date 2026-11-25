@@ -5,6 +5,7 @@ import { managerRegion, readDeal } from '@/features/logist-kanban/engine/request
 import { NO_STORE, jsonBody, withActor } from '@/features/logist-kanban/engine/requests/http';
 import { LogistError, createDraft } from '@/features/logist-kanban/engine/requests/repo';
 import { InputError, id, parseHeader, parseItems, parseType } from '@/features/logist-kanban/engine/requests/validate';
+import { logLogist } from '@/lib/activity/services';
 
 // POST /api/logist-kanban/drafts — создать черновик (CreateDraftBody → CreateDraftResponse); send: true — сразу в «Новые».
 // С dealId — шапка и товары из Битрикса (только чтение). От чужого имени (managerBitrixId) — только руководитель
@@ -13,7 +14,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  return withActor('drafts', async a => {
+  return withActor('drafts', async (a, s) => {
     const b = (await jsonBody(req)) as Record<string, unknown>;
     const type = parseType(b.type);
     const dealId = b.dealId == null ? null : id(b.dealId, 'id сделки');
@@ -38,6 +39,7 @@ export async function POST(req: NextRequest) {
       header, items: finalItems, sendNow: b.send === true,
       productGroups: [...new Set([...finalItems.map(i => i.productGroup).filter((g): g is string => !!g), ...(deal?.productGroups ?? [])])],
     });
+    if (res.created) void logLogist(s, b.send === true ? 'send' : 'create_draft', res.request.id, res.request.deal?.id ?? null);
     return NextResponse.json(res, { status: res.created ? 201 : 200, headers: NO_STORE });
   });
 }

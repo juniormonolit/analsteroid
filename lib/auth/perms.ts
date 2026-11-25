@@ -81,6 +81,9 @@ export const PERM_SECTIONS = [
   // «Карта показателей» (задача владельца 23.11): дерево Сумма отгрузок = перв. + повт.,
   // ветка = сделки × CR × ср. чек × коэф. отгрузки; вклад факторов и «что если».
   { key: 'section.metric_map', label: 'Карта показателей' },
+  // «Большой брат» (BIG_BROTHER_SPEC.md, 25.11): журнал активности и «активность ↔ показатели».
+  // Без права видят superadmin / «Администратор» / роль «Директор» (lib/activity/access.ts); остальным — явно.
+  { key: 'section.big_brother', label: 'Большой брат' },
   { key: 'section.rating', label: 'Рейтинг' },
   { key: 'section.widget_constructor', label: 'Виджеты' },
   // «Дашборд тест» (задача владельца 08.10) — черновик дашборда директора по
@@ -152,6 +155,9 @@ export const PERM_ACTIONS = [
   // Конструктор шаблонов рекомендаций (правки собрания 23.11): руководители пишут пошаговые инструкции по
   // показателям. Пофамильно (директор и кому решат); «Администратор» и супер-админ — и так (canManageTemplates).
   { key: 'action.tasker.templates', label: 'Задачник: редактировать шаблоны рекомендаций' },
+  // «Большой брат» → «РОПы»: рейтинг РОПов (решение владельца 25.11 — только админы). superadmin и
+  // «Администратор» — и так (canViewBigBrotherRop); пофамильно — этим ключом.
+  { key: 'action.big_brother_rop', label: 'Большой брат: рейтинг РОПов' },
 ] as const;
 
 // Особое право-джокер: «все разделы, включая будущие». Заведено 31.08 по жалобе
@@ -206,6 +212,7 @@ export const MORE_MENU_PERMS: ReadonlyArray<{ key: PermKey; label: string }> = [
   { key: 'section.logist_kanban', label: 'Канбан логиста' },
   { key: 'section.tasker', label: 'Задачник' },
   { key: 'section.metric_map', label: 'Карта показателей' },
+  { key: 'section.big_brother', label: 'Большой брат' },
   { key: 'action.deal_chats', label: 'Чаты' },
   { key: 'section.rating', label: 'Рейтинг' },
   { key: 'section.offload', label: 'Разгрузка отделов' },

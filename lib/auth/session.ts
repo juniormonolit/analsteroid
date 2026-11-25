@@ -1,6 +1,8 @@
 import { cache } from 'react';
 import { cookies } from 'next/headers';
 import { systemDb } from '@/lib/db/clients';
+import { logActivityByUserId } from '@/lib/activity/log';
+import type { ActivitySurface, LoginVia } from '@/lib/activity/types';
 
 const COOKIE = 'as_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -113,7 +115,9 @@ export async function loadSessionUserById(userId: string): Promise<SessionUser |
   return res.rows[0] ?? null;
 }
 
-export async function createSession(userId: string): Promise<string> {
+/** login — если передан, пишет в журнал «Большого брата» событие session/login (служебные сессии,
+ *  например reportRunner, его не передают и в журнал не попадают). */
+export async function createSession(userId: string, login?: { via: LoginVia; surface?: ActivitySurface }): Promise<string> {
   const token = crypto.randomUUID() + crypto.randomUUID();
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
   const db = systemDb();
@@ -121,11 +125,15 @@ export async function createSession(userId: string): Promise<string> {
     `INSERT INTO user_sessions (token, user_id, expires_at) VALUES ($1, $2, $3)`,
     [token, userId, expiresAt]
   );
+  if (login) void logActivityByUserId(userId, { kind: 'session', action: 'login', surface: login.surface ?? 'server', payload: { via: login.via } });
   return token;
 }
 
-export async function deleteSession(token: string): Promise<void> {
-  await systemDb().query(`DELETE FROM user_sessions WHERE token = $1`, [token]);
+/** logout=true — пользователь вышел сам: событие session/logout в журнал «Большого брата». */
+export async function deleteSession(token: string, opts?: { logout?: boolean }): Promise<void> {
+  const r = await systemDb().query<{ user_id: string }>(`DELETE FROM user_sessions WHERE token = $1 RETURNING user_id`, [token]);
+  const userId = r.rows[0]?.user_id;
+  if (opts?.logout && userId) void logActivityByUserId(userId, { kind: 'session', action: 'logout' });
 }
 
 export const SESSION_COOKIE = COOKIE;
