@@ -27,6 +27,7 @@ import {
 import { periodDateStrFromInstant, type CalendarUnit } from '@/lib/period';
 import { validateDealFilters } from '@/lib/metrics/dealFilters';
 import type { DealScope, ClientType, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
+import { logReportRequest } from '@/lib/activity/reports';
 
 // ── Отчёт «По периодам» (задача владельца 09.08) ─────────────────────────────
 //
@@ -386,6 +387,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  void logReportRequest(session, req, body);
   return NextResponse.json({
     rows,
     grouped: null, // группировок по отделам/филиалам у периодов нет

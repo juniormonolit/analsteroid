@@ -9,6 +9,7 @@ import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAppMode, type AppMode } from '@/lib/hooks/useAppMode';
 import type { ActivitySurface } from '@/lib/activity/types';
+import { setActivitySurface } from '@/lib/activity/client';
 
 const BEAT_MS = 60_000;
 const IDLE_MS = 120_000;
@@ -38,7 +39,7 @@ export function ActivityTracker() {
   const { mode } = useAppMode();
   const modeRef = useRef(mode);
   const pathRef = useRef(pathname);
-  useEffect(() => { modeRef.current = mode; pathRef.current = pathname; }, [mode, pathname]);
+  useEffect(() => { modeRef.current = mode; pathRef.current = pathname; setActivitySurface(SURFACE[mode]); }, [mode, pathname]);
   const queue = useRef<View[]>([]);
   const lastInput = useRef(Date.now());
   const lastPath = useRef<string | null>(null);

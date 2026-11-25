@@ -2,6 +2,7 @@
 import { useRef, useState } from 'react';
 import { Download, Copy, FileSpreadsheet, FileText, Image as ImageIcon, Check, Loader2 } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
+import { trackReportExport } from '@/lib/activity/client';
 
 // Задача 1706 (владелец, экспорт отчёта): кнопка «Копировать» тулбара заменена на
 // «Скачать» с выпадающим меню из 4 пунктов. Дропдаун — на общем `components/ui/Popover`
@@ -41,6 +42,7 @@ export function ExportMenu({ onCopyTable, onExportExcel, onExportPdf, onExportPn
     setBusyKey(action.key);
     try {
       await action.run();
+      trackReportExport(action.key); // журнал «Большого брата»: кто выгружает отчёты
       setDoneKey(action.key);
       if (doneTimer.current) clearTimeout(doneTimer.current);
       doneTimer.current = setTimeout(() => setDoneKey(null), 1500);
