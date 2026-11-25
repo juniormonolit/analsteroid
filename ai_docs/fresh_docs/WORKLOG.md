@@ -22,6 +22,7 @@
   `?deal=` — `entity_type`/`entity_id` (+ deal_id). Смена вкладки (?tab=) теперь отдельный просмотр. Трекер обёрнут в Suspense (useSearchParams).
 - **Длительность просмотра**: при смене маршрута и на pagehide трекер шлёт `leaves[]` с `active_ms` (видимая вкладка + ввод за 2 мин,
   шаг 5 с) и `total_ms`; `/api/activity/beat` дописывает их в payload последнего mono_view этого человека по пути (`recordViewLeave`, 12 ч).
+- **report_drill**: + `manager_id` (дрилл в менеджера) и `team_id` (дрилл строки «значение × отдел») — для матрицы «РОП × менеджеры» потока B.
 - **report_load**: + `duration_ms`, `rows`, `metric_ids`; сбой расчёта (исключение или ответ ≥ 500) — отдельная запись `report_error`
   (`withReportErrorLog`: длительность, статус, только класс ошибки — в тексте бывают значения фильтров).
 - **Выгрузки вне отчётов**: `trackExport(what, format, rows)` (`lib/activity/client.ts`) → `/api/activity/event` → `mono_action export`.

@@ -61,6 +61,9 @@ export async function logReportRequest(session: SessionUser, req: NextRequest, b
       batch: batch ? Number(batch.size) || true : undefined,
       split_by_team: body.splitByTeam === true || undefined,
       drill: drill ?? undefined,
+      // Дрилл в менеджера / отдел — id сотрудника и отдела (не ПДн клиентов); читает поток B (матрица «РОП × менеджеры»).
+      manager_id: body.managerId != null && /^\d{1,15}$/.test(String(body.managerId)) ? String(body.managerId) : undefined,
+      team_id: body.teamId != null && /^[0-9a-zA-Z-]{1,40}$/.test(String(body.teamId)) ? String(body.teamId) : undefined,
       metric_ids: ids(body.metricIds),
     };
     const action = extra.error ? 'report_error' : drill ? 'report_drill' : 'report_load';
