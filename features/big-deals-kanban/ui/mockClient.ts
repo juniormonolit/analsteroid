@@ -33,6 +33,25 @@ export function mockTaskDetails(card: BigTaskCard): BigTaskDetails {
       { name: 'Доставка манипулятором', qty: 1, price: 18000, sum: 18000, unit: 'рейс' },
     ] : null,
     productsChanged: card.id % 2 === 0,
+    brief: {
+      fields: [
+        { label: 'Клиент', value: card.client ?? 'Иванов Пётр' },
+        { label: 'Адрес', value: 'МО, Истринский р-н, д. Падиково, участок 14' },
+        { label: 'Для каких целей', value: 'строительство дома' },
+        { label: 'Форма оплаты', value: 'Нал' },
+        { label: 'Дата поставки', value: new Date(Date.now() + 86_400_000).toLocaleDateString('ru-RU'), warn: true },
+        { label: 'Есть ли цена дешевле', value: 'Да, есть цена дешевле' },
+        { label: 'Источник', value: 'https://avito.ru/moskva/remont_i_stroitelstvo/gazobeton_123' },
+      ],
+      managerComment: 'есть дешевле у Бонолита, 1 сорт. Клиент просит доставку в субботу',
+      taskProducts: [
+        { name: product, qty: Math.round(amount / 5000), unit: 'шт', price: 5100, sum: Math.round(amount / 5000) * 5100 },
+        { name: 'Доставка манипулятором', qty: 2, unit: 'рейс', price: 17850, sum: 35700 },
+      ],
+      taskTotal: Math.round(amount / 5000) * 5100 + 35700,
+      competitor: [{ name: product, price: 4900 }],
+      callCenter: 'Товары:\nКатегория: Газобетон\n  Объём: 60 м3\n\nКлиент\n  Имя: Пётр\n  Адрес: Падиково',
+    },
     chat: [
       { id: 1, author: null, authorId: '0', at: iso(3), text: 'Задача создана', system: true },
       { id: 2, author: card.creator.name, authorId: card.creator.id, at: iso(3), text: 'Когда нужен материал? Под какие цели?', system: false },

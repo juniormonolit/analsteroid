@@ -11,6 +11,7 @@ import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronDown, Clock, Copy, ExternalLink, Link2, Phone } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
+import { Popover } from '@/components/ui/Popover';
 import { LogistRequestButton } from '@/features/logist-kanban/form/LogistRequestForm';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
 import { ClientSummaryPanel } from '@/features/client-module/ui/ClientSummaryPanel';
@@ -29,10 +30,13 @@ import type { BigChatMessage, BigTaskDetails } from '../engine/taskDetails';
 import { CallsTab } from './CallsTab';
 import { StageBadge } from './StageHistory';
 import { STATE_META, cardAmount, fmtDT, money } from './format';
-import { ChatFileLink, TaskChat } from './TaskDrawerChat';
+import { TaskChat } from './TaskDrawerChat';
+import { BbText } from './BbText';
+import { TaskThread, ThreadComposer } from './TaskThread';
+import { postBigAction } from './TaskDrawerShared';
 import { CardNoteField } from './CardNote';
+import { TaskBriefSection } from './TaskBrief';
 import { TaskActions } from './TaskDrawerActions';
-import { Section } from './TaskDrawerShared';
 import { ParticipantsField } from './ParticipantsField';
 import { mockClientRef, mockTaskDetails, seedMockClient } from './mockClient';
 
@@ -41,11 +45,16 @@ type Pane = 'work' | 'calls' | 'tasks' | 'client';
 const linkBtn = 'inline-flex min-h-11 items-center gap-1 rounded-md border border-[var(--color-border)] px-3 text-xs hover:bg-[var(--color-bg-hover)] sm:min-h-8';
 
 
-export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; managers: BigPerson[]; onClose: () => void; onChanged: (card?: BigTaskCard) => void; mock?: boolean }) {
-  const { card, managers, onClose, onChanged, mock = false } = props;
+export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; managers: BigPerson[]; onClose: () => void; onChanged: (card?: BigTaskCard) => void; mock?: boolean;
+  /** Когда смотрящий открывал карточку в прошлый раз — разделитель «новое» в лентах (индикатор «новое», 25.11). */
+  lastSeenAt?: string | null;
+}) {
+  const { card, managers, onClose, onChanged, mock = false, lastSeenAt = null } = props;
   const qc = useQueryClient();
   const [fullClient, setFullClient] = useState<ClientCardTab | null>(null);
   const [pane, setPane] = useState<Pane>('work');
+  // Телефон: внутри «Работы» — «Чат | Задача» (Fable 25.11), по умолчанию чат.
+  const [seg, setSeg] = useState<'chat' | 'task'>('chat');
   const [inject, setInject] = useState<{ text: string; key: number } | null>(null);
   const details = useQuery<BigTaskDetails>({
     queryKey: ['big-deals-task', card.id, mock ? 'mock' : ''],
@@ -69,20 +78,21 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
   const ref = mock ? mockClientRef(card) : { contactId: deal?.contactId ?? null, companyId: deal?.companyId ?? null };
   useMemo(() => { if (mock) seedMockClient(qc, card); }, [mock, qc, card]);
   const hasClient = !!(ref.contactId || ref.companyId);
-  const answered = card.related.filter(r => r.state === 'control' || r.state === 'done').length;
   const askItems = (items: string[]) => {
     setInject({ text: `По звонкам не увидел — ответь, пожалуйста:\n${items.map((x, i) => `${i + 1}. ${x}`).join('\n')}`, key: Date.now() });
+    setSeg('chat');
   };
+  const overdue = !!card.deadlineAt && card.state !== 'done' && Date.parse(card.deadlineAt) < Date.now();
+  const relNew = !!lastSeenAt && card.related.some(r => r.changedAt && r.changedAt > lastSeenAt);
 
-  // Собрание РОПов 18.11: «минимизировать перескакивание, сделать вкладками»: Работа (сделка, ИИ-оценка | действия
-  // сверху, чат снизу) · Звонки (расшифровки во всю ширину) · Задачи по сделке (логисты, снабжение — с их чатом) · Клиент.
-  // Описание задачи убрано («точно не нужно — в задачу провалишься»), счётчик звонков — тоже (есть вкладка «Звонки»).
+  // Вкладки (собрание РОПов 18.11 + Fable 25.11): «Задачи по сделке» → «Связанные» (короче, влезает в 375px), точка — новое.
   const tabs: { key: Pane; label: string; count?: number }[] = [
     { key: 'work', label: 'Работа' },
     { key: 'calls', label: 'Звонки' },
-    { key: 'tasks', label: 'Задачи по сделке', count: card.related.length },
+    { key: 'tasks', label: relNew ? 'Связанные •' : 'Связанные', count: card.related.length },
     { key: 'client', label: 'Клиент' },
   ];
+  const segBtn = (on: boolean) => `min-h-10 flex-1 rounded-md text-[13px] font-medium ${on ? 'bg-[var(--color-bg-surface)] shadow-sm' : 'text-[var(--color-text-secondary)]'}`;
 
   return (
     <>
@@ -93,83 +103,53 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
       bodyClassName="flex min-h-0 flex-1 flex-col p-0"
       title={<span className="line-clamp-2 break-words">{card.title}</span>}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col text-[13px] text-[var(--color-text)]">
-        {/* Шапка: что и на сколько, стадия сделки (цветом, как в Битриксе), статус, кто. */}
-        <div className="flex min-w-0 flex-col gap-2 border-b border-[var(--color-border)] px-4 py-3">
+        {/* Шапка в две строки (Fable 25.11): что и на сколько, стадия, статус, срок | клиент, телефон, исполнитель; ссылки — в «⋯». */}
+        <div className="flex min-w-0 flex-col gap-1.5 border-b border-[var(--color-border)] px-4 py-2.5">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
             {amount != null && <span className="text-[17px] font-bold tabular-nums">{money(amount)}</span>}
             {card.productGroup && <span className="min-w-0 truncate font-semibold">{card.productGroup}</span>}
             {deal && <StageBadge deal={deal} taskId={card.id} mock={mock} />}
-            <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${st.cls}`} title="Статус задачи">{st.label}</span>
-            <span className={`inline-flex items-center gap-0.5 text-[12px] ${card.stuck ? 'font-semibold text-[var(--color-negative)]' : 'text-[var(--color-text-muted)]'}`} title={`Колонка «${card.stageTitle}»`}>
-              <Clock size={12} aria-hidden />{card.daysInColumn} дн. в колонке
-            </span>
+            <span className={`rounded px-1.5 py-0.5 text-[12px] font-medium ${st.cls}`} title={`Статус задачи · проект ${card.groupShort} · колонка «${card.stageTitle}»`}>{st.label}</span>
+            {card.deadlineAt && (
+              <span className={`inline-flex items-center gap-0.5 text-[12px] ${overdue ? 'font-semibold text-[var(--color-negative)]' : 'text-[var(--color-text-secondary)]'}`} title="Срок задачи">
+                <Clock size={12} aria-hidden />{overdue ? 'просрочена: ' : 'срок '}{fmtDT(card.deadlineAt)}
+              </span>
+            )}
+            <span className={`text-[12px] ${card.stuck ? 'font-semibold text-[var(--color-negative)]' : 'text-[var(--color-text-muted)]'}`} title={`Колонка «${card.stageTitle}»`}>· {card.daysInColumn} дн. в колонке</span>
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-[var(--color-text-secondary)]">
-            <span>Исполнитель: <b className="text-[var(--color-text)]">{card.responsible.name}</b></span>
-            {card.client && <span className="min-w-0 truncate">Клиент: {card.client}</span>}
-            {deal?.createdAt && <span>Сделка создана: <b className="text-[var(--color-text)]">{fmtDT(deal.createdAt)}</b></span>}
-            {card.deadlineAt && <span>Срок задачи: {fmtDT(card.deadlineAt)}</span>}
-            <span className="rounded border border-[var(--color-border)] px-1 text-[10.5px] font-medium uppercase text-[var(--color-text-muted)]" title="Проект">{card.groupShort}</span>
-            <span className="flex flex-wrap gap-1.5 sm:ml-auto">
-              {d?.phone && <PhoneLink phone={d.phone} />}
-              <a href={card.url} target="_blank" rel="noreferrer" className={linkBtn} title="Задача в Битриксе"><ExternalLink size={12} /> Задача № {card.id}</a>
-              <CopyCardLink taskId={card.id} />
-              {deal && <a href={deal.url} target="_blank" rel="noreferrer" className={linkBtn} title="Сделка в Битриксе"><ExternalLink size={12} /> Сделка № {deal.id}</a>}
-            </span>
+            {card.client && <span className="min-w-0 truncate">Клиент: <b className="font-medium text-[var(--color-text)]">{card.client}</b></span>}
+            {d?.phone && <PhoneLink phone={d.phone} />}
+            <span className="min-w-0 truncate">Исполнитель: <b className="font-medium text-[var(--color-text)]">{card.responsible.name}</b></span>
+            {deal?.assigned && deal.assigned.id !== card.responsible.id && <span className="min-w-0 truncate">По сделке: {deal.assigned.name}</span>}
+            <span className="ml-auto"><LinksMenu card={card} /></span>
           </div>
         </div>
 
         <div className="px-4"><TabsRibbon tabs={tabs} active={pane} onChange={setPane} /></div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-3">
-          {/* Работа: слева сделка и ИИ-оценка, справа (на телефоне — первым) действия и чат. Скрываем, не размонтируем: черновик чата не теряется. */}
-          <div className={pane === 'work' ? 'flex min-w-0 flex-col gap-3 md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] md:items-start md:gap-4' : 'hidden'}>
-            <div className="order-2 flex min-w-0 flex-col gap-3 md:order-1">
+        <div className={`min-h-0 flex-1 overflow-x-hidden px-4 py-3 ${pane === 'work' ? 'overflow-y-auto md:overflow-hidden' : 'overflow-y-auto'}`}>
+          {/* Работа. Десктоп: слева «Задача» (свой скролл), справа действия и чат на всю высоту, ввод прижат к низу.
+              Телефон: «Чат | Задача». Скрываем, не размонтируем: черновик чата не теряется. */}
+          <div className={pane === 'work' ? 'flex min-w-0 flex-col gap-3 md:grid md:h-full md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] md:gap-4' : 'hidden'}>
+            <div className="flex rounded-lg bg-[var(--color-bg-hover)] p-1 md:hidden" role="tablist" aria-label="Чат или задача">
+              <button type="button" role="tab" aria-selected={seg === 'chat'} className={segBtn(seg === 'chat')} onClick={() => setSeg('chat')}>Чат</button>
+              <button type="button" role="tab" aria-selected={seg === 'task'} className={segBtn(seg === 'task')} onClick={() => setSeg('task')}>Задача</button>
+            </div>
+            <div className={`${seg === 'task' ? 'flex' : 'hidden'} min-w-0 flex-col gap-3 md:flex md:min-h-0 md:overflow-y-auto md:pr-1`}>
+              <TaskBriefSection brief={d?.brief} dealProducts={d?.dealProducts} dealAmount={deal?.amount ?? null}
+                loading={details.isLoading} error={details.error ? (details.error as Error).message : null} />
               <CardNoteField card={card} canEdit={canManage} onSaved={c => onChanged(c)} mock={mock} />
-              {deal && (
-                <Section title="Сделка и товары">
-                  <div className="flex flex-wrap gap-x-4 gap-y-1">
-                    <span className="font-semibold">{money(deal.amount)}</span>
-                    {deal.assigned && <span>Ответственный: {deal.assigned.name}</span>}
-                  </div>
-                  {d?.productsChanged && (
-                    <p className="mt-2 rounded bg-[var(--color-warning)]/15 px-2 py-1 text-[12px] text-[var(--color-warning)]">Товары в сделке отличаются от товаров в задаче</p>
-                  )}
-                  {d?.dealProducts && d.dealProducts.length > 0 && (
-                    <div className="scroll-x mt-2">
-                      <table className="w-full min-w-[340px] text-[12px]">
-                        <thead><tr className="text-left text-[var(--color-text-muted)]"><th className="py-1 pr-2 font-normal">Товар</th><th className="py-1 pr-2 text-right font-normal">Кол-во</th><th className="py-1 pr-2 text-right font-normal">Цена</th><th className="py-1 text-right font-normal">Сумма</th></tr></thead>
-                        <tbody>
-                          {d.dealProducts.map((p, i) => (
-                            <tr key={i} className="border-t border-[var(--color-border)]">
-                              <td className="py-1 pr-2">{p.name}</td>
-                              <td className="whitespace-nowrap py-1 pr-2 text-right">{p.qty} {p.unit ?? ''}</td>
-                              <td className="whitespace-nowrap py-1 pr-2 text-right">{money(p.price)}</td>
-                              <td className="whitespace-nowrap py-1 text-right">{money(p.sum)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  {details.isLoading && <p className="mt-1 text-[var(--color-text-muted)]">Загружаю товары…</p>}
-                  {details.error && <p className="mt-1 text-[var(--color-negative)]">{(details.error as Error).message}</p>}
-                  {d && d.dealProducts?.length === 0 && <p className="mt-1 text-[var(--color-text-muted)]">В сделке нет товаров</p>}
-                </Section>
-              )}
               {canManage && !mock && (
                 <TaskCheckPanel taskId={card.id} state={checks.data?.[String(card.id)]} labels={BIG_CHECK_LABELS} onAsk={askItems} failed={checks.isError} onRetry={() => void checks.refetch()} />
               )}
-              {card.related.length > 0 && (
-                <button type="button" onClick={() => setPane('tasks')} className="inline-flex min-h-11 items-center gap-1.5 self-start rounded-md border border-[var(--color-border)] px-3 text-[12.5px] hover:bg-[var(--color-bg-hover)]">
-                  <Link2 size={13} aria-hidden /> Задачи по сделке: {card.related.length}{answered ? `, ответили ${answered}` : ''}
-                </button>
-              )}
               {d && <ParticipantsField taskId={card.id} auditors={d.auditors ?? card.auditors} me={d.viewer?.id ?? null} canManage={canManage && card.state !== 'done'} onChanged={changed} />}
             </div>
-            <div className="order-1 flex min-w-0 flex-col gap-3 md:order-2">
+            <div className={`${seg === 'chat' ? 'flex' : 'hidden'} min-w-0 flex-col gap-2 md:flex md:min-h-0`}>
               {canManage && <TaskActions card={card} managers={managers} onChanged={changed} questions={d?.questions} mock={mock} />}
-              <TaskChat card={card} messages={d?.chat ?? null} loading={details.isLoading} onSent={changed} questions={d?.questions} rop={d?.rop ?? null} inject={inject} me={d?.viewer?.id ?? null} mock={mock} />
+              <TaskChat card={card} messages={d?.chat ?? null} loading={details.isLoading} onSent={changed} questions={d?.questions}
+                rop={d?.rop ?? null} inject={inject} me={d?.viewer?.id ?? null} lastSeenAt={lastSeenAt} mock={mock}
+                className="h-[70dvh] md:h-auto md:min-h-0 md:flex-1" />
             </div>
           </div>
 
@@ -177,7 +157,7 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
             ? <CallsTab taskId={card.id} contactId={ref.contactId} companyId={ref.companyId} mock={mock} />
             : <p className="text-[var(--color-text-muted)]">У задачи нет сделки с клиентом — звонков не найти.</p>)}
 
-          {pane === 'tasks' && <RelatedTasks card={card} mock={mock} />}
+          {pane === 'tasks' && <RelatedTasks card={card} me={d?.viewer?.id ?? null} lastSeenAt={lastSeenAt} mock={mock} />}
 
           {pane === 'client' && (deal || hasClient ? (
             <ClientSummaryPanel contactId={ref.companyId ? null : ref.contactId} companyId={ref.companyId}
@@ -196,8 +176,9 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
   );
 }
 
-/** Задачи по той же сделке (логист, снабжение…): статус, по клику — их чат (только чтение). */
-function RelatedTasks({ card, mock }: { card: BigTaskCard; mock: boolean }) {
+/** Задачи по той же сделке (логист, снабжение…): статус, описание (как в Битриксе, с таблицами), переписка — та же лента,
+ *  что у чата задачи, и ответ прямо отсюда (владелец 25.11: «везде возможность написать сообщение из канбана»). */
+function RelatedTasks({ card, me, lastSeenAt, mock }: { card: BigTaskCard; me: string | null; lastSeenAt: string | null; mock: boolean }) {
   const [open, setOpen] = useState<number | null>(card.related.length === 1 ? card.related[0].id : null);
   // «Запрос логисту» (канбан запросов логистам, S2): та же форма, что в карточке сделки
   const ask = card.deal ? <LogistRequestButton dealId={card.deal.id} mock={mock} className="inline-flex min-h-11 items-center gap-1.5 self-start rounded-md border border-[var(--color-border)] px-3 text-[12.5px] font-medium hover:bg-[var(--color-bg-hover)]" /> : null;
@@ -206,28 +187,42 @@ function RelatedTasks({ card, mock }: { card: BigTaskCard; mock: boolean }) {
     <div className="flex min-w-0 flex-col gap-2">
     {ask}
     <ul className="flex min-w-0 flex-col gap-2">
-      {card.related.map(r => (
-        <li key={r.id} className="min-w-0 rounded-lg border border-[var(--color-border)]">
-          <button type="button" onClick={() => setOpen(open === r.id ? null : r.id)} aria-expanded={open === r.id}
-            className="flex min-h-11 w-full min-w-0 flex-wrap items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-bg-hover)]">
-            <span className="min-w-0 flex-1 break-words font-medium">{r.title}</span>
-            <span className={`rounded px-1.5 py-0.5 text-[11px] ${STATE_META[r.state].cls}`}>{STATE_META[r.state].label}</span>
-            <span className="text-[11.5px] text-[var(--color-text-muted)]">{[r.groupName, r.responsible?.name, r.changedAt ? `изм. ${fmtDT(r.changedAt)}` : null].filter(Boolean).join(' · ')}</span>
-            <ChevronDown size={14} className={`shrink-0 transition-transform ${open === r.id ? 'rotate-180' : ''}`} aria-hidden />
-          </button>
-          {open === r.id && <RelatedChat taskId={card.id} rel={r} mock={mock} />}
-        </li>
-      ))}
+      {card.related.map(r => {
+        const isNew = !!lastSeenAt && !!r.changedAt && r.changedAt > lastSeenAt;
+        return (
+          <li key={r.id} className={`min-w-0 rounded-lg border ${isNew ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'}`}>
+            <div className="flex min-w-0 items-stretch">
+              <button type="button" onClick={() => setOpen(open === r.id ? null : r.id)} aria-expanded={open === r.id}
+                className="flex min-h-11 min-w-0 flex-1 flex-wrap items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-bg-hover)]">
+                {isNew && <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--color-accent)]" title="Новое с прошлого раза" />}
+                <span className="min-w-0 flex-1 break-words font-medium">{r.title}</span>
+                <span className={`rounded px-1.5 py-0.5 text-[11px] ${STATE_META[r.state].cls}`}>{STATE_META[r.state].label}</span>
+                <span className="text-[11.5px] text-[var(--color-text-muted)]">{[r.groupName, r.responsible?.name, r.changedAt ? `изм. ${fmtDT(r.changedAt)}` : null].filter(Boolean).join(' · ')}</span>
+                <ChevronDown size={14} className={`shrink-0 transition-transform ${open === r.id ? 'rotate-180' : ''}`} aria-hidden />
+              </button>
+              <a href={r.url} target="_blank" rel="noreferrer" title="Задача в Битриксе" aria-label="Задача в Битриксе"
+                className="flex w-11 shrink-0 items-center justify-center border-l border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]">
+                <ExternalLink size={14} />
+              </a>
+            </div>
+            {open === r.id && <RelatedChat taskId={card.id} rel={r} me={me} lastSeenAt={lastSeenAt} mock={mock} />}
+          </li>
+        );
+      })}
     </ul>
     </div>
   );
 }
 
-function RelatedChat({ taskId, rel, mock }: { taskId: number; rel: BigRelatedTask; mock: boolean }) {
-  const q = useQuery<{ chat: BigChatMessage[] | null; description: string }>({
+const MOCK_REL_DESC = '[B]Менеджер:[/B] Игорь Гаврилов\n[B]Форма оплаты:[/B] Нал\n\n[B]Продукция из товаров:[/B]\n[TABLE][TR][TD][B]Товар[/B][/TD][TD][B]Кол-во[/B][/TD][TD][B]Наша цена[/B][/TD][TD][B]Цена конкурента[/B][/TD][/TR][TR][TD]Газобетон СК D400[/TD][TD]58.5 м3[/TD][TD]5100 руб[/TD][TD]4900 руб[/TD][/TR][/TABLE]\n\n[B]Комментарий:[/B] есть дешевле. 1 сорт';
+
+function RelatedChat({ taskId, rel, me, lastSeenAt, mock }: { taskId: number; rel: BigRelatedTask; me: string | null; lastSeenAt: string | null; mock: boolean }) {
+  const [desc, setDesc] = useState(false);
+  const [mockSent, setMockSent] = useState<BigChatMessage[]>([]);
+  const q = useQuery<{ chat: BigChatMessage[] | null; description: string; descriptionBb?: string }>({
     queryKey: ['big-deals-related', taskId, rel.id],
     queryFn: async () => {
-      if (mock) return { chat: [{ id: 1, authorId: '1', author: 'Логист', at: new Date().toISOString(), text: 'Доставка 2 машинами, 48 000 ₽. Транзит дешевле на 6 000.', system: false } as BigChatMessage], description: '' };
+      if (mock) return { chat: [{ id: 1, authorId: '1', author: 'Логист', at: new Date(Date.now() - 3600_000).toISOString(), text: 'Доставка 2 машинами, 48 000 ₽. Транзит дешевле на 6 000. Цены: https://docs.google.com/spreadsheets/d/1ZCvUIK1avLn4LhfBa/edit', system: false } as BigChatMessage], description: '', descriptionBb: MOCK_REL_DESC };
       const r = await fetch(`/api/big-deals-kanban/task/${taskId}/related?rel=${rel.id}`);
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error ?? `Ошибка ${r.status}`);
@@ -235,22 +230,52 @@ function RelatedChat({ taskId, rel, mock }: { taskId: number; rel: BigRelatedTas
     },
     staleTime: 60_000,
   });
+  const bb = q.data?.descriptionBb || q.data?.description || '';
+  const chat = q.data?.chat ? [...q.data.chat, ...mockSent] : null;
   return (
     <div className="flex min-w-0 flex-col gap-2 border-t border-[var(--color-border)] px-3 py-2">
-      {q.isLoading && <p className="text-[var(--color-text-muted)]">Загружаю переписку…</p>}
       {q.error && <p className="text-[var(--color-negative)]">{(q.error as Error).message}</p>}
-      {q.data && !q.data.chat?.filter(m => !m.system).length && (
-        <p className="whitespace-pre-wrap break-words text-[var(--color-text-secondary)]">{q.data.description || 'Сообщений нет'}</p>
-      )}
-      {q.data?.chat?.filter(m => !m.system).map(m => (
-        <div key={m.id} className="min-w-0 rounded-lg bg-[var(--color-bg-hover)] px-2.5 py-1.5">
-          <div className="text-[11px] text-[var(--color-text-muted)]">{m.author ?? m.authorId} · {fmtDT(m.at)}</div>
-          {m.text && <div className="whitespace-pre-wrap break-words">{m.text}</div>}
-          {m.files?.map((f, i) => <ChatFileLink key={i} file={f} />)}
+      {bb && (
+        <div className="min-w-0">
+          <button type="button" onClick={() => setDesc(!desc)} aria-expanded={desc}
+            className="inline-flex min-h-11 items-center gap-1 text-[12.5px] font-medium text-[var(--color-accent)] sm:min-h-8">
+            <ChevronDown size={13} className={`transition-transform ${desc ? 'rotate-180' : ''}`} aria-hidden /> Описание задачи
+          </button>
+          {desc && <div className="mt-1 rounded-md bg-[var(--color-bg-hover)] px-3 py-2"><BbText text={bb} /></div>}
         </div>
-      ))}
-      <a href={rel.url} target="_blank" rel="noreferrer" className={`${linkBtn} self-start`}><ExternalLink size={12} /> Открыть в Битриксе — ответить</a>
+      )}
+      <TaskThread messages={chat} viewerId={me} roles={rel.responsible ? { [rel.responsible.id]: 'исполнитель' } : {}} lastSeenAt={lastSeenAt}
+        loading={q.isLoading} emptyText="Сообщений пока нет" className="max-h-[50dvh]" />
+      <ThreadComposer compact mock={mock} placeholder={`Сообщение в задачу${rel.responsible ? ` (${rel.responsible.name})` : ''} — от вашего имени`}
+        mentions={rel.responsible ? [{ id: rel.responsible.id, name: rel.responsible.name, role: 'исполнитель' }] : []}
+        onSend={async (text, attachments) => {
+          if (mock) { setMockSent(m => [...m, { id: Date.now(), authorId: me ?? 'me', author: 'Вы', at: new Date().toISOString(), text, system: false }]); return; }
+          const r = await postBigAction({ type: 'related_comment', taskId, relatedTaskId: rel.id, text, attachments });
+          await q.refetch();
+          return r.warnings;
+        }} />
     </div>
+  );
+}
+
+/** Ссылки — в «⋯» (Fable 25.11): Задача и Сделка в Битриксе, ссылка на карточку. */
+function LinksMenu({ card }: { card: BigTaskCard }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    const url = `${window.location.origin}/big-deals-kanban?task=${card.id}`;
+    try { await navigator.clipboard.writeText(url); } catch { window.prompt('Скопируйте ссылку на карточку', url); return; }
+    setCopied(true); setTimeout(() => setCopied(false), 1500);
+  };
+  const item = 'flex min-h-11 w-full items-center gap-2 rounded px-2.5 text-left text-[13px] hover:bg-[var(--color-bg-hover)] sm:min-h-9';
+  return (
+    <Popover align="end" className="w-64 max-w-[calc(100vw-16px)] p-1"
+      trigger={<button type="button" className={`${linkBtn} gap-1`} title="Ссылки"><Link2 size={13} /> Ссылки <ChevronDown size={12} /></button>}>
+      <div className="flex flex-col">
+        <button type="button" onClick={copy} className={item}>{copied ? <Check size={14} className="text-[var(--color-positive)]" /> : <Link2 size={14} />} {copied ? 'Скопировано' : 'Скопировать ссылку на карточку'}</button>
+        <a href={card.url} target="_blank" rel="noreferrer" className={item}><ExternalLink size={14} /> Задача № {card.id} в Битриксе</a>
+        {card.deal && <a href={card.deal.url} target="_blank" rel="noreferrer" className={item}><ExternalLink size={14} /> Сделка № {card.deal.id} в Битриксе</a>}
+      </div>
+    </Popover>
   );
 }
 
@@ -271,20 +296,5 @@ function PhoneLink({ phone }: { phone: string }) {
         {copied ? <Check size={13} className="text-[var(--color-positive)]" /> : <Copy size={13} />}
       </button>
     </span>
-  );
-}
-
-/** Ссылка на эту карточку в Монолитике (Осипов 23.11: «надо копировать ссылку на карточку») — переслать в чат / себе. */
-function CopyCardLink({ taskId }: { taskId: number }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    const url = `${window.location.origin}/big-deals-kanban?task=${taskId}`;
-    try { await navigator.clipboard.writeText(url); } catch { window.prompt('Скопируйте ссылку на карточку', url); return; }
-    setCopied(true); setTimeout(() => setCopied(false), 1500);
-  };
-  return (
-    <button type="button" onClick={copy} className={linkBtn} title="Скопировать ссылку на эту карточку в Монолитике">
-      {copied ? <Check size={12} className="text-[var(--color-positive)]" /> : <Link2 size={12} />} {copied ? 'Скопировано' : 'Ссылка на карточку'}
-    </button>
   );
 }

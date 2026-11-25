@@ -13,7 +13,7 @@ import { withNote } from '@/features/big-deals-kanban/engine/taskNotes';
 // ?dry=1 — сухой прогон (только админу/полной зоне): ничего не пишет, отдаёт список REST-вызовов.
 export const dynamic = 'force-dynamic';
 
-const TYPES = new Set(['move', 'reassign', 'comment', 'accept', 'approve', 'return', 'complete', 'participants', 'renew', 'deadline']);
+const TYPES = new Set(['move', 'reassign', 'comment', 'accept', 'approve', 'return', 'complete', 'participants', 'renew', 'deadline', 'related_comment']);
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     const actor = { ...(await bigActor(session)), login: session.login };
     const dryRun = req.nextUrl.searchParams.get('dry') === '1';
     if (dryRun && actor.zone !== 'all') return NextResponse.json({ error: 'Сухой прогон — только админу' }, { status: 403 });
-    const files = body.type === 'comment' || body.type === 'reassign' || body.type === 'return' || body.type === 'accept' ? takeAttachments(session.login, body.attachments) : [];
+    const files = body.type === 'comment' || body.type === 'related_comment' || body.type === 'reassign' || body.type === 'return' || body.type === 'accept' ? takeAttachments(session.login, body.attachments) : [];
     const r = await runBigAction(body, actor, { dryRun }, files);
     console.info(`[big-deals action] ${session.login} ${body.type} task=${body.taskId}${dryRun ? ' DRY' : ''}${r.viaWebhook ? ' VIA-WEBHOOK' : ''} calls=${r.calls.map(c => c.method).join(',')}`);
     return NextResponse.json({ ok: true, card: (await withNote(r.card ?? null)) ?? undefined, warnings: r.warnings.length ? r.warnings : undefined, ...(dryRun ? { calls: r.calls } : {}) });

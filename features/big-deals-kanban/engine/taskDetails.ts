@@ -4,8 +4,11 @@ import { bx } from '@/lib/bitrix/notify';
 import { read, taskWebhook } from '@/features/repeat-kanban/engine/createDeal';
 import { stripBb } from '@/features/repeat-kanban/engine/taskNotes';
 import type { BxBigTask } from './actions';
+import { buildBrief, type BigTaskBrief, type BriefDeal } from './taskBrief';
 
-export interface BigChatMessage { id: number; author: string | null; authorId: string; at: string; text: string; system: boolean; /** Вложенные файлы (картинки и т.п.): имя и ссылка на просмотр в Битриксе. */ files?: BigChatFile[] }
+export interface BigChatMessage { id: number; author: string | null; authorId: string; at: string; text: string; system: boolean;
+  /** Исходный BB-текст (даты [TIMESTAMP] уже подставлены) — лента рисует ссылки/жирный/упоминания (ui/BbText). */
+  bb?: string; /** Вложенные файлы (картинки и т.п.): имя и ссылка на просмотр в Битриксе. */ files?: BigChatFile[] }
 /** Файл из чата задачи. Вебхуку Битрикс не отдаёт ни имя, ни сам файл (disk.file.get — «нет доступа», проверено 23.11),
  *  поэтому ссылка ведёт в Битрикс (/disk/showFile/{id}/) — откроется у того, кто залогинен в Битриксе и видит чат. */
 export interface BigChatFile { name: string; url: string | null }
@@ -33,6 +36,8 @@ export interface BigTaskDetails {
   /** Товары сделки не совпадают с товарами из описания (по названиям). */
   productsChanged: boolean;
   chat: BigChatMessage[];
+  /** «Задача» целиком: поля описания + сделки + запросов логисту, товары при постановке, цена конкурента (taskBrief.ts). */
+  brief?: BigTaskBrief;
   /** Участники задачи из Битрикса (свежие, не из снимка доски). */
   auditors: string[];
   accomplices: string[];
@@ -78,11 +83,20 @@ export function productsDiffer(taskProducts: string[], deal: BigDealProduct[] | 
 export async function fetchTaskDetails(t: BxTaskFull, dealId: number | null): Promise<BigTaskDetails> {
   const raw = String(t.description ?? '');
   const { fields, taskProducts, questions } = parseDescription(raw);
-  const [dealProducts, phone, chat] = await Promise.all([
+  const dealRow = dealId ? await fetchDeal(dealId).catch(() => null) : null;
+  const [dealProducts, phone, chat, relatedDescriptions] = await Promise.all([
     dealId ? fetchDealProducts(dealId) : Promise.resolve(null),
-    dealId ? fetchClientPhone(dealId).catch(() => null) : Promise.resolve(null),
+    dealRow ? fetchClientPhone(dealRow).catch(() => null) : Promise.resolve(null),
     t.chatId ? fetchChat(Number(t.chatId)).catch(e => { console.warn('[big-deals details] чат', e instanceof Error ? e.message : e); return [] as BigChatMessage[]; }) : Promise.resolve([] as BigChatMessage[]),
+    dealId ? fetchRelatedDescriptions(dealId, Number(t.id)).catch(() => [] as string[]) : Promise.resolve([] as string[]),
   ]);
+  const brief = buildBrief({
+    descFields: fields, taskProductLines: taskProducts, relatedDescriptions,
+    deal: dealRow ? {
+      ADDRESS: str(dealRow.UF_ADDRESS_COORDS_INPUT), PURPOSE: str(dealRow.UF_CRM_1789046051), DELIVERY: str(dealRow.UF_CRM_1744960397885),
+      SOURCE: str(dealRow.SOURCE_DESCRIPTION), COMMENTS: str(dealRow.COMMENTS),
+    } satisfies BriefDeal : null,
+  });
   return {
     taskId: Number(t.id),
     status: String(t.status ?? ''),
@@ -98,6 +112,7 @@ export async function fetchTaskDetails(t: BxTaskFull, dealId: number | null): Pr
     dealProducts,
     productsChanged: productsDiffer(taskProducts, dealProducts),
     chat,
+    brief,
     auditors: (t.auditors ?? []).map(String),
     accomplices: (t.accomplices ?? []).map(String),
   };
@@ -114,18 +129,35 @@ async function fetchDealProducts(dealId: number): Promise<BigDealProduct[] | nul
   });
 }
 
-/** Первый телефон клиента сделки: контакт, нет — компания. Только чтение CRM, лениво при открытии карточки. */
-async function fetchClientPhone(dealId: number): Promise<string | null> {
+type DealRow = Record<string, unknown> & { CONTACT_ID?: string | null; COMPANY_ID?: string | null };
+const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null);
+
+async function fetchDeal(dealId: number): Promise<DealRow | null> {
   const w = crmWebhook();
   if (!w) return null;
-  const deal = await bx(w, 'crm.deal.get', { id: dealId }).catch(() => null) as { result?: { CONTACT_ID?: string | null; COMPANY_ID?: string | null } } | null;
+  const r = await bx(w, 'crm.deal.get', { id: dealId }) as { result?: DealRow };
+  return r.result ?? null;
+}
+
+/** Описания других задач по сделке (запросы логисту/снабжению) — форма оплаты, комментарий менеджера, цена конкурента. */
+async function fetchRelatedDescriptions(dealId: number, selfId: number): Promise<string[]> {
+  const r = await read<{ tasks?: { id: string; description?: string }[] }>('tasks.task.list', {
+    filter: { UF_CRM_TASK: `D_${dealId}` }, select: ['ID', 'DESCRIPTION'], order: { ID: 'desc' },
+  });
+  return (r?.tasks ?? []).filter(x => Number(x.id) !== selfId).map(x => String(x.description ?? '')).filter(Boolean).slice(0, 10);
+}
+
+/** Первый телефон клиента сделки: контакт, нет — компания. Только чтение CRM, лениво при открытии карточки. */
+async function fetchClientPhone(deal: DealRow): Promise<string | null> {
+  const w = crmWebhook();
+  if (!w) return null;
   const first = (r: unknown) => {
     const list = (r as { result?: { PHONE?: { VALUE?: string }[] } } | null)?.result?.PHONE ?? [];
     return list.map(p => String(p.VALUE ?? '').trim()).find(Boolean) ?? null;
   };
-  const contactId = Number(deal?.result?.CONTACT_ID) || 0;
+  const contactId = Number(deal.CONTACT_ID) || 0;
   if (contactId) { const p = first(await bx(w, 'crm.contact.get', { id: contactId }).catch(() => null)); if (p) return p; }
-  const companyId = Number(deal?.result?.COMPANY_ID) || 0;
+  const companyId = Number(deal.COMPANY_ID) || 0;
   if (companyId) return first(await bx(w, 'crm.company.get', { id: companyId }).catch(() => null));
   return null;
 }
@@ -140,6 +172,17 @@ function fileUrl(id: number | string): string | null {
   try { return `${new URL(taskWebhook()).origin}/disk/showFile/${id}/?&ncc=1`; } catch { return null; }
 }
 
+/** [TIMESTAMP=1795531800 FORMAT=LONG_DATE_FORMAT], [TIMESTAMP=… FORMAT=SHORT_TIME_FORMAT] → «25.11.2026, 17:50» (МСК).
+ *  Раньше stripBb вырезал их в пустоту: «установил крайний срок задачи на , » (Fable 25.11, аудит п.5). */
+export function fillTimestamps(raw: string): string {
+  return raw.replace(/\[TIMESTAMP=(\d{9,11})(?:\s+FORMAT=([A-Z_]+))?\]/g, (_m, ts: string, fmt?: string) => {
+    const d = new Date(Number(ts) * 1000);
+    if (fmt && /TIME/.test(fmt) && !/DATE/.test(fmt)) return d.toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' });
+    if (fmt && /DATE/.test(fmt) && !/TIME/.test(fmt)) return d.toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' });
+    return d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  });
+}
+
 export async function fetchChat(chatId: number): Promise<BigChatMessage[]> {
   const r = await read<{ messages?: ImMessage[]; users?: ImUser[]; files?: ImFile[] | Record<string, ImFile> }>('im.dialog.messages.get', { DIALOG_ID: `chat${chatId}`, LIMIT: 50 });
   const users = new Map((r?.users ?? []).map(u => [Number(u.id), u.name]));
@@ -149,12 +192,13 @@ export async function fetchChat(chatId: number): Promise<BigChatMessage[]> {
   // Сообщение с одной картинкой — пустой текст + params.FILE_ID. Раньше такие отбрасывались, и фото в ленте
   // Монолитики не было вовсе (18.11, РОП Осипов: «фотка не отправилась»).
   return (r?.messages ?? [])
-    .map(m => ({ m, text: stripBb(m.text ?? ''), files: (m.params?.FILE_ID ?? []).map(id => ({ name: fileNames.get(Number(id)) ?? 'файл', url: fileUrl(id) })) }))
+    .map(m => ({ m, bb: fillTimestamps(m.text ?? ''), files: (m.params?.FILE_ID ?? []).map(id => ({ name: fileNames.get(Number(id)) ?? 'файл', url: fileUrl(id) })) }))
+    .map(x => ({ ...x, text: stripBb(x.bb) }))
     .filter(x => x.text.length > 0 || x.files.length > 0)
     .sort((a, b) => a.m.date.localeCompare(b.m.date))
-    .map(({ m, text, files }) => ({
+    .map(({ m, text, bb, files }) => ({
       id: m.id, author: users.get(m.author_id) ?? null, authorId: String(m.author_id),
-      at: new Date(m.date).toISOString(), text: text.slice(0, 3000), system: m.author_id === 0,
+      at: new Date(m.date).toISOString(), text: text.slice(0, 3000), bb: bb.slice(0, 4000), system: m.author_id === 0,
       ...(files.length ? { files } : {}),
     }));
 }

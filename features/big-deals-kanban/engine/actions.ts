@@ -220,7 +220,7 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
   if (!BIG_DEALS_GROUP_IDS.includes(groupId)) throw new BigActionError('Задача не из проектов больших сделок', 403);
   const people = await taskPeople(t);
   if (!canSeeTask(people, actor)) throw new BigActionError('Задача не в вашей зоне', 403);
-  const manageOnly = action.type !== 'comment';
+  const manageOnly = action.type !== 'comment' && action.type !== 'related_comment';
   if (manageOnly && !canManageTask(people, actor)) throw new BigActionError('Двигать, переназначать, принимать задачи и менять участников может только РОП', 403);
 
   const run = new Runner(actor, !!opts.dryRun);
@@ -291,6 +291,21 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
       const text = String(action.text ?? '').trim();
       if (!text && !uploadedFiles.length) throw new BigActionError('Пустой комментарий');
       await run.comment(taskId, text.slice(0, 6000), uploadedFiles, true);
+      break;
+    }
+    case 'related_comment': {
+      // Та же проверка, что у чтения (related/route.ts): большая задача видна смотрящему (выше) И связанная задача
+      // привязана к той же сделке — произвольной задаче по id отсюда не написать.
+      const relId = Number(action.relatedTaskId);
+      if (!Number.isInteger(relId) || relId <= 0 || relId === taskId) throw new BigActionError('Некорректная связанная задача');
+      const text = String(action.text ?? '').trim();
+      if (!text && !uploadedFiles.length) throw new BigActionError('Пустое сообщение');
+      const rel = await fetchBigTask(relId);
+      if (!rel) throw new BigActionError('Связанная задача не найдена в Битриксе', 404);
+      const deals = (x: BxBigTask) => new Set((x.ufCrmTask ?? []).map(String).filter(v => /^D_\d+$/.test(v)));
+      const mine = deals(t);
+      if (![...deals(rel)].some(d => mine.has(d))) throw new BigActionError('Задача не по этой сделке', 403);
+      await run.comment(relId, text.slice(0, 6000), uploadedFiles, true);
       break;
     }
     case 'accept': {

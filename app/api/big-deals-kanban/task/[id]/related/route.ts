@@ -8,7 +8,7 @@ import { fetchChat, type BxTaskFull } from '@/features/big-deals-kanban/engine/t
 import { BIG_DEALS_GROUP_IDS } from '@/features/big-deals-kanban/engine/config';
 
 // Чат связанной задачи (логист, снабжение) по сделке задачи больших чеков — вкладка «Задачи по сделке»
-// (собрание РОПов 18.11: «задачи списком, кликабельные, и раскрывался чатик из них»). Только чтение.
+// (собрание РОПов 18.11: «задачи списком, кликабельные, и раскрывался чатик из них»). Чтение; ответ — action 'related_comment'.
 // Доступ: большая задача видна смотрящему (как карточка) И связанная задача привязана к той же сделке —
 // произвольную задачу по id отсюда не прочитать.
 export const dynamic = 'force-dynamic';
@@ -31,8 +31,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const mine = dealsOf(t);
     if (![...dealsOf(rel)].some(d => mine.has(d))) return NextResponse.json({ error: 'Задача не по этой сделке' }, { status: 403 });
     const chat = rel.chatId ? await fetchChat(Number(rel.chatId)).catch(() => null) : null;
-    const description = String(rel.description ?? '').replace(/\[[^\]]+\]/g, '').trim().slice(0, 3000);
-    return NextResponse.json({ id: relId, chat, description }, { headers: { 'Cache-Control': 'no-store' } });
+    const raw = String(rel.description ?? '');
+    const description = raw.replace(/\[[^\]]+\]/g, '').trim().slice(0, 3000);
+    // descriptionBb — исходная BB-разметка (таблицы товаров с ценой конкурента, поля) — рисует ui/BbText.
+    return NextResponse.json({ id: relId, chat, description, descriptionBb: raw.slice(0, 12000) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     if (e instanceof BigActionError) return NextResponse.json({ error: e.message }, { status: e.status });
     console.error('[big-deals related]', e instanceof Error ? e.message : e);

@@ -4,12 +4,15 @@
 // вернуть на доработку (задача ждёт контроля; текст необязателен, есть шаблоны вопросов), «Не продано → завершить» (сразу в «проверено»). POST /api/big-deals-kanban/action.
 // Закрытие задачи (перенос в AUTO_COMPLETE_COLUMNS, «Не продано → завершить») — только через ConfirmCloseModal.
 import { useState } from 'react';
+import { MoreHorizontal } from 'lucide-react';
+import { Modal } from '@/components/ui/Modal';
+import { Popover } from '@/components/ui/Popover';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { AUTO_COMPLETE_COLUMNS, BIG_COLUMNS, type BigColumnKey } from '../engine/config';
 import type { BigPerson, BigTaskCard } from '../engine/types';
-import { QuestionsBlock } from './QuestionsBlock';
+import { TemplatePicker } from './TaskThread';
 import { fmtDT } from './format';
-import { Section, postBigAction } from './TaskDrawerShared';
+import { postBigAction } from './TaskDrawerShared';
 import { ConfirmCloseModal } from './MassCloseModal';
 import { DeadlineField, mskInputToIso } from './DeadlineField';
 
@@ -67,30 +70,52 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
   const addTz = (t: string) => setTz(prev => (prev.trim() ? `${prev.trimEnd()}\n${t}` : t));
   const addComment = (t: string) => setComment(prev => (prev.trim() ? `${prev.trimEnd()}\n${t}` : t));
 
-  return (
-    <Section title="Действия">
-      <div className="flex flex-col gap-2">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {!closed && <button type="button" className={btn} disabled={busy} onClick={() => toggle('reassign')}>Назначить менеджера</button>}
-          <SearchSelect options={columnOptions} value="" placeholder="Перенести в…" ariaLabel="Перенести в колонку" disabled={busy}
-            className="min-h-11 w-full" onChange={v => {
-              if (!v) return;
-              const column = v as BigColumnKey;
-              if (AUTO_COMPLETE_COLUMNS.has(column) && !closed) setPending({ type: 'move', column });
-              else void run({ type: 'move', column });
-            }} />
-          {canApprove && <button type="button" className={primary} disabled={busy} onClick={() => toggle('approve')} title="Работа принята — задача закроется">Принять</button>}
-          {card.state === 'control' && <button type="button" className={btn} disabled={busy} onClick={() => toggle('accept')} title="Ответ увидел — задача вернётся менеджеру в работу, не закроется">Принял, работаем дальше</button>}
-          {card.state === 'control' && <button type="button" className={btn} disabled={busy} onClick={() => toggle('return')}>Вернуть на доработку</button>}
-          {!closed && <button type="button" className={btn} disabled={busy} onClick={() => toggle('deadline')} title={card.deadlineAt ? `Сейчас: ${fmtDT(card.deadlineAt)}` : 'Срок не задан'}>Изменить срок</button>}
-          {closed && <button type="button" className={primary} disabled={busy} onClick={() => toggle('renew')}>Возобновить</button>}
-          {!closed && <button type="button" className={`${btn} text-[var(--color-negative)]`} disabled={busy} onClick={() => setPending({ type: 'complete' })}>Не продано → завершить</button>}
-        </div>
+  const TITLES: Record<Exclude<Mode, null>, string> = {
+    reassign: 'Назначить менеджера', return: 'Вернуть на доработку', approve: 'Принять работу', accept: 'Принял, работаем дальше',
+    deadline: 'Срок задачи', renew: 'Возобновить задачу',
+  };
+  const [more, setMore] = useState(false);
+  const pick = (m: Mode) => { setMore(false); toggle(m); };
+  const control = card.state === 'control';
+  const moreItem = 'flex min-h-11 w-full items-center rounded px-2.5 text-left text-[13px] hover:bg-[var(--color-bg-hover)] sm:min-h-9';
 
+  // Спецификация Fable 25.11: одна строка действий по состоянию задачи (первичное — первым), редкое — в «⋯»;
+  // формы — в модалке (на телефоне bottom-sheet), а не раскрываются в потоке и не уталкивают чат за экран.
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+        {closed && <button type="button" className={primary} disabled={busy} onClick={() => toggle('renew')}>Возобновить</button>}
+        {canApprove && <button type="button" className={primary} disabled={busy} onClick={() => toggle('approve')} title="Работа принята — задача закроется">Принять</button>}
+        {control && <button type="button" className={btn} disabled={busy} onClick={() => toggle('return')}>Вернуть</button>}
+        {!closed && !control && <button type="button" className={card.unassigned ? primary : btn} disabled={busy} onClick={() => toggle('reassign')}>Назначить</button>}
+        {!closed && <button type="button" className={btn} disabled={busy} onClick={() => toggle('deadline')} title={card.deadlineAt ? `Сейчас: ${fmtDT(card.deadlineAt)}` : 'Срок не задан'}>Срок</button>}
+        <SearchSelect options={columnOptions} value="" placeholder="Перенести в…" ariaLabel="Перенести в колонку" disabled={busy}
+          className="min-h-11 w-44 max-w-full" onChange={v => {
+            if (!v) return;
+            const column = v as BigColumnKey;
+            if (AUTO_COMPLETE_COLUMNS.has(column) && !closed) setPending({ type: 'move', column });
+            else void run({ type: 'move', column });
+          }} />
+        {!closed && (
+          <Popover open={more} onOpenChange={setMore} align="end" className="w-64 max-w-[calc(100vw-16px)] p-1"
+            trigger={<button type="button" className={`${btn} px-2.5`} aria-label="Ещё действия" title="Ещё действия"><MoreHorizontal size={16} /></button>}>
+            <div className="flex flex-col">
+              {control && <button type="button" className={moreItem} onClick={() => pick('accept')}>Принял, работаем дальше</button>}
+              {control && <button type="button" className={moreItem} onClick={() => pick('reassign')}>Назначить другого менеджера</button>}
+              <button type="button" className={`${moreItem} text-[var(--color-negative)]`} onClick={() => { setMore(false); setPending({ type: 'complete' }); }}>Не продано → завершить</button>
+            </div>
+          </Popover>
+        )}
+      </div>
+      {!mode && err && <p className="text-[12.5px] text-[var(--color-negative)]">{err}</p>}
+      {!mode && warn && <p className="text-[12.5px] text-[var(--color-warning)]">{warn}</p>}
+
+      <Modal open={mode !== null} onOpenChange={o => { if (!o && !busy) { setMode(null); setErr(null); } }} title={mode ? TITLES[mode] : ''} desktopWidth="sm:max-w-xl">
+      <div className="flex min-w-0 flex-col gap-3 text-[13px]">
         {mode === 'reassign' && (
-          <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
+          <div className="flex flex-col gap-2">
             <SearchSelect options={managerOptions} value={manager} onChange={setManager} placeholder="Выберите менеджера" searchable ariaLabel="Менеджер" className="min-h-11 w-full" />
-            <QuestionsBlock questions={questions} deal={card.deal} mock={mock} onInsert={addTz} title="Вопросы в ТЗ" />
+            <TemplatePicker questions={questions} deal={card.deal} mock={mock} onInsert={addTz} />
             <textarea value={tz} onChange={e => setTz(e.target.value)} rows={4} placeholder="ТЗ менеджеру — уйдёт в чат задачи" className={input} />
             {/* Срок — здесь же (Осипов 25.11: выбирал менеджера, шёл в «Изменить срок» → «Сегодня», и выбор менеджера пропадал). */}
             <DeadlineField label={`Срок (необязательно${card.deadlineAt ? `, сейчас ${fmtDT(card.deadlineAt)}` : ''})`} value={deadline} onChange={setDeadline} />
@@ -101,8 +126,8 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
         )}
 
         {mode === 'return' && (
-          <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
-            <QuestionsBlock questions={questions} deal={card.deal} mock={mock} onInsert={addComment} title="Вопрос менеджеру" />
+          <div className="flex flex-col gap-2">
+            <TemplatePicker questions={questions} deal={card.deal} mock={mock} onInsert={addComment} />
             <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="Что доделать (необязательно) — уйдёт в чат жирным" className={input} />
             <DeadlineField label="Новый срок (необязательно)" value={deadline} onChange={setDeadline} />
             <button type="button" className={`${primary} self-end`} disabled={busy}
@@ -113,7 +138,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
         )}
 
         {mode === 'approve' && (
-          <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
+          <div className="flex flex-col gap-2">
             <p className="text-[12px] text-[var(--color-text-muted)]">Работа принята — задача закроется в Битриксе{card.deal?.closed === 'won' ? ' и встанет в «Продано»' : ''}. Вернуть — кнопкой «Возобновить».</p>
             <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} placeholder="Комментарий менеджеру (необязательно)" className={input} />
             <button type="button" className={`${primary} self-end`} disabled={busy}
@@ -124,7 +149,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
         )}
 
         {mode === 'accept' && (
-          <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
+          <div className="flex flex-col gap-2">
             <p className="text-[12px] text-[var(--color-text-muted)]">Задача вернётся менеджеру в работу (не закроется), в чат уйдёт «РОП посмотрел ответ, работаем дальше». Закрыть — «Не продано → завершить» или перенос в «Продано».</p>
             <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} placeholder="Комментарий менеджеру (необязательно)" className={input} />
             <DeadlineField label="Новый срок (необязательно)" value={deadline} onChange={setDeadline} />
@@ -136,7 +161,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
         )}
 
         {mode === 'deadline' && (
-          <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
+          <div className="flex flex-col gap-2">
             <DeadlineField label={`Срок исполнения${card.deadlineAt ? ` (сейчас ${fmtDT(card.deadlineAt)})` : ' (сейчас не задан)'}`} value={deadline} onChange={setDeadline} />
             <button type="button" className={`${primary} self-end`} disabled={busy || !deadline} onClick={() => run({ type: 'deadline', deadline: deadlineIso })}>
               {busy ? 'Сохраняю…' : 'Поставить срок'}
@@ -145,7 +170,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
         )}
 
         {mode === 'renew' && (
-          <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-2.5">
+          <div className="flex flex-col gap-2">
             <p className="text-[12px] text-[var(--color-text-muted)]">Задача снова станет открытой у {card.responsible.name}, в чат уйдёт, кто и до какого числа её возобновил.</p>
             <DeadlineField label="Новый срок исполнения (обязательно)" value={deadline} onChange={v => { setDeadline(v); setSure(false); }} />
             <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} placeholder="Комментарий (необязательно)" className={input} />
@@ -163,15 +188,15 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
           </div>
         )}
 
-        {pending && (
-          <ConfirmCloseModal count={1} busy={busy} onCancel={() => setPending(null)}
-            title={pending.type === 'complete' ? 'Не продано — закрыть сразу в «проверено»?' : `Перенести в «${BIG_COLUMNS.find(c => c.key === pending.column)?.title}» и закрыть?`}
-            onConfirm={() => void run(pending.type === 'complete' ? { type: 'complete' } : { type: 'move', column: pending.column })} />
-        )}
-
         {err && <p className="text-[var(--color-negative)]">{err}</p>}
-        {warn && <p className="text-[var(--color-warning)]">{warn}</p>}
       </div>
-    </Section>
+      </Modal>
+
+      {pending && (
+        <ConfirmCloseModal count={1} busy={busy} onCancel={() => setPending(null)}
+          title={pending.type === 'complete' ? 'Не продано — закрыть сразу в «проверено»?' : `Перенести в «${BIG_COLUMNS.find(c => c.key === pending.column)?.title}» и закрыть?`}
+          onConfirm={() => void run(pending.type === 'complete' ? { type: 'complete' } : { type: 'move', column: pending.column })} />
+      )}
+    </div>
   );
 }

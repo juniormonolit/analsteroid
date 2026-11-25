@@ -206,6 +206,8 @@ export type BigAction =
   | { type: 'move'; taskId: number; column: BigColumnKey }
   | { type: 'reassign'; taskId: number; responsibleId: string; comment?: string; deadline?: string }
   | { type: 'comment'; taskId: number; text: string; attachments?: string[] }
+  /** Сообщение в чат СВЯЗАННОЙ задачи (логист, снабжение) по той же сделке — владелец 25.11: «везде возможность написать из канбана». */
+  | { type: 'related_comment'; taskId: number; relatedTaskId: number; text: string }
   /** «Ответ увидел, работаем дальше» (владелец 18.11): НЕ закрывает задачу — возвращает в работу с комментарием, срок по желанию. */
   | { type: 'accept'; taskId: number; comment?: string; deadline?: string }
   | { type: 'approve'; taskId: number; comment?: string }
