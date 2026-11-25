@@ -12,6 +12,7 @@
 //   repeat_kanban_events (actor_type = 'user') — kanban.<event_type>; logist_request_events — logist.<kind>.
 // Каждый источник — отдельный запрос: сбой одного (нет таблицы — 42P01) не глушит остальные, имя попадает в failed.
 import { analyticsDb, systemDb } from '@/lib/db/clients';
+import { SECTION_SQL } from '@/lib/activity/section';
 import type { DayBand } from './types';
 
 export interface SourceEvent {
@@ -20,6 +21,8 @@ export interface SourceEvent {
   band: DayBand;
   kind: string;
   action: string | null;
+  /** Раздел Монолитики (только activity_events; старые отчёты 'sales' + payload.path → 'sales/<slug>'). */
+  section?: string | null;
   weak: boolean;
   n: number;
 }
@@ -32,7 +35,7 @@ export interface SourcesResult {
   failed: string[];
 }
 
-type Row = { mid: unknown; at: unknown; kind: string; action: string | null; n: unknown };
+type Row = { mid: unknown; at: unknown; kind: string; action: string | null; section?: string | null; n: unknown };
 
 function isMissingTable(e: unknown): boolean {
   return (e as { code?: string })?.code === '42P01';
@@ -102,10 +105,11 @@ export async function loadSourceEvents(ids: string[], from: Date, to: Date): Pro
     {
       name: 'activity_events', band: 'mono',
       run: () => sys.query(
-        `SELECT bitrix_user_id AS mid, date_trunc('minute', ts) AS at, kind,
-                CASE WHEN kind = 'mono_view' THEN section ELSE action END AS action, count(*) AS n
-           FROM activity_events
-          WHERE ts >= $2 AND ts < $3 AND bitrix_user_id = ANY($1) GROUP BY 1, 2, 3, 4`, p),
+        `SELECT mid, at, kind, CASE WHEN kind = 'mono_view' THEN section ELSE action END AS action, section, count(*) AS n
+           FROM (SELECT bitrix_user_id AS mid, date_trunc('minute', ts) AS at, kind, action, ${SECTION_SQL} AS section
+                   FROM activity_events
+                  WHERE ts >= $2 AND ts < $3 AND bitrix_user_id = ANY($1)) e
+          GROUP BY 1, 2, 3, 4, 5`, p),
     },
     {
       name: 'repeat_kanban_events', band: 'mono',
@@ -145,7 +149,7 @@ export async function loadSourceEvents(ids: string[], from: Date, to: Date): Pro
         if (!idSet.has(mid) || !row.at) continue;
         const at = new Date(row.at as string).getTime();
         if (!Number.isFinite(at)) continue;
-        events.push({ mid, at, band: s.band, kind: row.kind, action: row.action ?? null, weak: s.weak?.(row) ?? false, n: Number(row.n) || 1 });
+        events.push({ mid, at, band: s.band, kind: row.kind, action: row.action ?? null, section: row.section ?? null, weak: s.weak?.(row) ?? false, n: Number(row.n) || 1 });
       }
     } catch (e) {
       failed.push(s.name);

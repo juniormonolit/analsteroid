@@ -25,6 +25,21 @@ export interface DayEventDto {
   n: number;         // сколько событий схлопнуто в эту минуту
 }
 
+/**
+ * Разбивка дня по разделам Монолитики (activity_daily.sections — бессрочно, ключ — section: 'tasker', 'sales/<slug>',
+ * 'sales/saved/<uuid>', 'marketing/<x>' …). min — активные минуты (activity_minutes, бакеты × 5); views — открытия
+ * раздела (mono_view); actions — мутации (mono_action, кроме отчётных); report_load / report_drill / report_export —
+ * загрузки, проваливания и выгрузки отчёта. Нулевые поля не пишутся.
+ */
+export interface SectionStats {
+  min?: number;
+  views?: number;
+  actions?: number;
+  report_load?: number;
+  report_drill?: number;
+  report_export?: number;
+}
+
 /** Строка activity_daily, как её отдаёт API. */
 export interface DailyRowDto {
   date: string;
@@ -41,7 +56,7 @@ export interface DailyRowDto {
   firstSignalAt: string | null;
   lastSignalAt: string | null;
   counts: Record<string, number>;
-  sections: Record<string, number>;
+  sections: Record<string, SectionStats>;
   surfaces: Record<string, number>;
   tasksCreated: number;
   tasksClosed: number;

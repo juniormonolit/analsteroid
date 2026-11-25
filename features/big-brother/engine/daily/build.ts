@@ -7,7 +7,9 @@
 //   in_work        — был хоть один сильный сигнал (то же определение, что у сторожа, lib/bots/idleWatch.ts);
 //   counts         — {kind: n, 'kind.action': n} по всем событиям + служебный ключ `buckets` — число 5-мин отрезков
 //                    с сильным сигналом из любого источника (интенсивность календаря);
-//   sections/surfaces — минуты Монолитики по разделам / режимам запуска;
+//   sections       — разбивка по разделам Монолитики {section: {min, views, actions, report_load, report_drill,
+//                    report_export}} (types.ts::SectionStats) — бессрочно, для «мёртвых отчётов» и аномалий;
+//   surfaces       — минуты Монолитики по режимам запуска;
 //   tasks_*        — поставлено (created_by), закрыто ответственным за день, просрочено на конец дня (sources.ts).
 // Планирование — instrumentation.ts (scheduleActivityDaily, ключ activityDaily): ночью вчерашний день + досборка
 // пропусков за год, днём раз в 15 мин — «сегодня».
@@ -16,7 +18,7 @@ import { ACTIVITY_BUCKET_MIN } from '@/lib/activity/types';
 import { loadMonitoredPeople, type MonitoredPerson } from './people';
 import { loadSourceEvents, loadTaskStats, type MonoBucket, type SourceEvent } from './sources';
 import { addDays, dayBounds, isWorkday, mskDate } from './time';
-import type { DailyRowDto } from './types';
+import type { DailyRowDto, SectionStats } from './types';
 
 const BUCKET_MS = ACTIVITY_BUCKET_MIN * 60_000;
 
@@ -41,13 +43,25 @@ export function foldDay(o: {
     if (!e.weak) strong(e.at);
   }
   const bucketSet = new Set<number>();
-  const sections: Record<string, number> = {}, surfaces: Record<string, number> = {};
+  const sections: Record<string, SectionStats> = {}, surfaces: Record<string, number> = {};
+  const sec = (name: string, k: keyof SectionStats, n: number) => {
+    const o = (sections[name] ??= {});
+    o[k] = (o[k] ?? 0) + n;
+  };
+  for (const e of o.events) {
+    if (!e.section) continue;
+    if (e.kind === 'mono_view') sec(e.section, 'views', e.n);
+    else if (e.kind === 'mono_action') {
+      if (e.action === 'report_load' || e.action === 'report_drill' || e.action === 'report_export') sec(e.section, e.action, e.n);
+      else sec(e.section, 'actions', e.n);
+    }
+  }
   const secSeen = new Set<string>(), surfSeen = new Set<string>();
   for (const b of o.monoBuckets) {
     bucketSet.add(b.at);
     strong(b.at);
     const sk = `${b.at}|${b.section}`, fk = `${b.at}|${b.surface}`;
-    if (b.section && !secSeen.has(sk)) { secSeen.add(sk); sections[b.section] = (sections[b.section] ?? 0) + ACTIVITY_BUCKET_MIN; }
+    if (b.section && !secSeen.has(sk)) { secSeen.add(sk); sec(b.section, 'min', ACTIVITY_BUCKET_MIN); }
     if (b.surface && !surfSeen.has(fk)) { surfSeen.add(fk); surfaces[b.surface] = (surfaces[b.surface] ?? 0) + ACTIVITY_BUCKET_MIN; }
   }
   counts.buckets = strongBuckets.size;

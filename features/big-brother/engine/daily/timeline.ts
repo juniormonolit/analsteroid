@@ -92,7 +92,7 @@ export function toDailyDto(x: Record<string, unknown>): DailyRowDto {
     ropBitrixId: (x.rop_bitrix_id as string) ?? null, isWorkday: (x.is_workday as boolean) ?? null, inWork: !!x.in_work,
     monoMinutes: Number(x.mono_minutes ?? 0), buckets: Number(counts.buckets ?? 0),
     firstSignalAt: iso(x.first_signal_at), lastSignalAt: iso(x.last_signal_at), counts,
-    sections: (x.sections ?? {}) as Record<string, number>, surfaces: (x.surfaces ?? {}) as Record<string, number>,
+    sections: (x.sections ?? {}) as DailyRowDto['sections'], surfaces: (x.surfaces ?? {}) as Record<string, number>,
     tasksCreated: Number(x.tasks_created ?? 0), tasksClosed: Number(x.tasks_closed ?? 0), tasksOverdue: Number(x.tasks_overdue ?? 0),
   };
 }

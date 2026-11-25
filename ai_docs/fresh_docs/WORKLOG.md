@@ -32329,3 +32329,11 @@ auto-fill minmax(280px) раскладывала их строкой. Тепер
 - Превью 375px — в отдельном worktree с фикстурой из прода и подменой fetch (входа в dev нет): горизонтального скролла
   страницы нет, таблица и календарь скроллятся в `.scroll-x`, клик по дню календаря открывает дату. typecheck чистый;
   `lint:responsive` — 3 новых нарушения только в чужих `features/dashboard-test/*`.
+- **Доработка (по просьбе потока A): разбивка по разделам в `activity_daily.sections`** — теперь не `{section: минут}`, а
+  `{section: {min, views, actions, report_load, report_drill, report_export}}` (`types.ts::SectionStats`, нулевые поля не
+  пишутся). min — из `activity_minutes` (бакеты × 5), views — mono_view, report_* — mono_action с этими action, actions —
+  прочие mono_action. Раздел событий берётся через `SECTION_SQL` потока A, поэтому старые записи `section='sales'` +
+  `payload.path` раскладываются в `sales/<slug>` / `sales/saved/<uuid>`. У `activity_minutes` пути нет — старые бакеты
+  отчётов остаются в `sales`. Сверка 25.11 на проде (read-only): 11 человек с разделами, просмотры `sales/saved/45fc…` у 2057
+  разложились верно; report_load на проде пока нет (коммит потока A не выкачен). Хранится бессрочно вместе с агрегатом —
+  по нему считать «мёртвые отчёты» и аномалии.
