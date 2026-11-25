@@ -127,6 +127,9 @@ export const BOT_FUNCTION_KEYS = [
   // «Большой брат», сторож МОПов (25.11): «N часов нет звонков, движения сделок и задач». Миграция 295, включено —
   // свои enabled/dry_run у сторожа (/big-brother/watch).
   'idle_watch',
+  // «Большой брат», дайджест директору (26.11, поток G): понедельник утром, только отклонения. Миграция 298, выключено;
+  // получатели и режим «предпросмотр» — config, правится на /big-brother/signals.
+  'big_brother_digest',
 ] as const;
 export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
 

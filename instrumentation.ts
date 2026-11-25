@@ -89,6 +89,7 @@ export async function register() {
     if (allow.has('tasker')) scheduleTasker();
     if (allow.has('idleWatch')) scheduleIdleWatch();
     if (allow.has('activityDaily')) scheduleActivityDaily();
+    if (allow.has('bigBrotherDigest')) scheduleBigBrotherDigest();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
@@ -122,6 +123,7 @@ export async function register() {
   scheduleTasker();
   scheduleIdleWatch();
   scheduleActivityDaily();
+  scheduleBigBrotherDigest();
   scheduleRepeatQueueIssue();
   scheduleRepeatMorning();
   scheduleRepeatAutoBrak();
@@ -1056,6 +1058,37 @@ function scheduleActivityDaily() {
   };
   setTimeout(() => { void tick(); }, 4 * 60 * 1000);
   setInterval(() => { void tick(); }, 15 * 60 * 1000);
+}
+
+// «Большой брат», поток G — еженедельный дайджест директору ботом «Аналитик» (lib/jobs/bigBrotherDigest.ts).
+// Понедельник, с часа из настроек (дефолт 9:00 МСК) в течение 3 часов — ретраи; раз в сутки (runOnceADayMsk). Включение,
+// получатели и режим «предпросмотр» — bot_channels.big_brother_digest (вкладка «Сигналы»). Ключ bigBrotherDigest.
+function scheduleBigBrotherDigest() {
+  let running = false;
+  let lastDate = '';
+  const tick = async () => {
+    if (running) return;
+    const msk = new Date(Date.now() + 3 * 3600_000);
+    const date = msk.toISOString().slice(0, 10);
+    if (msk.getUTCDay() !== 1 || lastDate === date) return;
+    running = true;
+    try {
+      const { loadDigestSettings } = await import('./features/big-brother/engine/signals/settings');
+      const s = await loadDigestSettings();
+      const h = msk.getUTCHours();
+      if (!s.installed || !s.enabled || h < s.hour || h > s.hour + 2) return;
+      const outcome = await runOnceADayMsk('bb-digest:weekly', date, async () => {
+        const { runBigBrotherDigest } = await import('./lib/jobs/bigBrotherDigest');
+        console.log(`[bigBrotherDigest] ${await runBigBrotherDigest()}`);
+      });
+      if (outcome === 'ran' || outcome === 'already') lastDate = date;
+    } catch (err) {
+      console.error('[bigBrotherDigest] не удалось:', err instanceof Error ? err.message : err);
+    } finally {
+      running = false;
+    }
+  };
+  setInterval(() => { void tick(); }, 10 * 60 * 1000);
 }
 
 function scheduleLogistBxSync() {
