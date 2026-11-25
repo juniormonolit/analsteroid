@@ -32155,3 +32155,42 @@ auto-fill minmax(280px) раскладывала их строкой. Тепер
 «@» вставляет упоминание, нет горизонтальной прокрутки). ИИ-оценка/ИИ-анализ на моке выключены — смотреть на проде.
 
 Выкачено 25.11 (BUILD cNCXFEvYdiYdPH_vaaL-v), Осипову — сообщение бота.
+
+## 2026-11-25 — «Большой брат», поток B: рейтинг РОПов и дисциплина задач (фаза 0)
+
+ТЗ — `BIG_BROTHER_SPEC.md`. Новых таблиц и миграций нет: всё из существующих источников.
+- **Рейтинг РОПов** (`/big-brother/rop`, API `GET /api/big-brother/rop?from&to`; только superadmin / Администратор /
+  `action.big_brother_rop`, гейт в `features/big-brother/engine/rop/access.ts` — дубль `lib/activity/access.ts` потока A,
+  чтобы не зависеть от порядка коммитов). РОП = `rop_bitrix_user_id` из `sa.org_resolved_hierarchy` с подчинёнными-
+  продавцами (логин manager*). Задачи РОПа за период (`engine/rop/sources.ts`): Задачник — `tasker_tasks.creator_bitrix_id`
+  (адресат `manager_bitrix_id`; исполнитель в Битриксе с 279 — сам РОП); повторка — `repeat_kanban_events`
+  (deal_task_created / deal_returned_from_reject / task_created / task_replaced, одна задача — один раз); Битрикс —
+  `sa.bitrix_task_current.created_by` в группах трёх сервисов (Задачник — `tasker_settings.group_id`, большие —
+  `BIG_DEALS_GROUP_IDS`, повторка — 118). Задача, уже известная по журналам Монолитики (bitrix id), напрямую не
+  считается второй раз. Метрики: всего / на подчинённого / по сервисам / через Монолитику vs в Битриксе; регулярность —
+  дней с постановкой из рабочих (производственный календарь), недели-провалы, мини-гистограмма по неделям; охват
+  подчинённых; доведение — закрыто, ждут контроля, «проверено» (закрыл сам РОП + приёмки канбана повторки), просрочено
+  сейчас, возвраты (канбан повторки); Задачник — доля «показатель вырос» (achieved/improved из achieved/improved/no_change).
+  Показатели отдела (подчинённые + РОП) — `fetchByManagers` (dealScope all): продажи ₽ (перв.+повт.), выполнение плана
+  (`computePeriodPlanByLogin`), CR Сделка → Продажа = Σsales_count/Σdeals_count, ср. чек = продажи/Σsales_count; кэш 10 мин.
+  UI: таблица с сортировкой, разворот РОПа до подчинённых (их задачи, последняя задача, личные продажи/план/CR),
+  scatter «задачи РОПа × показатели» с выбором осей (SearchSelect), заметки «что не посчитано».
+- **Дисциплина задач** (`/big-brother/tasks`, API `GET /api/big-brother/tasks?from&to&scope=all|services&stale=N`;
+  «директор и выше», срез `getSessionScope`/`scopeManagerIds`). По каждому сотруднику продаж/логистики (логин manager*/
+  logist*): получено, закрыто (вовремя / с опозданием / без срока, % вовремя), открыто, просрочено сейчас, без движения
+  N дней (`changed_at`), ждёт контроля, возвращено (канбан повторки + переходы 4→1/2/3 из `sa.bitrix_task_payload_raw`,
+  если такие поля там есть — формат не проверен, запрос падает мягко). Ограничение копии: истории статусов нет —
+  «вовремя» сравнивается с последним сроком.
+- **Отложено в фазу 1** (BACKLOG): реакция, «назначил менеджера» на больших, оргструктура на дату, активность РОПа
+  в Монолитике.
+- **Проверено:** typecheck; lint:responsive (новые нарушения только чужие — `dashboard-test`); вёрстка на моках во
+  временном worktree (страница-превью не коммитилась): 375 — без горизонтального выезда (scrollWidth 375), таблицы в
+  `.scroll-x`, разворот РОПа, scatter (6 точек); десктоп. **НЕ проверено на живых данных:** локально нет БД (туннель
+  15432 не поднят, `.env.local` смотрит на мёртвый 62, YC system не отвечает, SSH на прод запрещён). Сверка после
+  выкатки — для 2–3 РОПов сравнить ответ API со SQL:
+  `SELECT creator_bitrix_id, count(*) FROM tasker_tasks WHERE cancelled_at IS NULL AND created_at >= '<from>' GROUP BY 1;`
+  `SELECT actor_bitrix_id, count(DISTINCT coalesce(task_id::text, id::text)) FROM repeat_kanban_events WHERE actor_type='user'
+   AND event_type IN ('deal_task_created','deal_returned_from_reject','task_created','task_replaced') AND ts >= '<from>' GROUP BY 1;`
+  `SELECT created_by, group_id, count(*) FROM sa.bitrix_task_current WHERE NOT is_deleted AND created_at >= '<from>'
+   AND group_id IN (125,72,74,79,80,81,108,118) AND created_by IN (<РОПы>) GROUP BY 1,2;`
+  и проверить формат `sa.bitrix_task_payload_raw.payload` (`prev.STATUS`/`task.STATUS`).
