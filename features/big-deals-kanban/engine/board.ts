@@ -140,10 +140,12 @@ export async function buildBigBoard(session: SessionUser, filters: BigBoardFilte
   const [actor, snap, customColumns] = await Promise.all([
     bigActor(session), loadSnapshot({ force: filters.force }), listColumns(session.id),
   ]);
-  return boardFromCards(snap.cards, {
+  return boardFromCards(await withNotes(snap.cards), {
     actor, filters, stale: snap.stale, generatedAt: new Date(snap.at).toISOString(), customColumns,
   });
 }
+
+import { withNotes } from './taskNotes';
 
 // Для action-роута: обновить одну карточку после изменения задачи.
 export { refreshTask, invalidateTask, cardFromSnapshot } from './load';

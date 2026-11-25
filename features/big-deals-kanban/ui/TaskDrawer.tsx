@@ -30,6 +30,7 @@ import { CallsTab } from './CallsTab';
 import { StageBadge } from './StageHistory';
 import { STATE_META, cardAmount, fmtDT, money } from './format';
 import { ChatFileLink, TaskChat } from './TaskDrawerChat';
+import { CardNoteField } from './CardNote';
 import { TaskActions } from './TaskDrawerActions';
 import { Section } from './TaskDrawerShared';
 import { ParticipantsField } from './ParticipantsField';
@@ -124,6 +125,7 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
           {/* Работа: слева сделка и ИИ-оценка, справа (на телефоне — первым) действия и чат. Скрываем, не размонтируем: черновик чата не теряется. */}
           <div className={pane === 'work' ? 'flex min-w-0 flex-col gap-3 md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] md:items-start md:gap-4' : 'hidden'}>
             <div className="order-2 flex min-w-0 flex-col gap-3 md:order-1">
+              <CardNoteField card={card} canEdit={canManage} onSaved={c => onChanged(c)} mock={mock} />
               {deal && (
                 <Section title="Сделка и товары">
                   <div className="flex flex-wrap gap-x-4 gap-y-1">

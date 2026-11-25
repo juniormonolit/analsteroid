@@ -5,6 +5,7 @@ import { bigActor } from '@/features/big-deals-kanban/engine/actor';
 import { BigActionError, runBigAction } from '@/features/big-deals-kanban/engine/actions';
 import { takeAttachments } from '@/features/repeat-kanban/engine/attachments';
 import type { BigAction } from '@/features/big-deals-kanban/engine/types';
+import { withNote } from '@/features/big-deals-kanban/engine/taskNotes';
 
 // Действия канбана больших чеков (engine/actions.ts). Гейт — section.repeat_kanban (те же роли продаж),
 // зона — ropScope/scopeManagers, как у канбана повторных: РОП — свои отделы с поддеревом, менеджер — себя.
@@ -27,7 +28,7 @@ export async function POST(req: NextRequest) {
     const files = body.type === 'comment' || body.type === 'reassign' || body.type === 'return' || body.type === 'accept' ? takeAttachments(session.login, body.attachments) : [];
     const r = await runBigAction(body, actor, { dryRun }, files);
     console.info(`[big-deals action] ${session.login} ${body.type} task=${body.taskId}${dryRun ? ' DRY' : ''}${r.viaWebhook ? ' VIA-WEBHOOK' : ''} calls=${r.calls.map(c => c.method).join(',')}`);
-    return NextResponse.json({ ok: true, card: r.card ?? undefined, warnings: r.warnings.length ? r.warnings : undefined, ...(dryRun ? { calls: r.calls } : {}) });
+    return NextResponse.json({ ok: true, card: (await withNote(r.card ?? null)) ?? undefined, warnings: r.warnings.length ? r.warnings : undefined, ...(dryRun ? { calls: r.calls } : {}) });
   } catch (e) {
     if (e instanceof BigActionError) {
       // Отказы тоже в лог: 23.11 «не ставится менеджер» — в логе не было ни попытки, ни причины.

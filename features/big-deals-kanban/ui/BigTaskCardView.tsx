@@ -6,6 +6,7 @@
 import { Check, Clock, Link2, Phone, PhoneOff } from 'lucide-react';
 import type { BigTaskCard } from '../engine/types';
 import { STATE_META, cardAmount, fmtD, money, shortName } from './format';
+import { CardNoteLine } from './CardNote';
 
 /** Клиент сделки, если движок его отдаёт (поле может прийти позже контракта: строка или { name }). */
 function clientName(card: BigTaskCard): string | null {
@@ -87,6 +88,9 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
           )}
         </div>
       )}
+
+      {/* Комментарий РОПа к карточке (Осипов 25.11). */}
+      {card.note && <CardNoteLine note={card.note} />}
 
       {/* Сигналы одной строкой, порядок постоянный (глаз идёт по одной вертикали): статус · дни · звонки · ответ */}
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">

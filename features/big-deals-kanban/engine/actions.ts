@@ -239,11 +239,13 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
   };
 
   /** Назначить исполнителя: RESPONSIBLE_ID, нажавший и РОП нового исполнителя — наблюдателями, упоминание + ТЗ в чат. */
-  const assignTo = async (rid: string, tz?: string, reason?: string) => {
+  const assignTo = async (rid: string, tz?: string, reason?: string, deadline?: Date | null) => {
     if (actor.zone !== 'all' && !actor.zone.has(rid) && !(await isActiveManager(rid))) throw new BigActionError('Менеджер не найден среди действующих', 400);
     if (status === '5') throw new BigActionError('Задача уже завершена — переназначить нельзя');
     const fields: Record<string, unknown> = {};
     if (rid !== String(t.responsibleId)) fields.RESPONSIBLE_ID = rid;
+    // Срок — тем же вызовом (Осипов 25.11: выбирал менеджера, жал «Сегодня» в «Изменить срок» — выбор сбрасывался).
+    if (deadline) fields.DEADLINE = deadline.toISOString();
     const auditors = (t.auditors ?? []).map(String);
     const addAuditors: string[] = [];
     if (actor.userId && actor.userId !== rid && !auditors.includes(actor.userId) && String(t.createdBy) !== actor.userId) addAuditors.push(actor.userId);
@@ -253,7 +255,7 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
     if (addAuditors.length) fields.AUDITORS = [...auditors, ...addAuditors];
     if (Object.keys(fields).length) await run.task('tasks.task.update', { taskId, fields }, rop ? `РОП исполнителя по оргструктуре: ${rop}` : 'РОП исполнителя в оргструктуре не найден');
     const rname = await read<{ NAME?: string; LAST_NAME?: string }[]>('user.get', { ID: rid }).then(u => [u?.[0]?.NAME, u?.[0]?.LAST_NAME].filter(Boolean).join(' ')).catch(() => '');
-    await run.comment(taskId, `[USER=${rid}]${rname || 'Менеджер'}[/USER], задача назначена на вас из Монолитики${who}${reason ? ` (${reason})` : ''}.${tz ? `\n[b]ТЗ:[/b]\n${tz.slice(0, 4000)}` : ''}`, uploadedFiles);
+    await run.comment(taskId, `[USER=${rid}]${rname || 'Менеджер'}[/USER], задача назначена на вас из Монолитики${who}${reason ? ` (${reason})` : ''}.${deadline ? `\nСрок: ${fmtDeadline(deadline)}.` : ''}${tz ? `\n[b]ТЗ:[/b]\n${tz.slice(0, 4000)}` : ''}`, uploadedFiles);
   };
 
   switch (action.type) {
@@ -280,7 +282,7 @@ export async function runBigAction(action: BigAction, actor: BigActor, opts: Run
     case 'reassign': {
       const rid = String(action.responsibleId ?? '');
       if (!/^\d{1,10}$/.test(rid)) throw new BigActionError('Выберите менеджера');
-      await assignTo(rid, action.comment?.trim() || undefined);
+      await assignTo(rid, action.comment?.trim() || undefined, undefined, parseDeadline(action.deadline));
       const column = await currentColumn(taskId, t);
       if (column === 'new') await moveTo('assigned').catch(e => { run.warnings.push(e instanceof Error ? e.message : String(e)); });
       break;

@@ -89,7 +89,11 @@ export interface BigTaskCard {
   calls: BigCallStats | null;
   related: BigRelatedTask[];
   url: string;
+  /** Комментарий РОПа к карточке (big_task_notes, Осипов 25.11) — виден в карточке и на доске. */
+  note?: BigTaskNote | null;
 }
+
+export interface BigTaskNote { text: string; author: string | null; at: string }
 
 export interface BigColumnData {
   key: BigColumnKey;
@@ -200,7 +204,7 @@ export interface BigMassCloseJob { id: string; total: number; done: number; fail
  *  POST /api/big-deals-kanban/action — тело BigAction, ответ { ok: true, card?: BigTaskCard } | { error }. */
 export type BigAction =
   | { type: 'move'; taskId: number; column: BigColumnKey }
-  | { type: 'reassign'; taskId: number; responsibleId: string; comment?: string }
+  | { type: 'reassign'; taskId: number; responsibleId: string; comment?: string; deadline?: string }
   | { type: 'comment'; taskId: number; text: string; attachments?: string[] }
   /** «Ответ увидел, работаем дальше» (владелец 18.11): НЕ закрывает задачу — возвращает в работу с комментарием, срок по желанию. */
   | { type: 'accept'; taskId: number; comment?: string; deadline?: string }

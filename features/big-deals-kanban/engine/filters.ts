@@ -52,7 +52,8 @@ export function matchFilters(c: BigTaskCard, f: BigFilters, now = Date.now()): b
       const hit = (digits && (String(c.id) === digits || String(c.deal?.id ?? '') === digits))
         || lower(c.title).includes(q)
         || lower(c.deal?.title ?? '').includes(q)
-        || lower(c.client ?? '').includes(q);
+        || lower(c.client ?? '').includes(q)
+        || lower(c.note?.text ?? '').includes(q);
       if (!hit) return false;
     }
   }

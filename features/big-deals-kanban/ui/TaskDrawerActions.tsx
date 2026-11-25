@@ -46,7 +46,9 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
     try {
       const r = await postBigAction({ taskId: card.id, ...body });
       if (r.warnings?.length) setWarn(r.warnings.join('; '));
-      setMode(null); setTz(''); setComment(''); setDeadline(''); setManager(''); setSure(false);
+      setMode(null); setComment(''); setDeadline(''); setSure(false);
+      // Выбранного менеджера и ТЗ сбрасывает только само назначение: срок/перенос между делом их не теряют.
+      if (body.type === 'reassign') { setTz(''); setManager(''); }
       setPending(null);
       onChanged(r.card);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setPending(null); }
@@ -90,7 +92,9 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
             <SearchSelect options={managerOptions} value={manager} onChange={setManager} placeholder="Выберите менеджера" searchable ariaLabel="Менеджер" className="min-h-11 w-full" />
             <QuestionsBlock questions={questions} deal={card.deal} mock={mock} onInsert={addTz} title="Вопросы в ТЗ" />
             <textarea value={tz} onChange={e => setTz(e.target.value)} rows={4} placeholder="ТЗ менеджеру — уйдёт в чат задачи" className={input} />
-            <button type="button" className={`${primary} self-end`} disabled={busy || !manager} onClick={() => run({ type: 'reassign', responsibleId: manager, comment: tz.trim() || undefined })}>
+            {/* Срок — здесь же (Осипов 25.11: выбирал менеджера, шёл в «Изменить срок» → «Сегодня», и выбор менеджера пропадал). */}
+            <DeadlineField label={`Срок (необязательно${card.deadlineAt ? `, сейчас ${fmtDT(card.deadlineAt)}` : ''})`} value={deadline} onChange={setDeadline} />
+            <button type="button" className={`${primary} self-end`} disabled={busy || !manager} onClick={() => run({ type: 'reassign', responsibleId: manager, comment: tz.trim() || undefined, deadline: deadlineIso })}>
               {busy ? 'Назначаю…' : 'Назначить'}
             </button>
           </div>
