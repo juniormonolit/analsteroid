@@ -528,6 +528,11 @@ export async function unenroll(actor: TrainingActor, eventId: number, rawManager
   if (del.rowCount) {
     await writeLog(systemDb(), { eventId, managerId, action: 'unenroll', actorUserId: actor.session.id });
     await systemDb().query('DELETE FROM tasker_training_results WHERE event_id = $1 AND manager_bitrix_user_id = $2', [eventId, managerId]);
+    // Задача «Теория» этого менеджера отвязывается от занятия: снова в очереди тренера — со своим временем РОПа
+    // (один на один) или ждёт группу. Иначе висела «назначена на занятие», с которого человека сняли.
+    await systemDb().query(
+      'UPDATE tasker_tasks SET training_event_id = NULL, updated_at = now() WHERE training_event_id = $1 AND manager_bitrix_id = $2',
+      [eventId, managerId]).catch(e => console.warn('[tasker/trainings] отвязка задачи:', e instanceof Error ? e.message : e));
     await systemDb().query(`UPDATE tasker_training_events SET calendar_sync_state = 'pending' WHERE id = $1`, [eventId]);
     await syncTrainingCalendar(eventId);
   }

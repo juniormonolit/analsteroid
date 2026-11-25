@@ -319,9 +319,11 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
       templateId,
       deadline,
       durationMin,
-      slot: sessionId ? null : slot ? { start: new Date(slot).toISOString() } : null,
-      sessionId,
-      newSession: !sessionId && !!slot && newSession,
+      // Записан на занятие — время задачи = время занятия (сервер берёт его сам); своё время/сессия не шлются.
+      // Иначе у задачи два времени: Пуртиков 25.11 — «Теория» на 15:00 и запись на групповое в 16:15.
+      slot: trainingId || sessionId ? null : slot ? { start: new Date(slot).toISOString() } : null,
+      sessionId: trainingId ? null : sessionId,
+      newSession: !trainingId && !sessionId && !!slot && newSession,
       controlDate,
       customersChecklist: checkedCustomers.length ? checkedCustomers : undefined,
       trainingEventId: trainingId ? Number(trainingId) : null,
@@ -508,18 +510,25 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
           </div>
         </Field>
 
+        {/* Сначала — на какое занятие, потом — время. Записан на занятие → время занятия, своё не выбирается
+            (иначе два времени у одной задачи). Не записан → своё время: для «Теории» это занятие один на один. */}
+        {trainings && trainings.length > 0 && (
+          <Field label={kind === 'theory' ? 'Групповое занятие тренера' : 'Записать на обучение'}
+            hint={trainingId
+              ? `Время задачи — время занятия: ${trainingOptions.find(o => o.value === trainingId)?.hint ?? ''}. Своё время не нужно`
+              : kind === 'theory' ? 'Не записываете — ниже выберите время: занятие будет один на один' : 'Ссылка на обучение попадёт в описание задачи'}>
+            <SearchSelect options={trainingOptions} value={trainingId} onChange={setTrainingId}
+              allLabel={kind === 'theory' ? 'Нет — один на один, своё время' : 'Не записывать'} ariaLabel="Записать на обучение" className="w-full" />
+          </Field>
+        )}
+
+        {!trainingId && (
         <SessionBlock
           sessions={sessions} sessionId={sessionId} onSession={setSessionId}
           slot={slot} onSlot={setSlot} newSession={newSession} onNewSession={setNewSession}
           metricLabel={metric?.label}
           availability={slotAvailability(sessions, sessionId, slot, durationMin, managerIdNums, kind === 'theory' ? trainer?.id ?? null : creatorId ? Number(creatorId) : null)}
         />
-
-        {trainings && trainings.length > 0 && (
-          <Field label="Записать на обучение" hint="Ссылка на обучение попадёт в описание задачи">
-            <SearchSelect options={trainingOptions} value={trainingId} onChange={setTrainingId}
-              allLabel="Не записывать" ariaLabel="Записать на обучение" className="w-full" />
-          </Field>
         )}
 
         {submitError && <Banner tone="error">{submitError}</Banner>}

@@ -22,7 +22,7 @@ const seesAll = (a: TrainingActor) => a.canManage || a.scope.kind === 'all';
 interface QueueRow {
   id: string; bitrix_task_id: string | null; title: string; body: string; manager_bitrix_id: string; manager_name: string | null;
   dept_name: string | null; creator_name: string | null; rop_name: string | null; metric_id: string; snapshot: Snapshot | null;
-  created_at: Date; deadline: Date; ev_id: string | null; ev_title: string | null; ev_start: Date | null;
+  created_at: Date; deadline: Date; slot_start: Date | null; ev_id: string | null; ev_title: string | null; ev_start: Date | null;
 }
 
 async function loadQueue(actor: TrainingActor, opts: { metricId?: string; taskIds?: number[] } = {}): Promise<TrainingQueueItem[] | null> {
@@ -37,7 +37,7 @@ async function loadQueue(actor: TrainingActor, opts: { metricId?: string; taskId
   if (opts.taskIds) { args.push(opts.taskIds); where.push(`t.id = ANY($${args.length}::bigint[])`); }
   const r = await systemDb().query<QueueRow>(
     `SELECT t.id, t.bitrix_task_id, t.title, t.body, t.manager_bitrix_id, t.manager_name, t.dept_name, t.creator_name, t.rop_name,
-            t.metric_id, t.snapshot, t.created_at, t.deadline, ev.id AS ev_id, ev.title AS ev_title, ev.start_at AS ev_start
+            t.metric_id, t.snapshot, t.created_at, t.deadline, t.slot_start, ev.id AS ev_id, ev.title AS ev_title, ev.start_at AS ev_start
        FROM tasker_tasks t
        LEFT JOIN tasker_training_events ev ON ev.id = t.training_event_id AND ev.cancelled_at IS NULL
       WHERE ${where.join(' AND ')}
@@ -53,6 +53,7 @@ async function loadQueue(actor: TrainingActor, opts: { metricId?: string; taskId
     metricId: x.metric_id, snapshot: x.snapshot && Object.keys(x.snapshot).length ? x.snapshot : null,
     createdAt: x.created_at.toISOString(), deadline: x.deadline.toISOString(),
     event: x.ev_id ? { id: Number(x.ev_id), title: x.ev_title ?? '', startsAt: (x.ev_start as Date).toISOString() } : null,
+    ownSlot: !x.ev_id && x.slot_start ? x.slot_start.toISOString() : null,
   }));
 }
 
@@ -66,7 +67,7 @@ export async function queue(actor: TrainingActor): Promise<TrainingQueueResponse
     let g = by.get(it.metricId);
     if (!g) { g = { metricId: it.metricId, label: label.get(it.metricId) ?? it.metricId, items: [], waiting: 0 }; by.set(it.metricId, g); }
     g.items.push(it);
-    if (!it.event) g.waiting++;
+    if (!it.event && !it.ownSlot) g.waiting++; // своё время у РОПа — не ждёт группу
   }
   const groups = [...by.values()].sort((a, b) => b.waiting - a.waiting || (order.get(a.metricId) ?? 999) - (order.get(b.metricId) ?? 999));
   return {
@@ -91,7 +92,8 @@ export async function suggest(actor: TrainingActor, metricId: string, rawTaskIds
   if (!metricId) throw new TrainingError('Не указана тема');
   const limit = Math.min(6, Math.max(1, Number(rawLimit) || 3));
   const [items, group, trainer, slots] = await Promise.all([loadQueue(actor, { metricId }), groupSettings(), defaultTrainerId(), loadSlots()]);
-  const waiting = (items ?? []).filter(i => !i.event);
+  // Время, выбранное РОПом (один на один), в группу не тянем — правка Будковского 25.11.
+  const waiting = (items ?? []).filter(i => !i.event && !i.ownSlot);
   const wanted = Array.isArray(rawTaskIds) ? new Set(rawTaskIds.map(Number)) : null;
   const chosen = (wanted && wanted.size ? waiting.filter(i => wanted.has(i.taskId)) : waiting).slice(0, wanted && wanted.size ? group.max : group.target);
   if (!chosen.length) return [];
@@ -158,7 +160,7 @@ export async function assemble(actor: TrainingActor, raw: unknown): Promise<Trai
   const items = await loadQueue(actor, { taskIds });
   if (!items) throw new TrainingError('Задачи «Теория» ещё не развёрнуты в ядре Задачника', 409);
   const found = new Map(items.map(i => [i.taskId, i]));
-  const lost = taskIds.filter(id => !found.get(id) || found.get(id)!.event);
+  const lost = taskIds.filter(id => !found.get(id) || found.get(id)!.event || found.get(id)!.ownSlot);
   if (lost.length) throw new TrainingError('Часть задач уже не в очереди (закрыты или назначены на занятие) — обновите список', 409);
   const chosen = taskIds.map(id => found.get(id)!);
 

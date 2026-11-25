@@ -218,6 +218,17 @@ export async function createTasks(
   }
 
   const deadlineIso = toMskIso(req.deadline);
+  // Записан на занятие тренера → время задачи = время занятия, своей сессии/события нет (менеджер — участник
+  // события занятия через запись). Раньше форма слала и своё время, и занятие: у Пуртикова 25.11 задача на 15:00,
+  // а в расписании тренера — групповое 16:15.
+  let trainingSlot: { start: string; end: string } | null = null;
+  if (req.trainingEventId) {
+    const ev = await systemDb().query<{ start_at: Date; duration_min: number }>(
+      'SELECT start_at, duration_min FROM tasker_training_events WHERE id = $1 AND cancelled_at IS NULL', [req.trainingEventId]);
+    if (!ev.rows[0]) throw new TaskerError('Это занятие отменено или удалено — выберите другое или своё время');
+    const st = ev.rows[0].start_at;
+    trainingSlot = { start: st.toISOString(), end: new Date(st.getTime() + ev.rows[0].duration_min * 60_000).toISOString() };
+  }
   const sessionCache = new Map<string, number>();
   const touchedSessions = new Map<number, number>(); // sessionId → последняя задача запроса
   const createdIds: number[] = [];
@@ -237,9 +248,10 @@ export async function createTasks(
     const director = directorFor(settings, entry?.branch);
     const managerName = entry?.name ?? `#${managerId}`;
 
-    const sess = await resolveSession(ctx, assignee, sessionCache);
-    const slotStartIso = req.slot?.start ? toMskIso(req.slot.start, '10:00:00') : sess?.slot ?? null;
-    const slotEndIso = slotStartIso ? new Date(new Date(slotStartIso).getTime() + req.durationMin * 60_000).toISOString() : null;
+    const sess = trainingSlot ? null : await resolveSession(ctx, assignee, sessionCache);
+    const slotStartIso = trainingSlot ? trainingSlot.start : req.slot?.start ? toMskIso(req.slot.start, '10:00:00') : sess?.slot ?? null;
+    const slotEndIso = trainingSlot ? trainingSlot.end
+      : slotStartIso ? new Date(new Date(slotStartIso).getTime() + req.durationMin * 60_000).toISOString() : null;
 
     // Чек-лист: только заказчики ЭТОГО менеджера из «горящих» с одной отгрузкой.
     let checklist: { clientKey: string; title: string; crmUrl: string | null }[] = [];
@@ -298,7 +310,7 @@ export async function createTasks(
       ops.push({ op: 'checklist', items: checklist.map(c => `${c.title}${c.crmUrl ? ` — ${c.crmUrl}` : ''}`) });
     }
     // Слот без сессии — своё событие в календаре исполнителя, менеджер — участник (п.10 правок 23.11).
-    if (!sess && slotStartIso) ops.push({ op: 'task_calendar' });
+    if (!sess && !trainingSlot && slotStartIso) ops.push({ op: 'task_calendar' });
     await enqueue(taskId, ops);
     const res = await drainTask(taskId, { force: true }).catch(e => ({ done: 0, error: e instanceof Error ? e.message : String(e) }));
     if (res.error) {

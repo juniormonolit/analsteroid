@@ -310,6 +310,8 @@ export interface TrainingQueueItem {
   deadline: string;
   /** Уже назначено на занятие (ещё не прошедшее). */
   event: { id: number; title: string; startsAt: string } | null;
+  /** ISO. РОП сам выбрал время (без группового занятия) — это занятие один на один, в группу не собирается. */
+  ownSlot: string | null;
 }
 
 /** Предложенный слот под группу. */

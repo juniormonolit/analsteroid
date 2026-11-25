@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarCheck, Sparkles, Users } from 'lucide-react';
+import { CalendarCheck, Sparkles, UserRound, Users } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import type { TaskerMetric } from '../../types';
 import type {
@@ -75,7 +75,9 @@ function QueueGroup({ g, metric, settings, canManage, onAssemble, onOpenEvent }:
   onAssemble: (items: TrainingQueueItem[], suggestion: TrainingSuggestion | null) => void; onOpenEvent: (id: number) => void;
 }) {
   // Дольше ждущие — первыми.
-  const waiting = useMemo(() => g.items.filter(i => !i.event).sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [g.items]);
+  // Своё время от РОПа (ownSlot) — занятие один на один: не ждёт группу, не отмечается в «Собрать занятие».
+  const waiting = useMemo(() => g.items.filter(i => !i.event && !i.ownSlot).sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [g.items]);
+  const solo = g.items.filter(i => !i.event && i.ownSlot).sort((a, b) => a.ownSlot!.localeCompare(b.ownSlot!));
   const planned = g.items.filter(i => i.event);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   // Ничего не отмечено — предложение считается для первых по давности (до target).
@@ -100,7 +102,7 @@ function QueueGroup({ g, metric, settings, canManage, onAssemble, onOpenEvent }:
       <header className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <h2 className="min-w-0 break-words text-[15px] font-semibold">{g.label}</h2>
         <span className="inline-flex shrink-0 items-center gap-1 text-[12.5px] text-[var(--color-text-secondary)]">
-          <Users size={13} /> ждут {g.waiting}{planned.length ? ` · назначено ${planned.length}` : ''}
+          <Users size={13} /> ждут {g.waiting}{solo.length ? ` · один на один ${solo.length}` : ''}{planned.length ? ` · в группе ${planned.length}` : ''}
         </span>
       </header>
 
@@ -135,6 +137,18 @@ function QueueGroup({ g, metric, settings, canManage, onAssemble, onOpenEvent }:
                 {i.snapshot && <span>сейчас {fmtMetric(i.snapshot.value, fmt)}{i.snapshot.deptAvg != null ? ` (отдел ${fmtMetric(i.snapshot.deptAvg, fmt)})` : ''}</span>}
                 <span className={waitDays(i.createdAt) >= 7 ? 'font-medium text-[var(--color-warning)]' : ''}>ждёт {waitDays(i.createdAt)} дн.</span>
                 <span>поставил {i.creatorName ?? i.ropName ?? '—'} {ddmm(mskDateKey(i.createdAt))}</span>
+              </span>
+            </div>
+          </li>
+        ))}
+        {solo.map(i => (
+          <li key={i.taskId} className="flex min-w-0 items-start gap-2 border-t border-[var(--color-border)] py-2">
+            <UserRound size={15} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="min-w-0 break-words text-sm font-medium">{i.manager.name}</span>
+              <span className="flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-[var(--color-text-muted)]">
+                <span className="font-medium text-[var(--color-text-secondary)]">один на один · {slotText({ startsAt: i.ownSlot!, durationMin: 0 })}</span>
+                <span>время выбрал {i.creatorName ?? i.ropName ?? 'РОП'}</span>
               </span>
             </div>
           </li>
