@@ -1,5 +1,5 @@
 'use client';
-// Полоса вкладок раздела «Большой брат». Пять вкладок — flex-wrap вместо горизонтального скролла
+// Полоса вкладок раздела «Большой брат». Семь вкладок — flex-wrap вместо горизонтального скролла
 // (CLAUDE.md, правило 12, альтернатива для небольшого числа вкладок). «РОПы» — только тем, кому
 // виден рейтинг РОПов (canViewBigBrotherRop, вычисляется в layout на сервере).
 import Link from 'next/link';
@@ -10,6 +10,8 @@ const TABS = [
   { href: '/big-brother/rop', label: 'РОПы', rop: true },
   { href: '/big-brother/tasks', label: 'Задачи' },
   { href: '/big-brother/people', label: 'Люди' },
+  { href: '/big-brother/usage', label: 'Использование' },
+  { href: '/big-brother/signals', label: 'Сигналы' },
   { href: '/big-brother/watch', label: 'Сторож' },
 ];
 
