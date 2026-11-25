@@ -89,7 +89,6 @@ export function TaskerBoard({ tasks, dragEnabled, onOpen, onMove }: {
     measureChips();
   }, [shownPhone, measureChips]);
 
-  const occupied = BOARD_COLUMNS.filter(c => (byStatus.get(c)?.length ?? 0) > 0).length;
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggleGroup = (k: string) => setCollapsed(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
 
@@ -120,8 +119,9 @@ export function TaskerBoard({ tasks, dragEnabled, onOpen, onMove }: {
         <div ref={scrollRef} onScroll={measure} className="scroll-x h-full">
           <div className="flex h-full min-w-0 items-stretch gap-2.5">
             {BOARD_COLUMNS.map(s => {
-              // Ширина (правка владельца 24.11): занятые колонки делят свободное место (min 300, max 460;
-              // если занятых ≤ 2 — без потолка, чтобы карточки встали в 2 столбца), пустые — узкая полоса.
+              // Ширина (правка владельца 24.11): занятые колонки делят свободное место (min 300, max 460), пустые — узкая полоса.
+              // Потолок 460 — ВСЕГДА (владелец 25.11 на скрине одной занятой колонки «Новые» с карточками по 4 в ряд:
+              // «а хули в строчку»): без него колонка растягивалась на весь экран и карточки шли строкой, не столбиком.
               const list = byStatus.get(s) ?? [];
               const dropOk = canDrop(s);
               const dim = !!drag && !dropOk && s !== boardColumn(drag);
@@ -132,7 +132,7 @@ export function TaskerBoard({ tasks, dragEnabled, onOpen, onMove }: {
                   onDragOver={e => { if (dropOk) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (over !== s) setOver(s); } }}
                   onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(o => (o === s ? null : o)); }}
                   onDrop={e => { e.preventDefault(); const c = drag; setDrag(null); setOver(null); if (!c || !dropOk) return; if (s === 'done') onOpen(c); else onMove(c, s as MoveTarget); }}
-                  className={`${s === shownPhone ? 'flex' : 'hidden'} w-full min-w-0 shrink-0 flex-col overflow-hidden rounded-xl bg-[var(--color-bg-surface)] transition-opacity sm:flex sm:h-full ${slim ? 'sm:w-12' : `sm:min-w-[300px] sm:flex-1 ${occupied > 2 ? 'sm:max-w-[460px]' : ''}`} ${dim ? 'opacity-40' : ''} ${over === s ? 'ring-2 ring-[var(--color-accent)]' : ''}`}>
+                  className={`${s === shownPhone ? 'flex' : 'hidden'} w-full min-w-0 shrink-0 flex-col overflow-hidden rounded-xl bg-[var(--color-bg-surface)] transition-opacity sm:flex sm:h-full ${slim ? 'sm:w-12' : 'sm:min-w-[300px] sm:max-w-[460px] sm:flex-1'} ${dim ? 'opacity-40' : ''} ${over === s ? 'ring-2 ring-[var(--color-accent)]' : ''}`}>
                   {slim && (
                     <div className="hidden h-full flex-col items-center gap-2 py-3 sm:flex" title={`${BOARD_COLUMN_LABELS[s]}: пусто · ${HINT[s]}`}>
                       <span aria-hidden className="h-[3px] w-4 shrink-0 rounded-full" style={{ background: STATUS_COLOR[s] }} />
