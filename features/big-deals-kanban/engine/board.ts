@@ -140,12 +140,16 @@ export async function buildBigBoard(session: SessionUser, filters: BigBoardFilte
   const [actor, snap, customColumns] = await Promise.all([
     bigActor(session), loadSnapshot({ force: filters.force }), listColumns(session.id),
   ]);
-  return boardFromCards(await withNotes(snap.cards), {
+  // «Новое» (25.11): что изменилось для смотрящего с его прошлого открытия; последние сообщения чатов — фоном.
+  refreshLastMessages(snap.cards);
+  const cards = await withFresh(await withNotes(snap.cards), String(session.id), session.bitrixUserId ?? null);
+  return boardFromCards(cards, {
     actor, filters, stale: snap.stale, generatedAt: new Date(snap.at).toISOString(), customColumns,
   });
 }
 
 import { withNotes } from './taskNotes';
+import { refreshLastMessages, withFresh } from './fresh';
 
 // Для action-роута: обновить одну карточку после изменения задачи.
 export { refreshTask, invalidateTask, cardFromSnapshot } from './load';

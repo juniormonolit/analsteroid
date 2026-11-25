@@ -33,7 +33,7 @@ export function filtersToParams(f: BigFilters, sort?: BigSort, p = new URLSearch
   put('states', f.states?.length ? f.states.join(',') : null);
   put('cols', f.columns?.length ? f.columns.join(',') : null);
   put('dmin', num(f.daysMin)); put('idle', num(f.idleDaysMin));
-  put('stuck', f.stuck ? '1' : null); put('nocalls', f.noCalls ? '1' : null); put('nolost', f.hideLost ? '1' : null); put('unas', f.unassigned ? '1' : null);
+  put('stuck', f.stuck ? '1' : null); put('nocalls', f.noCalls ? '1' : null); put('nolost', f.hideLost ? '1' : null); put('unas', f.unassigned ? '1' : null); put('fresh', f.fresh ? '1' : null);
   put('deal', f.deal || null);
   if (sort && sort !== 'default') p.set('sort', sort);
   return p;

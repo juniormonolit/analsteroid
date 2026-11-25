@@ -58,6 +58,10 @@ function allCards(): BigTaskCard[] {
       calls: n % 4 === 3 ? null : { total: n % 3 === 0 ? 0 : n % 6, talks: n % 3, talkSeconds: (n % 5) * 95, lastAt: null },
       related: n % 3 === 1 ? [{ id: 1, title: 'Логист: доставка', groupName: 'Логистика', state: (n % 2 ? 'done' : 'pending') as BigTaskState, responsible: PEOPLE[2], changedAt: null, url: taskUrl(1) }] : [],
       url: taskUrl(480_000 + n),
+      // «Новое» (25.11) — у части карточек, разных видов.
+      fresh: n % 4 === 0 ? { kinds: ['chat'], chatAuthor: resp.name, since: new Date(Date.now() - 5 * 3600_000).toISOString() }
+        : n % 7 === 3 ? { kinds: ['related', 'stage'], since: new Date(Date.now() - 26 * 3600_000).toISOString() }
+        : n % 9 === 5 ? { kinds: ['stage'], since: new Date(Date.now() - 26 * 3600_000).toISOString() } : null,
     };
     // Клиент (поле может появиться в контракте позже) — у части карточек.
     return (n % 3 === 2 ? { ...base, client: CLIENTS[n % CLIENTS.length] } : base) as BigTaskCard;
@@ -73,6 +77,7 @@ export function matchFilters(c: BigTaskCard, f: BigFilters): boolean {
   const idleDays = Math.floor((Date.now() - new Date(c.changedAt ?? c.createdAt).getTime()) / DAY);
   if (f.groups?.length && !f.groups.includes(c.groupId)) return false;
   if (f.manager && c.responsible.id !== f.manager) return false;
+  if (f.fresh && !c.fresh?.kinds.length) return false;
   if (f.unassigned && (!c.unassigned || c.state === 'done' || c.column === 'sold' || c.column === 'lost_check' || c.column === 'lost_done')) return false;
   if (f.products?.length && !c.productGroups.some(p => f.products!.includes(p))) return false;
   if (f.q) { const q = f.q.toLowerCase(); if (!(`${c.id} ${c.title} ${c.deal?.title ?? ''} ${(c as { client?: string }).client ?? ''}`.toLowerCase().includes(q))) return false; }

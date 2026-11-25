@@ -3,8 +3,8 @@
 // без перехода в Битрикс). Порядок строк по важности: что и на сколько → стадия сделки →
 // клиент и исполнитель → стадия сделки → сигналы одной строкой (статус, дни в колонке, звонки, ответ по связанным).
 // Компоновка 18.11 (план Fable): 4 строки вместо 7, № и дата создания — в подсказке, полоса-сигнал слева.
-import { Check, Clock, Link2, Phone, PhoneOff } from 'lucide-react';
-import type { BigTaskCard } from '../engine/types';
+import { ArrowUpRight, Check, Clock, Eye, Link2, MessageCircle, Phone, PhoneOff } from 'lucide-react';
+import type { BigFresh, BigTaskCard } from '../engine/types';
 import { STATE_META, cardAmount, fmtD, money, shortName } from './format';
 import { CardNoteLine } from './CardNote';
 
@@ -34,6 +34,7 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
   const closed = card.deal?.closed ?? null;
   const client = clientName(card);
   const selecting = selected !== null && !!onSelect;
+  const fresh = card.fresh?.kinds.length ? card.fresh : null;
 
   return (
     <button
@@ -51,6 +52,8 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
       {(card.stuck || card.state === 'control') && (
         <span aria-hidden className={`absolute inset-y-0 left-0 w-[3px] ${card.stuck ? 'bg-[var(--color-negative)]' : 'bg-[var(--color-accent)]'}`} />
       )}
+      {/* «Новое» с прошлого открытия (владелец 25.11): точка в углу + один чип самого важного в строке сигналов. */}
+      {fresh && <span aria-hidden className="absolute right-1 top-1 h-2 w-2 rounded-full bg-[var(--color-accent)] ring-2 ring-[var(--color-bg)]" />}
       {/* Что и на сколько */}
       <div className="flex min-w-0 items-start justify-between gap-2">
         {selecting && (
@@ -94,6 +97,7 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
 
       {/* Сигналы одной строкой, порядок постоянный (глаз идёт по одной вертикали): статус · дни · звонки · ответ */}
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        {fresh && <FreshChip fresh={fresh} />}
         <span className={`rounded px-1.5 py-0.5 font-medium ${state.cls}`}>{state.label}</span>
         <span className={`inline-flex items-center gap-0.5 tabular-nums ${card.stuck ? 'font-semibold text-[var(--color-negative)]' : 'text-[var(--color-text-muted)]'}`}
           title={card.stuck ? `${card.daysInColumn} дн. в колонке — дольше нормы` : `${card.daysInColumn} дн. в этой колонке`}>
@@ -109,7 +113,8 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
           </span>
         ))}
         {card.related.length > 0 && (answered ? (
-          <span className="inline-flex items-center gap-0.5 rounded bg-[var(--color-positive)]/15 px-1.5 py-0.5 font-medium text-[var(--color-positive)]"
+          // Зелёным — только пока ответ не просмотрен (Fable 25.11), дальше — серым.
+          <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-medium ${fresh?.kinds.includes('related') ? 'bg-[var(--color-positive)]/15 text-[var(--color-positive)]' : 'bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)]'}`}
             title={`Связанных задач (логист, снабжение): ${card.related.length}, с ответом: ${answered}`}>
             <Link2 size={11} aria-hidden />ответ{card.related.length > 1 ? ` ${answered}/${card.related.length}` : ''}
           </span>
@@ -120,5 +125,23 @@ export function BigTaskCardView({ card, onOpen, draggable, onDragStart, onDragEn
         ))}
       </div>
     </button>
+  );
+}
+
+/** Чип «новое» — только самое важное из видов (порядок в fresh.kinds — по важности). */
+function FreshChip({ fresh }: { fresh: BigFresh }) {
+  const k = fresh.kinds[0];
+  const since = new Date(fresh.since).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const more = fresh.kinds.length > 1 ? ` (+ ещё ${fresh.kinds.length - 1})` : '';
+  const meta = {
+    chat: { I: MessageCircle, label: 'сообщение', title: `Новое сообщение в чате задачи${fresh.chatAuthor ? ` — ${fresh.chatAuthor}` : ''}` },
+    related: { I: Link2, label: 'ответ', title: 'Новое в связанной задаче (логист, снабжение)' },
+    control: { I: Eye, label: 'на контроль', title: 'Задача пришла на контроль' },
+    stage: { I: ArrowUpRight, label: 'стадия', title: 'Сменилась стадия сделки' },
+  }[k];
+  return (
+    <span className="inline-flex items-center gap-0.5 rounded bg-[var(--color-accent)] px-1.5 py-0.5 font-semibold text-white" title={`${meta.title}${more} — с вашего прошлого открытия (${since})`}>
+      <meta.I size={11} aria-hidden />{meta.label}
+    </span>
   );
 }

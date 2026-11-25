@@ -6,6 +6,7 @@ import { BigActionError, runBigAction } from '@/features/big-deals-kanban/engine
 import { takeAttachments } from '@/features/repeat-kanban/engine/attachments';
 import type { BigAction } from '@/features/big-deals-kanban/engine/types';
 import { withNote } from '@/features/big-deals-kanban/engine/taskNotes';
+import { markSeen } from '@/features/big-deals-kanban/engine/fresh';
 
 // Действия канбана больших чеков (engine/actions.ts). Гейт — section.repeat_kanban (те же роли продаж),
 // зона — ropScope/scopeManagers, как у канбана повторных: РОП — свои отделы с поддеревом, менеджер — себя.
@@ -27,6 +28,8 @@ export async function POST(req: NextRequest) {
     if (dryRun && actor.zone !== 'all') return NextResponse.json({ error: 'Сухой прогон — только админу' }, { status: 403 });
     const files = body.type === 'comment' || body.type === 'related_comment' || body.type === 'reassign' || body.type === 'return' || body.type === 'accept' ? takeAttachments(session.login, body.attachments) : [];
     const r = await runBigAction(body, actor, { dryRun }, files);
+    // Своё действие — не «новое» для себя: отметить карточку просмотренной (engine/fresh.ts).
+    if (!dryRun) await markSeen(String(session.id), Number(body.taskId)).catch(() => null);
     console.info(`[big-deals action] ${session.login} ${body.type} task=${body.taskId}${dryRun ? ' DRY' : ''}${r.viaWebhook ? ' VIA-WEBHOOK' : ''} calls=${r.calls.map(c => c.method).join(',')}`);
     return NextResponse.json({ ok: true, card: (await withNote(r.card ?? null)) ?? undefined, warnings: r.warnings.length ? r.warnings : undefined, ...(dryRun ? { calls: r.calls } : {}) });
   } catch (e) {

@@ -89,8 +89,23 @@ export interface BigTaskCard {
   calls: BigCallStats | null;
   related: BigRelatedTask[];
   url: string;
+  /** Активность задачи в Битриксе (ACTIVITY_DATE) и id её чата — для индикатора «новое» (engine/fresh.ts). */
+  activityAt?: string | null;
+  chatId?: number | null;
+  /** Что нового для СМОТРЯЩЕГО с его прошлого открытия карточки (владелец 25.11) — считается на запрос доски. */
+  fresh?: BigFresh | null;
   /** Комментарий РОПа к карточке (big_task_notes, Осипов 25.11) — виден в карточке и на доске. */
   note?: BigTaskNote | null;
+}
+
+export type BigFreshKind = 'chat' | 'related' | 'control' | 'stage';
+export interface BigFresh {
+  /** По важности: сообщение в чате задачи, ответ в связанной, задача ждёт контроля, сменилась стадия сделки. */
+  kinds: BigFreshKind[];
+  /** Последнее сообщение в чате (кто) — для подсказки. */
+  chatAuthor?: string | null;
+  /** С какого момента считали (прошлое открытие). */
+  since: string;
 }
 
 export interface BigTaskNote { text: string; author: string | null; at: string }
@@ -146,6 +161,8 @@ export interface BigFilters {
   noCalls?: boolean;
   /** Скрыть колонки «Не продано (проверка/проверено)» — кнопка «Ждёт контроля» (владелец 18.11: там тысячи старых отказов). Query nolost=1. */
   hideLost?: boolean;
+  /** Только карточки, где есть новое для смотрящего (кнопка «Новое»). Query fresh=1. */
+  fresh?: boolean;
   /** Только «Нераспределённые» — открытые задачи без менеджера (висят на постановщике-РОПе). Query unas=1. */
   unassigned?: boolean;
   /** Сделка: won | lost | open. */

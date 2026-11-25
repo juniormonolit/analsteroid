@@ -28,6 +28,7 @@ export function matchFilters(c: BigTaskCard, f: BigFilters, now = Date.now()): b
   if (f.columns?.length && !f.columns.includes(c.column)) return false;
   if (f.states?.length && !f.states.includes(c.state)) return false;
   if (f.hideLost && (c.column === 'lost_check' || c.column === 'lost_done')) return false;
+  if (f.fresh && !c.fresh?.kinds.length) return false;
   if (f.unassigned && (!c.unassigned || c.state === 'done' || c.column === 'sold' || c.column === 'lost_check' || c.column === 'lost_done')) return false;
   const amount = cardAmount(c);
   if (f.sumMin != null && amount < f.sumMin) return false;
@@ -117,6 +118,7 @@ export function normalizeFilters(raw: unknown): BigFilters {
   if (r.noCalls === true) f.noCalls = true;
   if (r.hideLost === true) f.hideLost = true;
   if (r.unassigned === true) f.unassigned = true;
+  if (r.fresh === true) f.fresh = true;
   if (r.deal === 'won' || r.deal === 'lost' || r.deal === 'open') f.deal = r.deal;
   return f;
 }
@@ -131,6 +133,6 @@ export function filtersFromQuery(sp: URLSearchParams): BigFilters {
     groups: list('group', ','), manager: sp.get('manager'), products: list('product', '|'), q: sp.get('q'),
     sumMin: sp.get('smin'), sumMax: sp.get('smax'), createdFrom: sp.get('cfrom'), createdTo: sp.get('cto'),
     states: list('states', ','), columns: list('cols', ','), daysMin: sp.get('dmin'), idleDaysMin: sp.get('idle'),
-    stuck: sp.get('stuck') === '1', noCalls: sp.get('nocalls') === '1', hideLost: sp.get('nolost') === '1', unassigned: sp.get('unas') === '1', deal: sp.get('deal'),
+    stuck: sp.get('stuck') === '1', noCalls: sp.get('nocalls') === '1', hideLost: sp.get('nolost') === '1', unassigned: sp.get('unas') === '1', fresh: sp.get('fresh') === '1', deal: sp.get('deal'),
   });
 }

@@ -14,6 +14,8 @@ import { resolveSince } from './stageSince';
 export const TASK_SELECT = [
   'ID', 'TITLE', 'STAGE_ID', 'STATUS', 'SUB_STATUS', 'RESPONSIBLE_ID', 'CREATED_BY', 'AUDITORS', 'CREATED_DATE', 'CHANGED_DATE',
   'CLOSED_DATE', 'DEADLINE', 'UF_CRM_TASK', 'DESCRIPTION', 'GROUP_ID', 'UF_AUTO_593587150308',
+  // Индикатор «новое» (25.11): активность задачи (её двигают и служебные «просрочена») и чат — перечитать последнее сообщение.
+  'ACTIVITY_DATE', 'CHAT_ID',
 ];
 const CLOSED_DAYS = 30;
 const FRESH_MS = 3 * 60_000;
@@ -25,6 +27,7 @@ export interface RawTask {
   auditors?: string[]; createdDate: string; changedDate?: string | null; closedDate?: string | null; deadline?: string | null;
   ufCrmTask?: string[] | null; description?: string | null; groupId: string; ufAuto593587150308?: string | null;
   creator?: { id: string; name: string }; responsible?: { id: string; name: string };
+  activityDate?: string | null; chatId?: string | number | null;
 }
 
 const iso = (s: string | null | undefined) => (s ? new Date(s).toISOString() : null);
@@ -139,6 +142,7 @@ export async function buildCards(raw: RawTask[]): Promise<BigTaskCard[]> {
       creator: personOf(t.createdBy) ?? { id: String(t.createdBy), name: `#${t.createdBy}` },
       auditors: (t.auditors ?? []).map(String),
       createdAt, changedAt: iso(t.changedDate), closedAt: iso(t.closedDate), deadlineAt: iso(t.deadline),
+      activityAt: iso(t.activityDate), chatId: Number(t.chatId) || null,
       inColumnSince, daysInColumn: 0, stuck: false,
       // Менеджер не назначен (РОП 19.11, «Нераспределённые»): задача висит на самом постановщике, а он из тех,
       // кто раздаёт задачи другим и не рядовой менеджер (РОП). В «Новых» («на РОПе, не разобраны») — любой

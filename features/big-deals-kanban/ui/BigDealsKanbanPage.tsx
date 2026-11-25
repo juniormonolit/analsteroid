@@ -149,6 +149,23 @@ export function BigDealsKanbanPage() {
   useEffect(() => { if (openCard) lastOpened.current = openCard; }, [openCard]);
   const onOpen = useCallback((c: BigTaskCard) => { lastOpened.current = c; setTaskParam(String(c.id)); }, [setTaskParam]);
 
+  // «Новое» (владелец 25.11): открыли карточку — отметить просмотренной (POST …/seen), точку снять сразу; прошлую
+  // отметку держим, пока окно открыто, — по ней в ленте разделитель «новое с прошлого раза».
+  const [seenPrev, setSeenPrev] = useState<{ id: number; at: string | null } | null>(null);
+  const markedFor = useRef<number | null>(null);
+  useEffect(() => {
+    if (!openCard) { markedFor.current = null; return; }
+    if (markedFor.current === openCard.id) return;
+    markedFor.current = openCard.id;
+    const card = openCard;
+    setSeenPrev({ id: card.id, at: card.fresh?.since ?? null });
+    if (card.fresh) qc.setQueryData<BigBoardResponse>(queryKey, d => (d ? placeCard(d, { ...card, fresh: null }) : d));
+    if (mock) return;
+    void fetch(`/api/big-deals-kanban/task/${card.id}/seen`, { method: 'POST' })
+      .then(r => r.json()).then((j: { prev?: string | null }) => { if (markedFor.current === card.id) setSeenPrev({ id: card.id, at: j.prev ?? card.fresh?.since ?? null }); })
+      .catch(() => {});
+  }, [openCard, mock, qc, queryKey]);
+
   const canManage = !!data?.canManage;
   const onlyControl = f.ctl;
   const controlCount = useMemo(() => {
@@ -163,6 +180,12 @@ export function BigDealsKanbanPage() {
     const ids = new Set<number>();
     for (const c of data.columns) for (const k of c.cards)
       if (k.unassigned && k.state !== 'done' && k.column !== 'sold' && k.column !== 'lost_check' && k.column !== 'lost_done') ids.add(k.id);
+    return ids.size;
+  }, [data]);
+  const freshCount = useMemo(() => {
+    if (!data) return null;
+    const ids = new Set<number>();
+    for (const c of data.columns) for (const k of c.cards) if (k.fresh?.kinds.length) ids.add(k.id);
     return ids.size;
   }, [data]);
   const dragEnabled = canManage && !isTouch;
@@ -278,6 +301,13 @@ export function BigDealsKanbanPage() {
             </button>
           )}
           {activeView !== 'analytics' && (
+            // «Новое» (владелец 25.11): только карточки, где что-то случилось с вашего прошлого открытия; ?fresh=1.
+            <button type="button" onClick={() => f.setFresh(!f.fresh)} aria-pressed={f.fresh}
+              className={f.fresh ? BTN_ACTIVE : BTN_IDLE} title={f.fresh ? 'Показать все задачи' : 'Только карточки, где есть новое с вашего прошлого открытия: сообщение, ответ логиста, контроль, стадия сделки'}>
+              <span aria-hidden className={`h-2 w-2 rounded-full ${f.fresh ? 'bg-white' : 'bg-[var(--color-accent)]'}`} /> Новое{freshCount != null && <span className="tabular-nums opacity-80">{freshCount}</span>}
+            </button>
+          )}
+          {activeView !== 'analytics' && (
             <button type="button" onClick={() => f.setUnas(!f.unas)} aria-pressed={f.unas}
               className={f.unas ? BTN_ACTIVE : BTN_IDLE} title={f.unas ? 'Показать все задачи' : 'Только задачи, где менеджер не назначен (висят на РОПе)'}>
               <UserX size={16} aria-hidden /> Нераспределённые{unassignedCount != null && <span className="tabular-nums opacity-80">{unassignedCount}</span>}
@@ -352,6 +382,7 @@ export function BigDealsKanbanPage() {
 
       {openCard && (
         <TaskDrawer card={openCard} canManage={canManage} managers={data?.managers ?? []} mock={mock}
+          lastSeenAt={seenPrev?.id === openCard.id ? seenPrev.at : null}
           onClose={() => setTaskParam('')}
           onChanged={card => {
             if (card) qc.setQueryData<BigBoardResponse>(queryKey, d => (d ? placeCard(d, card) : d));
