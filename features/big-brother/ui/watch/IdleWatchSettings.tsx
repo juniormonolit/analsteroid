@@ -16,7 +16,7 @@ import {
 const HOUR_OPTIONS = Array.from({ length: 25 }, (_, h) => ({ value: String(h), label: `${String(h).padStart(2, '0')}:00` }));
 const RECIPIENT_OPTIONS = IDLE_WATCH_RECIPIENTS.map((r) => ({ value: r, label: RECIPIENT_LABELS[r] }));
 
-const card = 'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3 sm:p-4';
+const card = 'rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 sm:p-4';
 const input = 'w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2 text-base sm:text-sm text-[var(--color-text)] min-h-11 sm:min-h-9';
 const btn = 'inline-flex min-h-11 sm:min-h-9 items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium disabled:opacity-50';
 const btnPrimary = `${btn} bg-[var(--color-accent)] text-white`;
