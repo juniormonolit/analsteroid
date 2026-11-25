@@ -47,8 +47,11 @@ export async function fetchProductGroups(): Promise<{ id: string; name: string }
   return Array.isArray(body?.groups) ? body.groups : [];
 }
 
+// _activity.path — страница, откуда поставлена задача (журнал «Большого брата»: origin задачи; роут вырезает поле до движка).
+const withOrigin = <T extends object>(req: T) => ({ ...req, _activity: { path: typeof window !== 'undefined' ? window.location.pathname : null } });
+
 export const createTasks = (req: TaskerCreateRequest) =>
-  call<TaskerCreateResponse>('/api/tasker/tasks', json(req));
+  call<TaskerCreateResponse>('/api/tasker/tasks', json(withOrigin(req)));
 
 /** Кому можно ставить задачи (GET /api/tasker/managers). Ошибка/404 (эндпоинт ещё не
  *  выкачен) → null: форма берёт список из пропсов (строки отчёта, менеджер карточки). */
@@ -87,4 +90,4 @@ export const fetchDealPreview = (dealIds: number[]) =>
   call<TaskerDealPreviewResponse>(`/api/tasker/deal-tasks?dealIds=${dealIds.join(',')}`);
 
 export const createDealTasks = (req: TaskerDealCreateRequest) =>
-  call<TaskerCreateResponse>('/api/tasker/deal-tasks', json(req));
+  call<TaskerCreateResponse>('/api/tasker/deal-tasks', json(withOrigin(req)));

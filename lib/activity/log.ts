@@ -52,6 +52,24 @@ export async function logActivityByUserId(userId: string, e: ActivityInput): Pro
   }
 }
 
+/** Уход со страницы: дописать active_ms / total_ms в последний mono_view этого человека по этому пути
+ *  (за 12 ч, ещё без длительности). Не нашлось (просмотр не записался) — ничего. Не бросает. */
+export async function recordViewLeave(s: Pick<SessionUser, 'id' | 'bitrixUserId'>, path: string, activeMs: number, totalMs: number): Promise<void> {
+  try {
+    await systemDb().query(
+      `UPDATE activity_events SET payload = payload || jsonb_build_object('active_ms', $3::int, 'total_ms', $4::bigint)
+        WHERE id = (SELECT id FROM activity_events
+                     WHERE ${s.bitrixUserId ? 'bitrix_user_id = $1' : 'user_id = $1::uuid'}
+                       AND ts > now() - interval '12 hours' AND kind = 'mono_view'
+                       AND payload->>'path' = $2 AND NOT (payload ? 'active_ms')
+                     ORDER BY ts DESC LIMIT 1)`,
+      [s.bitrixUserId || s.id, path, activeMs, totalMs],
+    );
+  } catch (err) {
+    warn('длительность просмотра', err);
+  }
+}
+
 /** Ключ человека в activity_minutes: Битрикс-id, а у пользователя без него — 'u:<users.id>'. */
 export const minuteKey = (s: Pick<SessionUser, 'id' | 'bitrixUserId'>) => s.bitrixUserId || `u:${s.id}`;
 

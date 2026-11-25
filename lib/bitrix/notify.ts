@@ -2,6 +2,7 @@
 // правами: BITRIX_WEBHOOK_URL (CRM, только чтение — см. scripts/bitrix_backfill.mjs)
 // и BITRIX_BOT_WEBHOOK_URL (создан отдельно под "Информировать сотрудников в чате",
 // права "Создание и управление Чат-ботами (imbot)").
+import type { BotMessageMeta } from '@/lib/activity/botLog';
 
 // Счётчик запросов к Битриксу (владелец 23.10: «дёргать как можно меньше» — сначала измерить).
 // Redis-хэш на час МСК: поле `<метод>` — HTTP-вызовов, `<метод>#cmd` — команд внутри batch,
@@ -201,9 +202,11 @@ export async function sendBitrixBotMessage(
   message: string,
   keyboard?: BotKeyboardButton[],
   channel: BotChannel = 'gamification',
+  meta?: BotMessageMeta,
 ): Promise<number> {
   if (!(await channelEnabled(channel))) {
     console.warn(`[bot] канал «${channel}» выключен: сообщение для ${bitrixUserId} не отправлено, ${message.length} симв.`);
+    void import('@/lib/activity/botLog').then(m => m.openBotMessage(channel, bitrixUserId, meta, false, 'disabled')).catch(() => null);
     return 0;
   }
   const webhook = process.env.BITRIX_BOT_WEBHOOK_URL || '';
@@ -212,14 +215,18 @@ export async function sendBitrixBotMessage(
   if (!webhook || !botId || !clientId) {
     throw new Error('BITRIX_BOT_WEBHOOK_URL/BITRIX_BOT_ID/BITRIX_BOT_CLIENT_ID не заданы — бот "Аналитик" ещё не зарегистрирован');
   }
-  const body = await bx(webhook, 'imbot.message.add', {
-    CLIENT_ID: clientId,
-    BOT_ID: botId,
-    DIALOG_ID: bitrixUserId,
-    MESSAGE: message,
-    ...(keyboard?.length ? { KEYBOARD: { BUTTONS: keyboard } } : {}),
+  // Журнал «Большого брата» (bot_message_log, миграция 297): ссылки Монолитики получают ?src=bot&m=<id>.
+  const { withBotLog } = await import('@/lib/activity/botLog');
+  return withBotLog(channel, bitrixUserId, message, false, meta, async text => {
+    const body = await bx(webhook, 'imbot.message.add', {
+      CLIENT_ID: clientId,
+      BOT_ID: botId,
+      DIALOG_ID: bitrixUserId,
+      MESSAGE: text,
+      ...(keyboard?.length ? { KEYBOARD: { BUTTONS: keyboard } } : {}),
+    });
+    return Number(body?.result) || 0;
   });
-  return Number(body?.result) || 0;
 }
 
 /** Сообщение с картинкой-вложением (дайджест «Как дела?», 15.09): Битрикс сам
@@ -235,10 +242,13 @@ export async function sendBitrixBotMessageWithImage(
     /** Пробная отправка явному адресату или ответ на его же клик — идёт и при выключенной функции (общий рубильник всё равно сильнее). */
     test?: boolean;
     keyboard?: BotKeyboardButton[];
+    /** Журнал «Большого брата»: что за сообщение (по умолчанию kind = channel). */
+    meta?: BotMessageMeta;
   } = {},
 ): Promise<number> {
   if (!(opts.test ? !(await isBotKilled()) : await channelEnabled(channel))) {
     console.warn(`[bot] канал «${channel}» выключен: сообщение для ${bitrixUserId} не отправлено, ${message.length} симв.`);
+    void import('@/lib/activity/botLog').then(m => m.openBotMessage(channel, bitrixUserId, opts.meta, !!imageUrl, 'disabled')).catch(() => null);
     return 0;
   }
   const webhook = process.env.BITRIX_BOT_WEBHOOK_URL || '';
@@ -247,15 +257,18 @@ export async function sendBitrixBotMessageWithImage(
   if (!webhook || !botId || !clientId) {
     throw new Error('BITRIX_BOT_WEBHOOK_URL/BITRIX_BOT_ID/BITRIX_BOT_CLIENT_ID не заданы — бот "Аналитик" ещё не зарегистрирован');
   }
-  const body = await bx(webhook, 'imbot.message.add', {
-    CLIENT_ID: clientId,
-    BOT_ID: botId,
-    DIALOG_ID: bitrixUserId,
-    MESSAGE: message,
-    ...(imageUrl ? { ATTACH: [{ IMAGE: { LINK: imageUrl } }] } : {}),
-    ...(opts.keyboard?.length ? { KEYBOARD: { BUTTONS: opts.keyboard } } : {}),
+  const { withBotLog } = await import('@/lib/activity/botLog');
+  return withBotLog(channel, bitrixUserId, message, !!imageUrl, opts.meta, async text => {
+    const body = await bx(webhook, 'imbot.message.add', {
+      CLIENT_ID: clientId,
+      BOT_ID: botId,
+      DIALOG_ID: bitrixUserId,
+      MESSAGE: text,
+      ...(imageUrl ? { ATTACH: [{ IMAGE: { LINK: imageUrl } }] } : {}),
+      ...(opts.keyboard?.length ? { KEYBOARD: { BUTTONS: opts.keyboard } } : {}),
+    });
+    return Number(body?.result) || 0;
   });
-  return Number(body?.result) || 0;
 }
 
 // Бот «Контроль звонков» (BOT_ID 15010) — отдельный, давно зарегистрированный бот

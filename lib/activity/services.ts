@@ -5,17 +5,33 @@
 import type { SessionUser } from '@/lib/auth/session';
 import { logActivity } from './log';
 import type { MonoAction } from './types';
+import { isReportSection, sectionOfPath } from './section';
 
 type S = SessionUser | null | undefined;
-type TaskLike = { id: number; bitrixTaskId?: number | null; dealId?: number | null };
+type TaskLike = { id: number; bitrixTaskId?: number | null; dealId?: number | null; manager?: { id: number } | null };
+
+/** Откуда поставлена задача: from = report_row | drilldown_deal | manager_card | tasker | <раздел>; report_section — отчёт. */
+export function taskOrigin(path: unknown, via: 'metric' | 'deal'): { from: string; report_section: string | null } {
+  const section = typeof path === 'string' && path.startsWith('/') ? sectionOfPath(path.slice(0, 300)) : null;
+  if (!section) return { from: 'unknown', report_section: null };
+  if (isReportSection(section)) return { from: via === 'deal' ? 'drilldown_deal' : 'report_row', report_section: section };
+  if (section === 'manager') return { from: 'manager_card', report_section: null };
+  if (section === 'tasker') return { from: 'tasker', report_section: null };
+  return { from: section, report_section: null };
+}
 
 // ── Задачник ─────────────────────────────────────────────────────────────────────────────
 
 /** POST /api/tasker/tasks и /api/tasker/deal-tasks: по событию на созданную задачу. */
-export async function logTaskerCreated(s: S, created: TaskLike[], via: 'metric' | 'deal'): Promise<void> {
+export async function logTaskerCreated(s: S, created: TaskLike[], via: 'metric' | 'deal', originPath?: unknown): Promise<void> {
+  const o = taskOrigin(originPath, via);
   await Promise.all(created.slice(0, 50).map(t => logActivity(s, {
     kind: 'mono_action', section: 'tasker', action: 'task_create', entityType: 'tasker_task', entityId: t.id,
-    dealId: t.dealId ?? null, payload: { op: via === 'deal' ? 'create_deal_task' : 'create', bitrix_task_id: t.bitrixTaskId ?? null },
+    dealId: t.dealId ?? null,
+    payload: {
+      op: via === 'deal' ? 'create_deal_task' : 'create', bitrix_task_id: t.bitrixTaskId ?? null,
+      origin: { ...o, target_manager_id: t.manager?.id != null ? String(t.manager.id) : null },
+    },
   })));
 }
 

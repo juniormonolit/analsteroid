@@ -5,6 +5,7 @@
 // Библиотека — `xlsx` (SheetJS), как features/reports/lib/exportExcel.ts; динамический
 // import — в основной бандл не попадает.
 import { downloadBlob } from '@/features/reports/lib/downloadBlob';
+import { trackExport } from '@/lib/activity/client';
 
 export interface ExportGrouping { id: number; name: string }
 export interface ExportGroup { id: number; groupingId: number; name: string }
@@ -79,4 +80,5 @@ export async function exportStructureToExcel(
     new Blob([out as unknown as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
     `Структура источников ${stamp}.xlsx`,
   );
+  trackExport('marketing_structure', 'xlsx', rows.length); // журнал «Большого брата»
 }

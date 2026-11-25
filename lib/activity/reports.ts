@@ -32,8 +32,12 @@ function refererSection(req: NextRequest): string | null {
 const len = (v: unknown) => (Array.isArray(v) ? v.length : 0);
 const s = (v: unknown, max = 40) => (typeof v === 'string' && v ? v.slice(0, max) : undefined);
 
-/** POST /api/reports/run и /api/reports/by-periods — после успешного расчёта. Не бросает. */
-export async function logReportRequest(session: SessionUser, req: NextRequest, body: Record<string, unknown> | null): Promise<void> {
+type LoadExtra = { durationMs?: number; rows?: number; error?: { status: number; message?: string } };
+
+const ids = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && /^[\w.:-]{1,80}$/.test(x)).slice(0, 100) : undefined);
+
+/** POST /api/reports/run и /api/reports/by-periods — после расчёта (успех: duration_ms, rows; сбой — report_error). Не бросает. */
+export async function logReportRequest(session: SessionUser, req: NextRequest, body: Record<string, unknown> | null, extra: LoadExtra = {}): Promise<void> {
   try {
     const section = refererSection(req);
     if (!section || !isReportSection(section) || !body) return;
@@ -57,22 +61,76 @@ export async function logReportRequest(session: SessionUser, req: NextRequest, b
       batch: batch ? Number(batch.size) || true : undefined,
       split_by_team: body.splitByTeam === true || undefined,
       drill: drill ?? undefined,
+      metric_ids: ids(body.metricIds),
     };
-    const action = drill ? 'report_drill' : 'report_load';
+    const action = extra.error ? 'report_error' : drill ? 'report_drill' : 'report_load';
     const hash = createHash('sha1').update(JSON.stringify({ ...payload, drillKey: drill ? [body.managerId, body.productGroupId, body.sourceFilter, body.teamId] : null })).digest('hex');
     if (seenRecently(`${session.id}|${section}|${action}|${hash}`)) return;
-    await logActivity(session, { kind: 'mono_action', section, action, entityType: 'report', entityId: section, payload });
+    await logActivity(session, {
+      kind: 'mono_action', section, action, entityType: 'report', entityId: section,
+      payload: {
+        ...payload,
+        ...(extra.durationMs != null ? { duration_ms: Math.round(extra.durationMs) } : {}),
+        ...(extra.rows != null ? { rows: extra.rows } : {}),
+        ...(extra.error ? { error_status: extra.error.status, error: extra.error.message?.slice(0, 200) } : {}),
+      },
+    });
   } catch (err) {
     console.warn('[activity] report_load не записалось:', err instanceof Error ? err.message : err);
   }
 }
 
-/** POST /api/activity/event { action: 'report_export', path, format, surface } — экспорт делается в браузере. */
-export async function logReportExport(session: SessionUser, b: { path?: unknown; format?: unknown; surface?: unknown }): Promise<void> {
+/** Обёртка роута расчёта отчёта: сбой (исключение или ответ ≥ 500) → отдельная запись report_error с длительностью.
+ *  Успех пишет сам роут (logReportRequest с duration_ms/rows) — там известны строки. */
+export async function withReportErrorLog(req: NextRequest, handle: (req: NextRequest) => Promise<Response>): Promise<Response> {
+  const t0 = Date.now();
+  const copy = req.clone();
+  const fail = async (status: number, message?: string) => {
+    try {
+      const { getSession } = await import('@/lib/auth/session');
+      const session = await getSession();
+      if (!session) return;
+      const body = await copy.json().catch(() => null) as Record<string, unknown> | null;
+      await logReportRequest(session, req, body, { durationMs: Date.now() - t0, error: { status, message } });
+    } catch { /* журнал не мешает ответу */ }
+  };
+  try {
+    const res = await handle(req);
+    if (res.status >= 500) void fail(res.status);
+    return res;
+  } catch (e) {
+    void fail(500, e instanceof Error ? e.name : 'Error'); // только класс ошибки: в тексте бывают значения фильтров
+    throw e;
+  }
+}
+
+const FORMATS = ['copy', 'xlsx', 'pdf', 'png', 'csv'];
+const rowsOf = (v: unknown) => { const n = Number(v); return Number.isInteger(n) && n >= 0 && n < 10_000_000 ? n : undefined; };
+
+/** POST /api/activity/event { action: 'report_export', path, format, rows?, surface } — экспорт отчёта делается в браузере. */
+export async function logReportExport(session: SessionUser, b: { path?: unknown; format?: unknown; rows?: unknown; surface?: unknown }): Promise<void> {
   const section = typeof b.path === 'string' ? sectionOfPath(b.path.slice(0, 300)) : null;
   if (!section || !isReportSection(section)) return;
-  const format = ['copy', 'xlsx', 'pdf', 'png'].includes(String(b.format)) ? String(b.format) : 'other';
+  const format = FORMATS.includes(String(b.format)) ? String(b.format) : 'other';
   if (seenRecently(`${session.id}|${section}|report_export|${format}`)) return;
   const surface = ACTIVITY_SURFACES.includes(b.surface as ActivitySurface) ? b.surface as ActivitySurface : 'web';
-  await logActivity(session, { kind: 'mono_action', section, action: 'report_export', surface, entityType: 'report', entityId: section, payload: { format } });
+  const rows = rowsOf(b.rows);
+  await logActivity(session, {
+    kind: 'mono_action', section, action: 'report_export', surface, entityType: 'report', entityId: section,
+    payload: { format, ...(rows != null ? { rows } : {}) },
+  });
+}
+
+/** POST /api/activity/event { action: 'export', what, format, rows?, path } — выгрузки вне отчётов (планы, маркетинг, ссылки). */
+export async function logExport(session: SessionUser, b: { path?: unknown; what?: unknown; format?: unknown; rows?: unknown; surface?: unknown }): Promise<void> {
+  const section = typeof b.path === 'string' ? sectionOfPath(b.path.slice(0, 300)) : 'unknown';
+  const what = typeof b.what === 'string' && /^[a-z0-9_]{1,40}$/.test(b.what) ? b.what : 'other';
+  const format = FORMATS.includes(String(b.format)) ? String(b.format) : 'other';
+  if (seenRecently(`${session.id}|${section}|export|${what}|${format}`)) return;
+  const surface = ACTIVITY_SURFACES.includes(b.surface as ActivitySurface) ? b.surface as ActivitySurface : 'web';
+  const rows = rowsOf(b.rows);
+  await logActivity(session, {
+    kind: 'mono_action', section, action: 'export', surface, entityType: what,
+    payload: { what, format, ...(rows != null ? { rows } : {}) },
+  });
 }

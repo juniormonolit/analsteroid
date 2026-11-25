@@ -9,6 +9,7 @@ import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 import { useChangelogQuery } from './useChangelogQuery';
 import type { ChangelogEntry, ChangelogListResponse } from '@/lib/changelog/types';
+import { trackChangelogOpen } from '@/lib/activity/client';
 
 function dateLabel(d: Date): string {
   if (isToday(d)) return 'Сегодня';
@@ -45,6 +46,7 @@ export function ChangelogPanel({ onClose, onOpenIdeas }: Props) {
   useEffect(() => {
     if (markedRef.current) return;
     markedRef.current = true;
+    trackChangelogOpen(data?.unreadCount ?? null); // журнал «Большого брата»
     markAllRead();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

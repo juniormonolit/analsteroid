@@ -40,6 +40,7 @@ import { SLIDE_BACKDROP_BG } from '@/components/ui/SlideBackdrop';
 import { PeriodRangeControls, DepartmentPicker, GroupingSelector } from './FilterBar';
 import { FiltersMenu } from './FiltersMenu';
 import { ProductDetailView } from './ProductDetailView';
+import { trackExport } from '@/lib/activity/client';
 
 export interface Deal {
   deal_id: number;
@@ -299,7 +300,7 @@ function DealNameCell({ deal, chat, onTask }: {
       <button
         onClick={e => {
           e.stopPropagation();
-          navigator.clipboard.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
+          navigator.clipboard.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); trackExport('deal_link', 'copy', 1); });
         }}
         className="row-reveal-item tap-target shrink-0 p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
         title="Копировать ссылку на сделку в Битриксе"

@@ -5,6 +5,7 @@ import { X, ChevronDown, ChevronRight, Download } from 'lucide-react';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
+import { trackExport } from '@/lib/activity/client';
 
 interface DeptNode {
   id: string;
@@ -132,6 +133,7 @@ export function ExportSlide({ onClose }: Props) {
       a.href = url;
       a.download = 'plans_template.xlsx';
       a.click();
+      trackExport('plans_template', 'xlsx'); // журнал «Большого брата»
       URL.revokeObjectURL(url);
     } finally {
       setLoading(false);

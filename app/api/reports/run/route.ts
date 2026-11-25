@@ -47,7 +47,7 @@ import { formatInTimeZone } from 'date-fns-tz';
 import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { validateDealFilters } from '@/lib/metrics/dealFilters';
 import { getSessionScope, scopeDeptIdsBitrix, canSeeManager } from '@/lib/org/sessionScope';
-import { logReportRequest } from '@/lib/activity/reports';
+import { logReportRequest, withReportErrorLog } from '@/lib/activity/reports';
 
 /**
  * Валидация period/comparisonPeriod (баг найден 10.07 при работе над задачей "план
@@ -64,7 +64,13 @@ function isValidPeriodInput(p: unknown): p is { from: string; to: string } {
   return !Number.isNaN(new Date(from).getTime()) && !Number.isNaN(new Date(to).getTime());
 }
 
+// Журнал «Большого брата»: сбой расчёта → report_error (lib/activity/reports.ts); успех пишется в конце handle.
 export async function POST(req: NextRequest) {
+  return withReportErrorLog(req, handle);
+}
+
+async function handle(req: NextRequest) {
+  const t0 = Date.now();
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -1132,7 +1138,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  void logReportRequest(session, req, body);
+  void logReportRequest(session, req, body, { durationMs: Date.now() - t0, rows: mergedRows.length });
   return NextResponse.json({
     rows: mergedRows,
     grouped,

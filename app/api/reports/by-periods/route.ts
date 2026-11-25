@@ -27,7 +27,7 @@ import {
 import { periodDateStrFromInstant, type CalendarUnit } from '@/lib/period';
 import { validateDealFilters } from '@/lib/metrics/dealFilters';
 import type { DealScope, ClientType, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
-import { logReportRequest } from '@/lib/activity/reports';
+import { logReportRequest, withReportErrorLog } from '@/lib/activity/reports';
 
 // ── Отчёт «По периодам» (задача владельца 09.08) ─────────────────────────────
 //
@@ -82,7 +82,13 @@ function comparisonWindow(
   };
 }
 
+// Журнал «Большого брата»: сбой расчёта → report_error (lib/activity/reports.ts); успех пишется в конце handle.
 export async function POST(req: NextRequest) {
+  return withReportErrorLog(req, handle);
+}
+
+async function handle(req: NextRequest) {
+  const t0 = Date.now();
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -387,7 +393,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  void logReportRequest(session, req, body);
+  void logReportRequest(session, req, body, { durationMs: Date.now() - t0, rows: rows.length });
   return NextResponse.json({
     rows,
     grouped: null, // группировок по отделам/филиалам у периодов нет

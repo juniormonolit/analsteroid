@@ -58,9 +58,10 @@ export async function POST(req: NextRequest) {
   const denied = permError(auth.session, 'action.tasker.assign');
   if (denied) return denied;
   try {
-    const body = await req.json().catch(() => null);
-    const out = await createTasks(auth.session, auth.scope, body);
-    void logTaskerCreated(auth.session, out.created, 'metric');
+    const raw = await req.json().catch(() => null);
+    const { _activity, ...body } = (raw && typeof raw === 'object' ? raw : {}) as { _activity?: { path?: unknown } } & Record<string, unknown>;
+    const out = await createTasks(auth.session, auth.scope, raw && typeof raw === 'object' ? body : raw);
+    void logTaskerCreated(auth.session, out.created, 'metric', _activity?.path);
     return NextResponse.json(out);
   } catch (e) {
     return errorResponse(e);
