@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Popover } from '@/components/ui/Popover';
+import { DealTaskButton } from '@/features/tasker/ui/create/DealTaskButton';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { AUTO_COMPLETE_COLUMNS, BIG_COLUMNS, type BigColumnKey } from '../engine/config';
 import type { BigPerson, BigTaskCard } from '../engine/types';
@@ -96,6 +97,8 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
             if (AUTO_COMPLETE_COLUMNS.has(column) && !closed) setPending({ type: 'move', column });
             else void run({ type: 'move', column });
           }} />
+        {/* Задача в Задачник по сделке (владелец 26.11) — нет права action.tasker.assign → кнопки нет. */}
+        <DealTaskButton dealId={card.deal?.id} className={btn} />
         {!closed && (
           <Popover open={more} onOpenChange={setMore} align="end" className="w-64 max-w-[calc(100vw-16px)] p-1"
             trigger={<button type="button" className={`${btn} px-2.5`} aria-label="Ещё действия" title="Ещё действия"><MoreHorizontal size={16} /></button>}>

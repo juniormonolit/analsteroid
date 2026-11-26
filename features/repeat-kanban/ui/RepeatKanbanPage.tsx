@@ -17,6 +17,7 @@ import { endOfDay, format, parseISO, startOfMonth } from 'date-fns';
 import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
+import { DealTaskButton } from '@/features/tasker/ui/create/DealTaskButton';
 import type { ClientCardTab } from '@/features/client-module/ui/ClientModuleWidget';
 
 const CARD_TABS = ['overview', 'deals', 'purchases', 'objects', 'calls', 'questionnaire', 'ai'] as const;
@@ -717,6 +718,9 @@ function KanbanSideActions({ c, h }: { c: KanbanCard; h: CardHandlers }) {
     <div className="flex max-h-[calc(100dvh-24px)] flex-col gap-1.5 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-2 shadow-2xl">
       <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-accent)]">Канбан повторных · {def?.title ?? c.column}</div>
       <CardFor c={c} h={h} />
+      {/* Задача в Задачник по открытой повторной сделке (владелец 26.11: «и из канбана повторки тоже»). */}
+      {h.canManage && <DealTaskButton dealId={c.deal?.dealId} label="Задача в Задачник"
+        className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-[12.5px] hover:bg-[var(--color-bg-hover)] sm:min-h-9" />}
     </div>
   );
 }
