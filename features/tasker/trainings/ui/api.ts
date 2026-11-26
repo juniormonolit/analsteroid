@@ -1,4 +1,5 @@
 import type {
+  TrainingClosure, TrainingClosureInput, TrainingClosuresResponse,
   TrainingAssembleRequest, TrainingAssembleResponse, TrainingEventInput, TrainingEventResponse, TrainingSlotsResponse,
   TrainingSlotsSaveRequest, TrainingSuggestRequest, TrainingSuggestResponse,
 } from '../types';
@@ -48,3 +49,14 @@ export const suggestSlots = (req: TrainingSuggestRequest) =>
 
 export const assembleTraining = (req: TrainingAssembleRequest) =>
   call<TrainingAssembleResponse>('/api/tasker/trainings/queue/assemble', { method: 'POST', body: JSON.stringify(req) });
+
+export const CLOSURES_KEY = ['tasker-training-closures'] as const;
+
+export const fetchClosures = (from: string, to: string) =>
+  call<TrainingClosuresResponse>(`/api/tasker/trainings/closures?from=${from}&to=${to}`);
+
+export const createClosure = (input: TrainingClosureInput) =>
+  call<{ closure: TrainingClosure }>('/api/tasker/trainings/closures', { method: 'POST', body: JSON.stringify(input) });
+
+export const deleteClosure = (id: number) =>
+  call<{ ok: true }>(`/api/tasker/trainings/closures/${id}`, { method: 'DELETE' });

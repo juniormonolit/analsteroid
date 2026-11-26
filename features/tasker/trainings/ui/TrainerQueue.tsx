@@ -36,11 +36,11 @@ export function TrainerQueue({ onOpenEvent }: { onOpenEvent: (id: number) => voi
       {!data.available ? (
         <Empty text="Тип задачи «Теория / Практика» ещё не развёрнут в Задачнике — очередь появится, когда РОПы начнут ставить задачи на тренера." />
       ) : data.groups.length === 0 ? (
-        <Empty title="Очередь пуста" text={`Люди попадают сюда, когда РОП ставит менеджеру задачу с типом «Теория» — она уходит на тренера (${data.trainer.name}). Набралось ${data.group.min}+ человек по теме — система предложит свободный слот.`} />
+        <Empty title="Очередь пуста" text={`Люди попадают сюда, когда РОП ставит менеджеру задачу с типом «Теория» без времени — она уходит на тренера (${data.trainer.name}). Набралось ${data.group.min}+ человек по теме — система предложит свободный слот.`} />
       ) : (
         <>
         <p className="text-[13px] text-[var(--color-text-secondary)]">
-          Отметьте {data.group.min}–{data.group.max} человек по теме и нажмите «Собрать занятие» — менеджеры запишутся, в календаре появится встреча.
+          Отметьте {data.group.min}–{data.group.max} человек по теме (по материалам — до {data.group.maxProduct}) и нажмите «Собрать занятие» — менеджеры запишутся, в календаре появится встреча. Задачи, где РОП выбрал время, сразу становятся занятием — в очередь не попадают.
         </p>
         {data.groups.map(g => (
           <QueueGroup key={g.metricId} g={g} metric={metrics.get(g.metricId)} settings={data.group} canManage={data.canManage}
@@ -81,7 +81,8 @@ function QueueGroup({ g, metric, settings, canManage, onAssemble, onOpenEvent }:
   const planned = g.items.filter(i => i.event);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   // Ничего не отмечено — предложение считается для первых по давности (до target).
-  const basis = picked.size ? waiting.filter(i => picked.has(i.taskId)) : waiting.slice(0, settings.target);
+  const take = g.max > settings.max ? g.max : settings.target; // по материалам — всех ждущих до максимума
+  const basis = picked.size ? waiting.filter(i => picked.has(i.taskId)) : waiting.slice(0, take);
   const wantSuggest = canManage && waiting.length >= settings.min;
   const sq = useQuery({
     queryKey: [...QUEUE_KEY, 'suggest', g.metricId, basis.map(i => i.taskId).join(',')],
@@ -92,7 +93,7 @@ function QueueGroup({ g, metric, settings, canManage, onAssemble, onOpenEvent }:
   const suggestion = sq.data?.suggestions[0] ?? null;
   const toggle = (id: number) => setPicked(p => {
     const n = new Set(p);
-    if (n.has(id)) n.delete(id); else if (n.size < settings.max) n.add(id);
+    if (n.has(id)) n.delete(id); else if (n.size < g.max) n.add(id);
     return n;
   });
   const fmt = metric?.format ?? 'percent';
@@ -127,7 +128,7 @@ function QueueGroup({ g, metric, settings, canManage, onAssemble, onOpenEvent }:
           <li key={i.taskId} className="flex min-w-0 items-start gap-2 border-t border-[var(--color-border)] py-2 first:border-t-0">
             {canManage && (
               <input type="checkbox" checked={picked.has(i.taskId)} onChange={() => toggle(i.taskId)}
-                disabled={!picked.has(i.taskId) && picked.size >= settings.max}
+                disabled={!picked.has(i.taskId) && picked.size >= g.max}
                 aria-label={`Взять ${i.manager.name}`} className="tap-target mt-1 size-4 shrink-0 accent-[var(--color-accent)]" />
             )}
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -168,11 +169,11 @@ function QueueGroup({ g, metric, settings, canManage, onAssemble, onOpenEvent }:
 
       {canManage && waiting.length > 0 && (
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {picked.size > 0 && <span className="text-[12.5px] text-[var(--color-text-muted)]">отмечено {picked.size} из {settings.max}</span>}
+          {picked.size > 0 && <span className="text-[12.5px] text-[var(--color-text-muted)]">отмечено {picked.size} из {g.max}</span>}
           <button type="button"
-            onClick={() => onAssemble(picked.size ? waiting.filter(i => picked.has(i.taskId)) : waiting.slice(0, settings.target), suggestion)}
+            onClick={() => onAssemble(picked.size ? waiting.filter(i => picked.has(i.taskId)) : waiting.slice(0, take), suggestion)}
             className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-medium text-white">
-            Собрать занятие{picked.size ? '' : ` (первые ${Math.min(waiting.length, settings.target)})`}
+            Собрать занятие{picked.size ? '' : ` (первые ${Math.min(waiting.length, take)})`}
           </button>
         </div>
       )}
@@ -241,7 +242,7 @@ function AssembleForm({ group, items, suggestion, settings, onDone, onCancel }: 
   return (
     <form onSubmit={e => { e.preventDefault(); if (!title.trim()) return setErr('Укажите тему'); mut.mutate(); }} className="flex min-w-0 flex-col gap-3 text-sm">
       <div className="flex min-w-0 flex-col gap-1">
-        <span className="text-[13px] text-[var(--color-text-secondary)]">Группа ({items.length} из максимум {settings.max})</span>
+        <span className="text-[13px] text-[var(--color-text-secondary)]">Группа ({items.length} из максимум {group.max})</span>
         <ul className="flex min-w-0 flex-wrap gap-1.5">
           {items.map(i => <li key={i.taskId} className="max-w-full truncate rounded-full bg-[var(--color-bg-hover)] px-2.5 py-1 text-[12.5px]">{i.manager.name}</li>)}
         </ul>

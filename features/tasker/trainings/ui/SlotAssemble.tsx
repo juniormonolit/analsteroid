@@ -30,15 +30,21 @@ export function SlotAssemble({ pick, onDone, onManual, onCancel }: {
   const q = useQuery({ queryKey: QUEUE_KEY, queryFn: () => getJson<TrainingQueueResponse>('/api/tasker/trainings/queue') });
   const groups = useMemo(
     () => (q.data?.groups ?? [])
-      .map(g => ({ ...g, waitingItems: g.items.filter(i => !i.event).sort((a, b) => a.createdAt.localeCompare(b.createdAt)) }))
+      .map(g => ({ ...g, waitingItems: g.items.filter(i => !i.event && !i.ownSlot).sort((a, b) => a.createdAt.localeCompare(b.createdAt)) }))
       .filter(g => g.waitingItems.length > 0)
       // Группа с заранее отмеченными людьми (выбрана тема над сеткой) — первой.
       .sort((a, b) => Number(b.waitingItems.some(i => pick.preselect?.includes(i.taskId))) - Number(a.waitingItems.some(i => pick.preselect?.includes(i.taskId)))),
     [q.data, pick.preselect],
   );
-  const max = q.data?.group.max ?? 5;
   const min = q.data?.group.min ?? 3;
+  // Максимум зависит от тем отмеченных: все — обучения по материалам (товарные группы) → group.maxProduct, иначе group.max.
+  const maxOfTask = useMemo(() => new Map(groups.flatMap(g => g.waitingItems.map(i => [i.taskId, g.max] as const))), [groups]);
+  const limitFor = (ids: Set<number>) => (ids.size
+    ? Math.min(...[...ids].map(id => maxOfTask.get(id) ?? q.data?.group.max ?? 5))
+    : Math.max(q.data?.group.max ?? 5, ...groups.map(g => g.max)));
   const [picked, setPicked] = useState<Set<number>>(() => new Set(pick.preselect ?? []));
+  const max = limitFor(picked);
+  const canAdd = (id: number) => { const n = new Set(picked).add(id); return n.size <= limitFor(n); };
   const [title, setTitle] = useState('');
   const [failed, setFailed] = useState<{ taskId: number; reason: string }[]>([]);
 
@@ -53,7 +59,8 @@ export function SlotAssemble({ pick, onDone, onManual, onCancel }: {
 
   const toggle = (id: number) => setPicked(p => {
     const n = new Set(p);
-    if (n.has(id)) n.delete(id); else if (n.size < max) n.add(id);
+    if (n.has(id)) n.delete(id);
+    else { const next = new Set(n).add(id); if (next.size <= limitFor(next)) n.add(id); }
     return n;
   });
 
@@ -132,7 +139,7 @@ export function SlotAssemble({ pick, onDone, onManual, onCancel }: {
               </div>
               {g.waitingItems.map(i => {
                 const on = picked.has(i.taskId);
-                const disabled = !on && picked.size >= max;
+                const disabled = !on && !canAdd(i.taskId);
                 return (
                   <label key={i.taskId} className={`flex min-h-11 min-w-0 cursor-pointer items-center gap-2.5 border-t border-[var(--color-border)] px-3 py-2 ${disabled ? 'opacity-50' : 'hover:bg-[var(--color-bg-hover)]'}`}>
                     <input type="checkbox" checked={on} disabled={disabled} onChange={() => toggle(i.taskId)} className="size-4 shrink-0 accent-[var(--color-accent)]" />

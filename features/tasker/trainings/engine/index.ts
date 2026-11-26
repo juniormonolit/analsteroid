@@ -19,6 +19,7 @@ import { loadMetricDefs, publicMetric } from '../../engine/config';
 import { ensureTopicIds } from '../../engine/topics';
 import type { Snapshot, TaskerMetric } from '../../types';
 import { retryStaleCalendarSyncs, syncTrainingCalendar } from './calendar';
+import { closureMessage, findClosure } from './closures';
 import { DEFAULT_MEASURE_DAYS, personMetricIds, personOutcome, summarize, trainingWindows } from './effect';
 import { loadResults, resultKey, writeLog } from './results';
 import { syncTaskEnrollmentsThrottled } from './taskLink';
@@ -465,8 +466,12 @@ export async function enroll(
   try {
     await client.query('BEGIN');
     // Блокируем событие: две одновременные записи не перескочат лимит мест.
-    const ev = await client.query<{ capacity: number | null; cancelled_at: Date | null; ended: boolean; metric_ids: string[] }>(
-      `SELECT capacity, cancelled_at, (start_at + make_interval(mins => duration_min) <= now()) AS ended, metric_ids
+    const ev = await client.query<{
+      capacity: number | null; cancelled_at: Date | null; ended: boolean; metric_ids: string[];
+      start_at: Date; duration_min: number; trainer_bitrix_user_id: string | null;
+    }>(
+      `SELECT capacity, cancelled_at, (start_at + make_interval(mins => duration_min) <= now()) AS ended, metric_ids,
+              start_at, duration_min, trainer_bitrix_user_id
          FROM tasker_training_events WHERE id = $1 FOR UPDATE`, [eventId],
     );
     const e = ev.rows[0];
@@ -490,6 +495,12 @@ export async function enroll(
         logged = { action: 'goal', details: { goalMetricIds: goalIds, goalNote: note, taskId } };
       }
     } else {
+      // Тренер закрыл запись на это время (299) — новых не записываем (уже записанных не трогаем).
+      if (e.trainer_bitrix_user_id) {
+        const st = e.start_at.getTime();
+        const closed = await findClosure(e.trainer_bitrix_user_id, st, st + e.duration_min * 60_000);
+        if (closed) throw new TrainingError(closureMessage(closed), 409);
+      }
       if (e.capacity != null) {
         const c = await client.query<{ n: string }>('SELECT count(*) AS n FROM tasker_training_enrollments WHERE event_id = $1', [eventId]);
         if (Number(c.rows[0].n) >= e.capacity) throw new TrainingError('Мест больше нет', 409);

@@ -16,13 +16,15 @@ interface Row {
   metric_id: string; snapshot: Snapshot | null; title: string;
 }
 
-export async function syncTaskEnrollments(limit = 50): Promise<number> {
+/** taskIds — только эти задачи (сразу после создания «Теории» со своим временем, create.ts). */
+export async function syncTaskEnrollments(limit = 50, taskIds?: number[]): Promise<number> {
   const db = systemDb();
   const r = await db.query<Row>(
     `SELECT t.id AS task_id, t.training_event_id AS event_id, t.manager_bitrix_id AS manager, t.creator_user_id,
             t.metric_id, t.snapshot, t.title
        FROM tasker_tasks t
       WHERE t.training_event_id IS NOT NULL AND t.cancelled_at IS NULL
+        AND ($2::bigint[] IS NULL OR t.id = ANY($2::bigint[]))
         AND NOT EXISTS (SELECT 1 FROM tasker_training_enrollments x
                          WHERE x.event_id = t.training_event_id AND x.manager_bitrix_user_id = t.manager_bitrix_id
                            AND x.tasker_task_id IS NOT NULL)
@@ -32,7 +34,7 @@ export async function syncTaskEnrollments(limit = 50): Promise<number> {
                             OR (l.event_id = t.training_event_id AND l.manager_bitrix_user_id = t.manager_bitrix_id
                                 AND l.action = 'unenroll' AND l.created_at > t.created_at))
       ORDER BY t.id LIMIT $1`,
-    [limit],
+    [limit, taskIds?.length ? taskIds : null],
   );
   let done = 0;
   const touched = new Set<number>();

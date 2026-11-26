@@ -273,6 +273,8 @@ export interface TrainingGroupSettings {
   target: number;
   /** Больше нельзя. */
   max: number;
+  /** Максимум для обучений по материалам (темы kind='product_group': кровля, фасад…) — по умолчанию 15. */
+  maxProduct: number;
   /** На сколько дней вперёд искать свободный слот. */
   horizonDays: number;
 }
@@ -337,6 +339,8 @@ export interface TrainingQueueGroup {
   items: TrainingQueueItem[];
   /** Сколько ждут (без уже назначенных). */
   waiting: number;
+  /** Максимум группы по этой теме: group.max или group.maxProduct (тема — товарная группа). */
+  max: number;
 }
 
 /** GET /api/tasker/trainings/queue */
@@ -379,4 +383,33 @@ export interface TrainingAssembleResponse {
   event: TrainingEvent;
   /** Задачи, которые не удалось записать (с причиной). */
   failed: { taskId: number; reason: string }[];
+}
+
+/** Закрытое время тренера (миграция 299): записывать нельзя. */
+export interface TrainingClosure {
+  id: number;
+  trainerId: number;
+  /** ISO */
+  startsAt: string;
+  /** ISO (не включительно) */
+  endsAt: string;
+  /** Целые дни (МСК). */
+  allDay: boolean;
+  reason: string | null;
+}
+/** POST /api/tasker/trainings/closures */
+export interface TrainingClosureInput {
+  /** YYYY-MM-DD */
+  date: string;
+  /** Последний день (включительно) — только для целых дней; нет — один день. */
+  dateTo?: string | null;
+  /** ЧЧ:ММ МСК; оба пусто — весь день. */
+  timeFrom?: string | null;
+  timeTo?: string | null;
+  reason?: string | null;
+}
+/** GET /api/tasker/trainings/closures?from&to */
+export interface TrainingClosuresResponse {
+  closures: TrainingClosure[];
+  canManage: boolean;
 }

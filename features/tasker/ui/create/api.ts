@@ -65,9 +65,13 @@ export async function fetchAssignableManagers(): Promise<TaskerManagerOption[] |
 /** Ближайшие обучения (сессия D). Форма ответа ещё не зафиксирована в types.ts —
  *  читаем терпимо: { events | trainings | items } с id/title/startsAt. Нет эндпоинта → null
  *  (поле «Записать на обучение» скрыто). */
-export interface TrainingOption { id: number; title: string; startsAt: string; place?: string | null }
+export interface TrainingOption {
+  id: number; title: string; startsAt: string; place?: string | null;
+  /** Для «Теории» со своим временем: занятие на это же время и тему — менеджер попадёт в группу. */
+  durationMin: number; metricIds: string[]; capacity: number | null; enrolledCount: number;
+}
 export async function fetchUpcomingTrainings(): Promise<TrainingOption[] | null> {
-  const res = await fetch(`/api/tasker/trainings?from=${encodeURIComponent(new Date().toISOString())}`);
+  const res = await fetch('/api/tasker/trainings?upcoming=1');
   if (!res.ok) return null;
   const body = await res.json().catch(() => null);
   const list: unknown = Array.isArray(body) ? body : body?.events ?? body?.trainings ?? body?.items;
@@ -79,6 +83,10 @@ export async function fetchUpcomingTrainings(): Promise<TrainingOption[] | null>
       title: String(e.title ?? e.topic ?? 'Обучение'),
       startsAt: String(e.startsAt ?? e.starts_at ?? ''),
       place: (e.place as string | null | undefined) ?? null,
+      durationMin: Number(e.durationMin ?? 45),
+      metricIds: Array.isArray(e.metricIds) ? (e.metricIds as unknown[]).map(String) : [],
+      capacity: e.capacity == null ? null : Number(e.capacity),
+      enrolledCount: Number(e.enrolledCount ?? 0),
     }))
     .filter(e => Number.isFinite(e.id) && e.startsAt && new Date(e.startsAt).getTime() >= now && !(e as { cancelled?: boolean }).cancelled)
     .sort((a, b) => a.startsAt.localeCompare(b.startsAt))

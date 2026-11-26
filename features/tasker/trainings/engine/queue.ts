@@ -14,7 +14,8 @@ import type {
   TrainingAssembleResponse, TrainingQueueGroup, TrainingQueueItem, TrainingQueueResponse, TrainingSlot, TrainingSuggestion,
 } from '../types';
 import { createEvent, enroll, getEvent, publicMetrics, TrainingError, type TrainingActor } from './index';
-import { defaultTrainerId, groupSettings, loadSlots } from './slots';
+import { closureMessage, closuresBetween, findClosure } from './closures';
+import { defaultTrainerId, groupMaxFor, groupSettings, loadSlots } from './slots';
 import { theoryTaskWhere } from './theory';
 
 const seesAll = (a: TrainingActor) => a.canManage || a.scope.kind === 'all';
@@ -61,11 +62,14 @@ export async function queue(actor: TrainingActor): Promise<TrainingQueueResponse
   const [items, group, metrics, trainerId] = await Promise.all([loadQueue(actor), groupSettings(), publicMetrics(), defaultTrainerId()]);
   const trainerName = (await resolveEmployeeNames([Number(trainerId)])).get(Number(trainerId)) ?? `Сотрудник #${trainerId}`;
   const label = new Map(metrics.map(m => [m.id, m.label]));
+  const kindOf = new Map(metrics.map(m => [m.id, m.kind]));
+  // Обучения по материалам (тема — товарная группа) — большие группы (group.maxProduct), остальные — group.max.
+  const maxOf = (id: string) => (kindOf.get(id) === 'product_group' || /^pg_/.test(id) ? group.maxProduct : group.max);
   const order = new Map(metrics.map((m, i) => [m.id, i]));
   const by = new Map<string, TrainingQueueGroup>();
   for (const it of items ?? []) {
     let g = by.get(it.metricId);
-    if (!g) { g = { metricId: it.metricId, label: label.get(it.metricId) ?? it.metricId, items: [], waiting: 0 }; by.set(it.metricId, g); }
+    if (!g) { g = { metricId: it.metricId, label: label.get(it.metricId) ?? it.metricId, items: [], waiting: 0, max: maxOf(it.metricId) }; by.set(it.metricId, g); }
     g.items.push(it);
     if (!it.event && !it.ownSlot) g.waiting++; // своё время у РОПа — не ждёт группу
   }
@@ -95,7 +99,10 @@ export async function suggest(actor: TrainingActor, metricId: string, rawTaskIds
   // Время, выбранное РОПом (один на один), в группу не тянем — правка Будковского 25.11.
   const waiting = (items ?? []).filter(i => !i.event && !i.ownSlot);
   const wanted = Array.isArray(rawTaskIds) ? new Set(rawTaskIds.map(Number)) : null;
-  const chosen = (wanted && wanted.size ? waiting.filter(i => wanted.has(i.taskId)) : waiting).slice(0, wanted && wanted.size ? group.max : group.target);
+  const max = await groupMaxFor([metricId], group);
+  // По материалам (большие группы) по умолчанию берём всех ждущих до максимума, иначе — «обычно берём».
+  const chosen = (wanted && wanted.size ? waiting.filter(i => wanted.has(i.taskId)) : waiting)
+    .slice(0, wanted && wanted.size ? max : max > group.max ? max : group.target);
   if (!chosen.length) return [];
   const managers = [...new Set(chosen.map(i => String(i.manager.id)))];
 
@@ -124,6 +131,15 @@ export async function suggest(actor: TrainingActor, metricId: string, rawTaskIds
     }
   }
   cands.sort((a, b) => a.start - b.start);
+  // Закрытое тренером время (299) не предлагаем.
+  if (cands.length) {
+    const closed = await closuresBetween(trainer, cands[0].start, cands[cands.length - 1].end);
+    if (closed.length) {
+      const open = cands.filter(c => !closed.some(x => Date.parse(x.startsAt) < c.end && c.start < Date.parse(x.endsAt)));
+      cands.length = 0;
+      cands.push(...open);
+    }
+  }
   if (!cands.length) return [];
 
   const avail = await checkAvailability([trainer, ...managers], cands.map(c => ({ start: c.start, end: c.end })), {}, () => true);
@@ -156,13 +172,20 @@ export async function assemble(actor: TrainingActor, raw: unknown): Promise<Trai
   const taskIds = Array.isArray(b.taskIds) ? [...new Set(b.taskIds.map(Number).filter(n => Number.isInteger(n) && n > 0))] : [];
   const group = await groupSettings();
   if (!taskIds.length) throw new TrainingError('Выберите менеджеров из очереди');
-  if (taskIds.length > group.max) throw new TrainingError(`В группе не больше ${group.max} человек`);
   const items = await loadQueue(actor, { taskIds });
   if (!items) throw new TrainingError('Задачи «Теория» ещё не развёрнуты в ядре Задачника', 409);
   const found = new Map(items.map(i => [i.taskId, i]));
   const lost = taskIds.filter(id => !found.get(id) || found.get(id)!.event || found.get(id)!.ownSlot);
   if (lost.length) throw new TrainingError('Часть задач уже не в очереди (закрыты или назначены на занятие) — обновите список', 409);
   const chosen = taskIds.map(id => found.get(id)!);
+  const max = await groupMaxFor([...new Set(chosen.map(i => i.metricId))], group);
+  if (taskIds.length > max) throw new TrainingError(`В группе не больше ${max} человек`);
+  const startMs = Date.parse(String(b.startsAt ?? ''));
+  const durMin = Number(b.durationMin);
+  if (Number.isFinite(startMs) && Number.isFinite(durMin) && durMin > 0) {
+    const closed = await findClosure(await defaultTrainerId(), startMs, startMs + durMin * 60_000);
+    if (closed) throw new TrainingError(closureMessage(closed), 409);
+  }
 
   const metricIds = Array.isArray(b.metricIds) && b.metricIds.length ? b.metricIds : [...new Set(chosen.map(i => i.metricId))];
   const depts = [...new Set(chosen.map(i => i.departmentName).filter((x): x is string => !!x))];
@@ -171,7 +194,7 @@ export async function assemble(actor: TrainingActor, raw: unknown): Promise<Trai
   const managersCount = new Set(chosen.map(i => i.manager.id)).size;
   const event = await createEvent(actor, {
     title: b.title, description: b.description ?? '', startsAt: b.startsAt, durationMin: b.durationMin, place: b.place ?? null,
-    capacity: Math.max(group.max, managersCount), trainerId: Number(await defaultTrainerId()), metricIds,
+    capacity: Math.max(max, managersCount), trainerId: Number(await defaultTrainerId()), metricIds,
     slotId: b.slotId ?? null, departmentLabel,
   });
 

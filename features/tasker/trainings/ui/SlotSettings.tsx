@@ -7,6 +7,7 @@ import { Drawer } from '@/components/ui/Drawer';
 import type { TrainingGroupSettings, TrainingSlotInput, TrainingSlotsResponse } from '../types';
 import { QUEUE_KEY, SLOTS_KEY, getJson, saveSlots } from './api';
 import { WEEKDAYS_SHORT } from './format';
+import { ClosuresSettings } from './Closures';
 
 const INPUT = 'min-h-11 w-full min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-base sm:text-sm outline-none focus:border-[var(--color-accent)]';
 const LABEL = 'flex min-w-0 flex-col gap-1 text-[12.5px] text-[var(--color-text-secondary)]';
@@ -84,13 +85,19 @@ function SlotEditor({ data }: { data: TrainingSlotsResponse }) {
         Нажмите на клетку, чтобы добавить слот или изменить его. Слоты по 45 минут, если не указано иначе.
       </p>
 
-      <fieldset className="grid min-w-0 grid-cols-2 gap-3 rounded-xl border border-[var(--color-border)] p-3 sm:grid-cols-4">
+      <fieldset className="grid min-w-0 grid-cols-2 gap-3 rounded-xl border border-[var(--color-border)] p-3 sm:grid-cols-3 lg:grid-cols-5">
         <legend className="px-1 text-[13px] font-medium">Группа</legend>
         <NumField label="Предлагать от, чел." value={group.min} onChange={v => setGroup(g => ({ ...g, min: v }))} />
         <NumField label="Обычно берём" value={group.target} onChange={v => setGroup(g => ({ ...g, target: v }))} />
         <NumField label="Максимум" value={group.max} onChange={v => setGroup(g => ({ ...g, max: v }))} />
+        <NumField label="Максимум по материалам" max={100} value={group.maxProduct} onChange={v => setGroup(g => ({ ...g, maxProduct: v }))} />
         <NumField label="Искать вперёд, дней" value={group.horizonDays} onChange={v => setGroup(g => ({ ...g, horizonDays: v }))} />
+        <p className="col-span-full text-[12px] text-[var(--color-text-muted)]">
+          «Максимум по материалам» — для тем-товарных групп (кровля, фасад…): такие занятия собираются большими группами.
+        </p>
       </fieldset>
+
+      {data.canManage && <ClosuresSettings />}
 
       {/* Матрица «время × день»: подписи один раз в шапке, в клетке — только отличие. */}
       <div className="scroll-x rounded-xl border border-[var(--color-border)]">
@@ -202,11 +209,11 @@ function SlotEditor({ data }: { data: TrainingSlotsResponse }) {
   );
 }
 
-function NumField({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
+function NumField({ label, value, onChange, max = 60 }: { label: string; value: number; onChange: (v: number) => void; max?: number }) {
   return (
     <label className={LABEL}>
       {label}
-      <input type="number" inputMode="numeric" min={1} max={60} className={INPUT} value={value} onChange={e => onChange(Number(e.target.value))} />
+      <input type="number" inputMode="numeric" min={1} max={max} className={INPUT} value={value} onChange={e => onChange(Number(e.target.value))} />
     </label>
   );
 }

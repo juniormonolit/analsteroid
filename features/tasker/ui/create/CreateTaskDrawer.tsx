@@ -17,6 +17,9 @@ import { AvailabilityWarning } from '../shared/AvailabilityWarning';
 import { renderTemplateBody, templateToBitrix } from '../templates/templateBody';
 import { TASKER_METRIC_GROUP_LABELS, type TaskerAvailabilityRequest } from '@/features/tasker/types';
 import { aboveDept, aboveDeptLabel, defaultGoal, goalWorseThanCurrent } from '@/features/tasker/goal';
+import { CLOSURES_KEY, fetchClosures } from '@/features/tasker/trainings/ui/api';
+import { closuresAt, closureWhen } from '@/features/tasker/trainings/ui/Closures';
+import { mskDateKey } from '@/features/tasker/trainings/ui/format';
 
 /**
  * Форма постановки задачи «подтянуть показатель» (Задачник, сессия C; ТЗ —
@@ -307,6 +310,28 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
     [trainings],
   );
 
+  // ── «Теория»: время занятия ──
+  // Своё время (без группового занятия) → сервер сам ставит занятие у тренера (или добавляет в группу на это время
+  // и тему), очередь тренера — только для «Теории» без времени. Закрытое тренером время (299) — ошибка до отправки.
+  const theoryOwn = kind === 'theory' && !trainingId;
+  const slotIso = slot && !Number.isNaN(Date.parse(new Date(slot).toISOString())) ? new Date(slot).toISOString() : null;
+  const pickedTraining = trainingId ? trainings?.find(t => String(t.id) === trainingId) ?? null : null;
+  const sameEvent = theoryOwn && slotIso && metricId
+    ? trainings?.find(t => Date.parse(t.startsAt) === Date.parse(slotIso) && t.metricIds.includes(metricId)) ?? null : null;
+  const sameEventFull = !!sameEvent && sameEvent.capacity != null && sameEvent.enrolledCount + managerIdNums.length > sameEvent.capacity;
+  const checkWindow = pickedTraining
+    ? { start: Date.parse(pickedTraining.startsAt), end: Date.parse(pickedTraining.startsAt) + pickedTraining.durationMin * 60_000 }
+    : kind === 'theory' && slotIso ? { start: Date.parse(slotIso), end: Date.parse(slotIso) + (sameEvent?.durationMin ?? durationMin) * 60_000 } : null;
+  const checkDay = checkWindow ? mskDateKey(new Date(checkWindow.start)) : null;
+  const closQ = useQuery({
+    queryKey: [...CLOSURES_KEY, 'form', checkDay],
+    queryFn: () => fetchClosures(checkDay!, checkDay!),
+    enabled: !!checkDay,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const closedHit = checkWindow ? closuresAt(closQ.data?.closures ?? [], checkWindow.start, checkWindow.end)[0] ?? null : null;
+
   // ── отправка ──
   const buildRequest = (ids: number[], overrideLimits = false): TaskerCreateRequest => {
     const t = target.trim().replace(/\s/g, '').replace(',', '.');
@@ -321,9 +346,10 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
       durationMin,
       // Записан на занятие — время задачи = время занятия (сервер берёт его сам); своё время/сессия не шлются.
       // Иначе у задачи два времени: Пуртиков 25.11 — «Теория» на 15:00 и запись на групповое в 16:15.
-      slot: trainingId || sessionId ? null : slot ? { start: new Date(slot).toISOString() } : null,
-      sessionId: trainingId ? null : sessionId,
-      newSession: !trainingId && !sessionId && !!slot && newSession,
+      slot: trainingId || (sessionId && kind !== 'theory') ? null : slot ? { start: new Date(slot).toISOString() } : null,
+      // «Теория» — без сессий исполнителя: своё время превращается в занятие тренера (сервер).
+      sessionId: trainingId || kind === 'theory' ? null : sessionId,
+      newSession: kind !== 'theory' && !trainingId && !sessionId && !!slot && newSession,
       controlDate,
       customersChecklist: checkedCustomers.length ? checkedCustomers : undefined,
       trainingEventId: trainingId ? Number(trainingId) : null,
@@ -356,6 +382,8 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
   if (!body.trim()) problems.push('заполните рекомендации');
   if (!deadline) problems.push('укажите срок');
   if (!controlDate) problems.push('укажите контрольную дату');
+  if (closedHit) problems.push('время закрыто тренером');
+  if (sameEventFull) problems.push('группа на это время набрана');
   const canSubmit = problems.length === 0 && !mutation.isPending;
 
   if (result) {
@@ -522,12 +550,25 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
           </Field>
         )}
 
-        {!trainingId && (
+        {pickedTraining && closedHit && (
+          <Banner tone="error">Тренер закрыл запись на {closureWhen(closedHit)}{closedHit.reason ? `: ${closedHit.reason}` : ''} — выберите другое занятие или время.</Banner>
+        )}
+
+        {theoryOwn && (
+          <TheoryTimeBlock slot={slot} onSlot={setSlot} sameEvent={sameEvent} sameEventFull={sameEventFull} closed={closedHit}
+            availability={slotIso && managerIdNums.length ? {
+              bitrixIds: trainer?.id ? [...managerIdNums, trainer.id] : managerIdNums, includeSelf: false,
+              slots: [{ start: slotIso, end: new Date(Date.parse(slotIso) + (sameEvent?.durationMin ?? durationMin) * 60_000).toISOString() }],
+              exclude: sameEvent ? { trainingEventId: sameEvent.id } : undefined,
+            } : null} />
+        )}
+
+        {!trainingId && kind !== 'theory' && (
         <SessionBlock
           sessions={sessions} sessionId={sessionId} onSession={setSessionId}
           slot={slot} onSlot={setSlot} newSession={newSession} onNewSession={setNewSession}
           metricLabel={metric?.label}
-          availability={slotAvailability(sessions, sessionId, slot, durationMin, managerIdNums, kind === 'theory' ? trainer?.id ?? null : creatorId ? Number(creatorId) : null)}
+          availability={slotAvailability(sessions, sessionId, slot, durationMin, managerIdNums, creatorId ? Number(creatorId) : null)}
         />
         )}
 
@@ -708,6 +749,37 @@ function slotAvailability(sessions: TaskerSession[], sessionId: number | null, s
     slots: [{ start, end: new Date(Date.parse(start) + dur).toISOString() }],
     exclude: s ? { sessionId: s.id } : undefined,
   };
+}
+
+function TheoryTimeBlock({ slot, onSlot, sameEvent, sameEventFull, closed, availability }: {
+  slot: string; onSlot: (v: string) => void;
+  sameEvent: { title: string; enrolledCount: number; capacity: number | null } | null; sameEventFull: boolean;
+  closed: { startsAt: string; endsAt: string; allDay: boolean; reason: string | null; id: number; trainerId: number } | null;
+  availability: TaskerAvailabilityRequest | null;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Field label="Время занятия"
+        hint={slot
+          ? 'Монолитика сама поставит занятие у тренера в календарь и запишет менеджера — собирать вручную не нужно'
+          : 'Не указываете — задача уйдёт в очередь тренера, он соберёт группу по теме сам'}>
+        <input type="datetime-local" value={slot} onChange={e => onSlot(e.target.value)} className={`${INPUT} sm:max-w-[260px]`} />
+      </Field>
+      {closed ? (
+        <Banner tone="error">Тренер закрыл запись на {closureWhen(closed)}{closed.reason ? `: ${closed.reason}` : ''} — выберите другое время.</Banner>
+      ) : sameEvent ? (
+        sameEventFull
+          ? <Banner tone="error">На это время у тренера уже группа «{sameEvent.title}»: занято {sameEvent.enrolledCount} из {sameEvent.capacity} — выберите другое время.</Banner>
+          : <Banner tone="info">На это время у тренера уже занятие «{sameEvent.title}» по этой теме ({sameEvent.enrolledCount}{sameEvent.capacity != null ? ` из ${sameEvent.capacity}` : ''}) — менеджер добавится в группу.</Banner>
+      ) : null}
+      {!closed && slot && (
+        <>
+          <AvailabilityWarning req={availability} />
+          {!sameEvent && <p className="text-[11px] leading-snug text-[var(--color-text-muted)]">Если тренер в это время занят, задача не поставится — сервер подскажет причину.</p>}
+        </>
+      )}
+    </div>
+  );
 }
 
 function SessionBlock({ sessions, sessionId, onSession, slot, onSlot, newSession, onNewSession, metricLabel, availability }: {

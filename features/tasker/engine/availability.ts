@@ -115,7 +115,9 @@ async function monolitikaBusy(want: Set<string>, from: number, to: number, ex: A
   await db.query<{ id: string; manager_bitrix_id: string; rop_bitrix_id: string | null; title: string; slot_start: Date; slot_end: Date | null; duration_min: number }>(
     `SELECT id, manager_bitrix_id, CASE WHEN executor_bitrix_id IS NULL OR executor_bitrix_id = manager_bitrix_id THEN rop_bitrix_id
             ELSE executor_bitrix_id END AS rop_bitrix_id, title, slot_start, slot_end, duration_min FROM tasker_tasks
-      WHERE cancelled_at IS NULL AND session_id IS NULL AND slot_start BETWEEN $1 AND $2`, [fromIso, toIso],
+      WHERE cancelled_at IS NULL AND session_id IS NULL AND slot_start BETWEEN $1 AND $2
+        -- задача на занятие тренера (запись/авторасписание «Теории») — занятость даёт само событие обучения ниже
+        AND training_event_id IS NULL`, [fromIso, toIso],
   ).then(r => {
     for (const t of r.rows) {
       const start = new Date(t.slot_start).getTime();

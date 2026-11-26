@@ -26,6 +26,9 @@ import { getTask, OPEN_TASK_SQL, viewerOf } from './repo';
 import { invalidateLive } from './live';
 import { creatorOptions } from './creators';
 import { defaultGoal, goalWorseThanCurrent } from '../goal';
+import { placeTheoryEvent } from '../trainings/engine/autoTheory';
+import { closureMessage, findClosure } from '../trainings/engine/closures';
+import { syncTaskEnrollments } from '../trainings/engine/taskLink';
 
 /** Директор/админ может обойти лимит «≤ 3 открытых» (дубль метрики не обходится). */
 export function canOverrideLimits(session: SessionUser, settings: TaskerSettings): boolean {
@@ -222,13 +225,29 @@ export async function createTasks(
   // события занятия через запись). Раньше форма слала и своё время, и занятие: у Пуртикова 25.11 задача на 15:00,
   // а в расписании тренера — групповое 16:15.
   let trainingSlot: { start: string; end: string } | null = null;
-  if (req.trainingEventId) {
-    const ev = await systemDb().query<{ start_at: Date; duration_min: number }>(
-      'SELECT start_at, duration_min FROM tasker_training_events WHERE id = $1 AND cancelled_at IS NULL', [req.trainingEventId]);
+  let trainingEventId = req.trainingEventId;
+  if (trainingEventId) {
+    const ev = await systemDb().query<{ start_at: Date; duration_min: number; trainer_bitrix_user_id: string | null }>(
+      'SELECT start_at, duration_min, trainer_bitrix_user_id FROM tasker_training_events WHERE id = $1 AND cancelled_at IS NULL', [trainingEventId]);
     if (!ev.rows[0]) throw new TaskerError('Это занятие отменено или удалено — выберите другое или своё время');
     const st = ev.rows[0].start_at;
     trainingSlot = { start: st.toISOString(), end: new Date(st.getTime() + ev.rows[0].duration_min * 60_000).toISOString() };
+    // Тренер закрыл запись на это время (299) — в задачу не берём (запись всё равно бы не прошла).
+    const tr = ev.rows[0].trainer_bitrix_user_id;
+    const closed = tr ? await findClosure(tr, st.getTime(), Date.parse(trainingSlot.end)) : null;
+    if (closed) throw new TaskerError(closureMessage(closed), 'bad_request', 409);
+  } else if (kind === 'theory' && req.slot?.start) {
+    // «Теория» со своим временем РОПа → Монолитика сама ставит занятие у тренера (или добавляет в группу на это
+    // время и тему) и записывает менеджеров. В очередь тренера такие задачи не попадают (жалоба Будковского 26.11).
+    const placed = await placeTheoryEvent({
+      trainerId: assignee, startIso: toMskIso(req.slot.start, '10:00:00'), durationMin: req.durationMin,
+      metricId: metric.id, metricLabel: metric.label, managers: eligible.length, createdByUserId: session.id, creatorName,
+    });
+    trainingEventId = placed.eventId;
+    trainingSlot = { start: placed.startIso, end: placed.endIso };
+    if (placed.joined) warnings.push({ managerId: null, code: 'training_joined', message: 'На это время у тренера уже стоит занятие по этой теме — менеджеры добавлены в группу' });
   }
+  const reqT: TaskerCreateRequest = { ...req, trainingEventId };
   const sessionCache = new Map<string, number>();
   const touchedSessions = new Map<number, number>(); // sessionId → последняя задача запроса
   const createdIds: number[] = [];
@@ -285,7 +304,7 @@ export async function createTasks(
         creatorBx, session.id, creatorName, snap.deptName ?? entry?.departmentName ?? null,
         metric.id, req.period.from, req.period.to, JSON.stringify(snap), target, req.templateId,
         title, req.body, deadlineIso, req.durationMin, slotStartIso, slotEndIso, req.controlDate, sess?.id ?? null,
-        req.trainingEventId, JSON.stringify(checklist), kind, assignee, assigneeName, auditors]);
+        trainingEventId, JSON.stringify(checklist), kind, assignee, assigneeName, auditors]);
     const taskId = Number(ins.rows[0].id);
     createdIds.push(taskId);
     if (sess) touchedSessions.set(sess.id, taskId);
@@ -293,7 +312,7 @@ export async function createTasks(
     const crm = checklist.map(c => crmBindingOf(c.clientKey)).filter((x): x is string => !!x);
     const fields: Record<string, unknown> = {
       TITLE: title,
-      DESCRIPTION: describe({ metric, snap, target, req, managerName, taskId, marker, kind, assigneeName }),
+      DESCRIPTION: describe({ metric, snap, target, req: reqT, managerName, taskId, marker, kind, assigneeName }),
       RESPONSIBLE_ID: Number(assignee),
       ...(creatorBx ? { CREATED_BY: Number(creatorBx) } : {}),
       ...(auditors.length ? { AUDITORS: auditors.map(Number) } : {}),
@@ -316,6 +335,13 @@ export async function createTasks(
     if (res.error) {
       warnings.push({ managerId: Number(managerId), code: 'bitrix_failed', message: `${managerName}: задача сохранена в Монолитике, но Битрикс пока не принял (${res.error}) — повторим автоматически` });
     }
+  }
+
+  // Задачи на занятие тренера — сразу записываем менеджеров (иначе запись ждала бы фонового тика); календарь тренера
+  // обновит syncTrainingCalendar внутри (менеджеры — участники одного события).
+  if (trainingEventId && createdIds.length) {
+    await syncTaskEnrollments(createdIds.length, createdIds).catch(e =>
+      console.warn('[tasker] запись на занятие из задачи:', e instanceof Error ? e.message : e));
   }
 
   // Сессия = одно событие в календаре РОПа (фаза 1b): ставим/обновляем после того, как задачи получили id в

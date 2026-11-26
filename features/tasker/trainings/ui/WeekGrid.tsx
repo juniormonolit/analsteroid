@@ -1,10 +1,11 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Lock, Plus, Users, X } from 'lucide-react';
+import { Ban, ChevronLeft, ChevronRight, Lock, Plus, Users, X } from 'lucide-react';
 import { Drawer } from '@/components/ui/Drawer';
 import type { TrainingEvent, TrainingQueueResponse, TrainingSlot, TrainingSlotsResponse, TrainingsResponse } from '../types';
-import { QUEUE_KEY, SLOTS_KEY, TRAININGS_KEY, getJson } from './api';
+import { CLOSURES_KEY, QUEUE_KEY, SLOTS_KEY, TRAININGS_KEY, fetchClosures, getJson } from './api';
+import { ClosureForm, ClosureList, closuresAt } from './Closures';
 import { addDaysKey, ddmm, endOf, isoWeekday, mskDateKey, mskTime, plural, surname, weekStart, WEEKDAYS_SHORT } from './format';
 import type { TrainingFormPreset } from './TrainingForm';
 import { SlotAssemble, type SlotPick } from './SlotAssemble';
@@ -51,6 +52,10 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
     queryKey: [...TRAININGS_KEY, 'week', monday],
     queryFn: () => getJson<TrainingsResponse>(`/api/tasker/trainings?from=${monday}&to=${sunday}`),
   });
+  // Закрытое тренером время (299): серым «Закрыто: причина», без «Собрать занятие».
+  const closQ = useQuery({ queryKey: [...CLOSURES_KEY, 'week', monday], queryFn: () => fetchClosures(monday, sunday), retry: false });
+  const closures = closQ.data?.closures ?? [];
+  const [closing, setClosing] = useState(false);
   const queueQ = useQuery({
     queryKey: QUEUE_KEY,
     queryFn: () => getJson<TrainingQueueResponse>('/api/tasker/trainings/queue'),
@@ -95,12 +100,13 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
 
   const freeFuture = grid.cols.reduce((n, d) => n + grid.rows.filter(t => {
     const slot = grid.slotAt.get(`${isoWeekday(d)}|${t}`);
-    return slot && !grid.evAt.has(`${d}|${t}`) && startMsOf(d, t) > nowMs;
+    return slot && !grid.evAt.has(`${d}|${t}`) && startMsOf(d, t) > nowMs
+      && !closuresAt(closures, startMsOf(d, t), startMsOf(d, t) + slot.durationMin * 60_000).length;
   }).length, 0);
 
   const queue = queueQ.data;
   const waitingGroups = (queue?.groups ?? [])
-    .map(g => ({ id: g.metricId, label: g.label, items: g.items.filter(i => !i.event) }))
+    .map(g => ({ id: g.metricId, label: g.label, items: g.items.filter(i => !i.event && !i.ownSlot) }))
     .filter(g => g.items.length > 0);
   const waiting = waitingGroups.reduce((s, g) => s + g.items.length, 0);
   const theme = waitingGroups.find(g => g.id === focusTheme) ?? null;
@@ -122,6 +128,16 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
     if (evs.length) return evs.map(e => <EventCard key={e.id} e={e} compact={!showMeta} past={endOf(e.startsAt, e.durationMin).getTime() < nowMs} onOpen={() => onOpen(e.id)} />);
     if (!slot) return null;
     const past = startMsOf(day, time) <= nowMs;
+    const closed = past ? [] : closuresAt(closures, startMsOf(day, time), startMsOf(day, time) + slot.durationMin * 60_000);
+    if (closed.length) {
+      const why = closed.map(c => c.reason).filter(Boolean).join('; ');
+      return (
+        <span title={why ? `Закрыто: ${why}` : 'Тренер закрыл запись'}
+          className="inline-flex min-h-11 w-full min-w-0 items-center gap-1 rounded-lg bg-[var(--color-bg-hover)] px-2 text-[12px] text-[var(--color-text-muted)]">
+          <Ban size={12} className="shrink-0" /><span className="min-w-0 truncate">Закрыто{why ? `: ${why}` : ''}</span>
+        </span>
+      );
+    }
     // Подпись, которой нет в заголовке строки, — чипом (закрепление за отделом и т.п.).
     const tag = showMeta || !grid.rowInfo.get(time)?.uniform ? (slot.departmentLabel || slot.label) : null;
     if (past) return <span title="Слот прошёл" className="px-1 text-[12px] text-[var(--color-text-muted)]">—</span>;
@@ -224,6 +240,12 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
           <button type="button" onClick={() => setMonday(weekStart(today))}
             className="min-h-11 rounded-lg px-3 text-sm text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">К текущей неделе</button>
         )}
+        {canManage && (
+          <button type="button" onClick={() => setClosing(true)}
+            className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-sm hover:bg-[var(--color-bg-hover)]">
+            <Ban size={14} /> Закрыть время
+          </button>
+        )}
         {!loading && !error && (
           <span className="ml-auto min-w-0 text-[12.5px] text-[var(--color-text-muted)]">
             {events.length} {plural(events.length, 'занятие', 'занятия', 'занятий')} · свободно {freeFuture}
@@ -233,6 +255,13 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
       </div>
 
       {banner}
+
+      {closures.length > 0 && (
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span className="text-[12.5px] text-[var(--color-text-secondary)]">Запись закрыта на этой неделе:</span>
+          <ClosureList closures={closures} canManage={canManage} />
+        </div>
+      )}
 
       {loading ? (
         <div className="flex min-w-0 flex-col gap-2" aria-busy>
@@ -335,6 +364,10 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
           </>)}
         </>
       )}
+
+      <Drawer open={closing} onOpenChange={setClosing} title="Закрыть запись">
+        {closing && <ClosureForm initialDate={!asTable ? shownPhone : undefined} onDone={() => setClosing(false)} />}
+      </Drawer>
 
       <Drawer open={pick !== null} onOpenChange={o => { if (!o) setPick(null); }} title="Собрать занятие">
         {pick && (

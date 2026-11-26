@@ -5,11 +5,12 @@ import { systemDb } from '@/lib/db/clients';
 import { resolveEmployeeNames } from '@/lib/org/employeeDirectory';
 import { getSalesDepartmentOptions } from '@/lib/org/teamRoster';
 import type { TrainingGroupSettings, TrainingSlot, TrainingSlotInput, TrainingSlotsResponse } from '../types';
+import { loadMetricDefs } from '../../engine/config';
 import { TrainingError, type TrainingActor } from './index';
 
 /** Тренер по умолчанию — tasker_settings 'trainer' (ведёт сессия A), иначе Будковский (2054). */
 export const DEFAULT_TRAINER_ID = '2054';
-export const DEFAULT_GROUP: TrainingGroupSettings = { min: 3, target: 4, max: 5, horizonDays: 14 };
+export const DEFAULT_GROUP: TrainingGroupSettings = { min: 3, target: 4, max: 5, maxProduct: 15, horizonDays: 14 };
 
 const ignoreMissing = <T,>(fallback: T) => (e: unknown): T => {
   const code = (e as { code?: string })?.code;
@@ -36,7 +37,19 @@ export async function groupSettings(): Promise<TrainingGroupSettings> {
   const min = num(v?.min, DEFAULT_GROUP.min);
   const max = Math.max(min, num(v?.max, DEFAULT_GROUP.max));
   const target = Math.min(max, Math.max(min, num(v?.target, DEFAULT_GROUP.target)));
-  return { min, target, max, horizonDays: Math.min(60, num(v?.horizon_days, DEFAULT_GROUP.horizonDays)) };
+  const maxProduct = Math.max(min, num(v?.max_product, DEFAULT_GROUP.maxProduct));
+  return { min, target, max, maxProduct, horizonDays: Math.min(60, num(v?.horizon_days, DEFAULT_GROUP.horizonDays)) };
+}
+
+/**
+ * Максимум группы для набора тем: все темы — товарные группы (обучение по материалам: кровля, фасад…) →
+ * group.maxProduct (по умолчанию 15), иначе group.max (5). Жалоба Будковского 26.11: по материалам собирает большие группы.
+ */
+export async function groupMaxFor(metricIds: string[], group?: TrainingGroupSettings): Promise<number> {
+  const g = group ?? await groupSettings();
+  if (!metricIds.length) return g.max;
+  const kinds = new Map((await loadMetricDefs().catch(() => [])).map(m => [m.id, m.kind]));
+  return metricIds.every(id => kinds.get(id) === 'product_group' || /^pg_/.test(id)) ? g.maxProduct : g.max;
 }
 
 interface SlotRow {
@@ -147,11 +160,12 @@ export async function saveSlots(actor: TrainingActor, raw: unknown): Promise<Tra
       const min = n(g.min, 1, 30, 'Минимум в группе');
       const max = n(g.max, min, 50, 'Максимум в группе');
       const target = n(g.target ?? max, min, max, 'Обычный размер группы');
+      const maxProduct = n(g.maxProduct ?? DEFAULT_GROUP.maxProduct, min, 100, 'Максимум по материалам');
       const horizon = n(g.horizonDays ?? DEFAULT_GROUP.horizonDays, 1, 60, 'Искать слот вперёд, дней');
       await client.query(
         `INSERT INTO tasker_settings (key, value, updated_at) VALUES ('training_group', $1::jsonb, now())
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-        [JSON.stringify({ min, target, max, horizon_days: horizon })]);
+        [JSON.stringify({ min, target, max, max_product: maxProduct, horizon_days: horizon })]);
     }
     await client.query('COMMIT');
   } catch (e) {

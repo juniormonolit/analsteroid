@@ -377,6 +377,7 @@ export type TaskerWarningCode =
   | 'duplicate_metric'
   | 'not_enough_data'
   | 'bitrix_failed'
+  | 'training_joined'
   | 'forbidden_manager'
   | 'no_snapshot';
 
