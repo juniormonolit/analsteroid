@@ -13,6 +13,9 @@ import { closureMessage, findClosure } from './closures';
 import { DEFAULT_MEASURE_DAYS } from './effect';
 import { groupMaxFor } from './slots';
 
+/** Начало описания автособытия — по нему (и создателю ≠ тренер) отмена задачи гасит опустевшее событие (taskLink.ts). */
+export const AUTO_EVENT_NOTE = 'Занятие поставлено автоматически по задаче «Теория»';
+
 export interface TheoryPlacement {
   eventId: number;
   startIso: string;
@@ -84,7 +87,7 @@ export async function placeTheoryEvent(p: {
         `INSERT INTO tasker_training_events (title, description, start_at, duration_min, place, capacity, trainer_bitrix_user_id, created_by,
                                              metric_ids, measure_before_days, measure_after_days)
          VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9, $9) RETURNING id`,
-        [p.metricLabel, `Занятие поставлено автоматически по задаче «Теория» (${p.creatorName}).`, startIso, p.durationMin,
+        [p.metricLabel, `${AUTO_EVENT_NOTE} (${p.creatorName}).`, startIso, p.durationMin,
           capacity, p.trainerId, p.createdByUserId, [p.metricId], DEFAULT_MEASURE_DAYS]);
       out = { eventId: Number(r.rows[0].id), startIso, endIso: new Date(end).toISOString(), joined: false };
     }

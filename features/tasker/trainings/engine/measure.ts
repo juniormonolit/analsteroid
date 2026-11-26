@@ -14,7 +14,7 @@ import { withLoopbackRunner } from '../../engine/reportRunner';
 import { computeSnapshots } from '../../engine/snapshot';
 import type { TaskerVerdict } from '../../types';
 import { personMetricIds, trainingWindows } from './effect';
-import { syncTaskEnrollments } from './taskLink';
+import { releaseCancelledTasks, syncTaskEnrollments } from './taskLink';
 
 const MAX_ATTEMPTS = 6;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -161,6 +161,7 @@ let lastMeasure = 0;
 export async function trainingsTick(): Promise<{ linked: number; measured: number; failed: number }> {
   const quiet = (e: unknown) => ['42P01', '42703'].includes((e as { code?: string })?.code ?? '');
   let linked = 0, m = { measured: 0, failed: 0 };
+  try { await releaseCancelledTasks(); } catch (e) { if (!quiet(e)) console.error('[tasker/trainings task-cancel]', e instanceof Error ? e.message : e); }
   try { linked = await syncTaskEnrollments(); } catch (e) { if (!quiet(e)) console.error('[tasker/trainings link]', e instanceof Error ? e.message : e); }
   if (Date.now() - lastMeasure >= MEASURE_EVERY_MS) {
     lastMeasure = Date.now();

@@ -8,6 +8,7 @@ import { systemDb } from '@/lib/db/clients';
 import type { Snapshot } from '../../types';
 import { syncTrainingCalendar } from './calendar';
 import { writeLog } from './results';
+import { AUTO_EVENT_NOTE } from './autoTheory';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -100,11 +101,59 @@ export async function syncTaskEnrollments(limit = 50, taskIds?: number[]): Promi
   return done;
 }
 
+/**
+ * Отменённая задача (tasker_tasks.cancelled_at или «отклонена» в Битриксе, статус 7) → её менеджер снимается с
+ * будущего занятия, на которое его записала задача (как unenroll: журнал, замеры, задача отвязывается, календарь).
+ * Опустевшее автособытие «Теории» (поставлено по задаче РОПа, не тренером вручную) отменяется — и в календаре тренера.
+ * Прошедшие занятия не трогаем: там посещаемость и замеры.
+ */
+export async function releaseCancelledTasks(limit = 50): Promise<number> {
+  const db = systemDb();
+  const r = await db.query<{ event_id: string; manager: string; task_id: string }>(
+    `SELECT x.event_id, x.manager_bitrix_user_id AS manager, t.id AS task_id
+       FROM tasker_training_enrollments x
+       JOIN tasker_tasks t ON t.id = x.tasker_task_id
+       JOIN tasker_training_events e ON e.id = x.event_id
+      WHERE (t.cancelled_at IS NOT NULL OR t.bitrix_status = 7)
+        AND e.cancelled_at IS NULL AND e.start_at + make_interval(mins => e.duration_min) > now()
+      ORDER BY x.event_id LIMIT $1`, [limit]);
+  const touched = new Set<number>();
+  for (const x of r.rows) {
+    const eventId = Number(x.event_id);
+    const taskId = Number(x.task_id);
+    const del = await db.query('DELETE FROM tasker_training_enrollments WHERE event_id = $1 AND manager_bitrix_user_id = $2 AND tasker_task_id = $3',
+      [eventId, x.manager, taskId]);
+    if (!del.rowCount) continue;
+    await writeLog(db, { eventId, managerId: x.manager, action: 'unenroll', actorUserId: null, taskId, details: { reason: 'task_cancelled' } });
+    await db.query('DELETE FROM tasker_training_results WHERE event_id = $1 AND manager_bitrix_user_id = $2', [eventId, x.manager]);
+    await db.query('UPDATE tasker_tasks SET training_event_id = NULL, updated_at = now() WHERE id = $1 AND training_event_id = $2', [taskId, eventId]);
+    await db.query(`UPDATE tasker_training_events SET calendar_sync_state = 'pending' WHERE id = $1`, [eventId]);
+    touched.add(eventId);
+  }
+  if (!touched.size) return 0;
+  // Пустое автособытие: описание начинается с метки авторасписания и создатель — не сам тренер.
+  const empty = await db.query<{ id: string }>(
+    `UPDATE tasker_training_events e
+        SET cancelled_at = now(), calendar_sync_state = 'pending', updated_at = now()
+       FROM users u
+      WHERE e.id = ANY($1::bigint[]) AND e.cancelled_at IS NULL
+        AND u.id = e.created_by AND COALESCE(u.bitrix_user_id::text, '') <> COALESCE(e.trainer_bitrix_user_id, '')
+        AND e.description LIKE $2 || '%'
+        AND NOT EXISTS (SELECT 1 FROM tasker_training_enrollments x WHERE x.event_id = e.id)
+      RETURNING e.id`, [[...touched], AUTO_EVENT_NOTE]);
+  if (empty.rows.length) console.info('[tasker/trainings] отменены опустевшие автособытия:', empty.rows.map(x => x.id).join(', '));
+  for (const id of touched) await syncTrainingCalendar(id); // участники / удаление события из календаря тренера
+  return r.rows.length;
+}
+
 let lastAt = 0;
 /** Перед чтением расписания: не чаще раза в 20 с на инстанс; таблиц ядра ещё нет — молча. */
 export async function syncTaskEnrollmentsThrottled(): Promise<void> {
   if (Date.now() - lastAt < 20_000) return;
   lastAt = Date.now();
+  await releaseCancelledTasks(20).catch(err => {
+    if ((err as { code?: string })?.code !== '42P01') console.error('[tasker/trainings task-cancel]', err instanceof Error ? err.message : err);
+  });
   await syncTaskEnrollments(20).catch(err => {
     if ((err as { code?: string })?.code !== '42P01') console.error('[tasker/trainings task-link]', err instanceof Error ? err.message : err);
   });
