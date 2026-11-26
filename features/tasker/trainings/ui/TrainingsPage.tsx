@@ -17,14 +17,17 @@ import { EffectivenessView } from './EffectivenessView';
 import { WeekGrid } from './WeekGrid';
 import { TrainerQueue } from './TrainerQueue';
 import { SlotSettings } from './SlotSettings';
+import { TestsView } from '../../tests/ui/TestsView';
+import { TESTS_KEY, getJson as getTestsJson } from '../../tests/ui/api';
+import type { TestsListResponse } from '../../tests/types';
 
-type Mode = 'week' | 'queue' | 'upcoming' | 'past' | 'effect' | 'settings';
+type Mode = 'week' | 'queue' | 'upcoming' | 'past' | 'effect' | 'tests' | 'settings';
 type Panel = { kind: 'view'; id: number } | { kind: 'edit'; id: number } | { kind: 'create'; preset?: TrainingFormPreset } | null;
-const MODES: Mode[] = ['week', 'queue', 'upcoming', 'past', 'effect', 'settings'];
+const MODES: Mode[] = ['week', 'queue', 'upcoming', 'past', 'effect', 'tests', 'settings'];
 // «Ближайшие» и «Прошедшие» — одна вкладка «Список» с переключателем периода (аудит 23.11, п.20).
-const TAB_MODES: Mode[] = ['week', 'queue', 'upcoming', 'effect', 'settings'];
+const TAB_MODES: Mode[] = ['week', 'queue', 'upcoming', 'effect', 'tests', 'settings'];
 const MODE_LABEL: Record<Mode, string> = {
-  week: 'Неделя', queue: 'Очередь тренера', upcoming: 'Список', past: 'Список', effect: 'Эффективность', settings: 'Настройки',
+  week: 'Неделя', queue: 'Очередь тренера', upcoming: 'Список', past: 'Список', effect: 'Эффективность', tests: 'Тесты', settings: 'Настройки',
 };
 
 // Второй уровень вкладок (под вкладками Задачника) — лёгкий, с подчёркиванием, перенос строки вместо ленты (CLAUDE.md, п.12).
@@ -94,6 +97,9 @@ export function TrainingsPage() {
     enabled: canManage || canEnroll,
   });
   const queueCount = (queueQ.data?.groups ?? []).reduce((n, g) => n + g.items.filter(i => !i.event).length, 0);
+  // Тесты (300): вкладка — тренеру, РОПу и тем, кто ведёт тесты (action.tasker.tests.manage — его знает только API тестов).
+  const testsQ = useQuery({ queryKey: TESTS_KEY, queryFn: () => getTestsJson<TestsListResponse>('/api/tasker/tests'), retry: false });
+  const canTests = canManage || canEnroll || !!testsQ.data?.canManage;
   const cancelledCount = (q.data?.events ?? []).filter(e => e.cancelledAt).length;
 
   const refresh = () => qc.invalidateQueries({ queryKey: TRAININGS_KEY });
@@ -133,7 +139,7 @@ export function TrainingsPage() {
         <TaskerTabs active="trainings" />
 
         <TabStrip activeKey={mode === 'past' ? 'upcoming' : mode} role="tablist" ariaLabel="Обучения" className="border-b border-[var(--color-border)]" innerClassName="gap-x-1">
-          {TAB_MODES.filter(m => (m === 'settings' ? canManage : m === 'queue' ? canManage || canEnroll : true)).map(m => {
+          {TAB_MODES.filter(m => (m === 'settings' ? canManage : m === 'queue' ? canManage || canEnroll : m === 'tests' ? canTests : true)).map(m => {
             const on = mode === m || (m === 'upcoming' && mode === 'past');
             return (
             // Телефон: «Настройки» — шестерёнкой в шапке, иначе она одна уезжала во второй ряд.
@@ -175,6 +181,8 @@ export function TrainingsPage() {
           <WeekGrid canManage={canManage} canEnroll={canEnroll} onOpenQueue={() => setMode('queue')} onOpen={id => openPanel({ kind: 'view', id })} onCreate={preset => openPanel({ kind: 'create', preset })} />
         ) : mode === 'queue' ? (
           <TrainerQueue onOpenEvent={id => openPanel({ kind: 'view', id })} />
+        ) : mode === 'tests' ? (
+          <TestsView metrics={metrics} />
         ) : mode === 'settings' ? (
           <SlotSettings />
         ) : mode === 'effect' ? (

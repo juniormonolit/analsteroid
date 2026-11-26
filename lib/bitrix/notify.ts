@@ -130,6 +130,8 @@ export const BOT_FUNCTION_KEYS = [
   // «Большой брат», дайджест директору (26.11, поток G): понедельник утром, только отклонения. Миграция 298, выключено;
   // получатели и режим «предпросмотр» — config, правится на /big-brother/signals.
   'big_brother_digest',
+  // Задачник: «вам назначен тест» (26.11). Миграция 300, включено — пишет только назначенному менеджеру.
+  'tasker_tests',
 ] as const;
 export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
 

@@ -37,6 +37,9 @@ export async function taskerTick(): Promise<{ drained: number; measured: number;
       // Обучения (сессия D): запись «из формы задачи» + замер эффективности (свой интервал внутри).
       const { trainingsTick } = await import('../trainings/engine/measure');
       const t = await trainingsTick();
+      // Тесты (300): авто-назначение по обучениям + закрытие попыток с истёкшим временем (свой интервал внутри).
+      const { testsTick } = await import('../tests/engine');
+      await testsTick();
       return { drained: d.done, measured: m.measured + t.measured, failed: m.failed + t.failed };
     } finally {
       await client.query(`SELECT pg_advisory_unlock(hashtext('tasker_job'))`).catch(() => {});

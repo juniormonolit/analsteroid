@@ -10,6 +10,7 @@ import { AttendanceBadge, EffectSummaryLine, MetricChips, OutcomeBadge, ResultLi
 import { getJson } from './api';
 import { AvailabilityWarning } from '../../ui/shared/AvailabilityWarning';
 import { durationLabel, endOf, isUrl, mskDayLabel, mskTime, plural } from './format';
+import { TrainingTestBlock } from '../../tests/ui/TrainingTestBlock';
 
 /**
  * Содержимое карточки обучения (в Drawer): детали, показатели и сводка эффективности, записанные (цель, посещение,
@@ -100,6 +101,8 @@ export function TrainingDetails({
           {!cancelled && <EffectSummaryLine s={event.effect} started={started} />}
         </section>
       )}
+
+      <TrainingTestBlock eventId={event.id} canManage={canManage} cancelled={cancelled} />
 
       {canManage && (
         <div className={`flex min-w-0 flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-[13px] ${event.calendar.state === 'failed' ? 'border-[var(--color-negative)]' : 'border-[var(--color-border)]'}`}>

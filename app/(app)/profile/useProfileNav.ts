@@ -4,10 +4,11 @@ import { useQuery } from '@tanstack/react-query';
 import {
   IdCard, Users, UsersRound, Settings, ClipboardList, Contact,
   Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel, Wallet, Zap, Bell, ClipboardCheck,
-  FileText, Sprout, KanbanSquare, PackageSearch,
+  FileText, Sprout, KanbanSquare, PackageSearch, ListChecks,
 } from 'lucide-react';
 import { MANAGER_TABS, type ManagerTabKey } from '@/features/manager-card/ui/ManagerTabs';
 import { useNotifications } from '@/features/profile/ui/NotificationsPage';
+import { useMyTestsCount } from '@/features/tasker/tests/ui/MyTestsPage';
 
 // ЕДИНЫЙ список пунктов навигации ЛК — источник правды и для десктопной рельсы
 // (ProfileRail), и для мобильной строки-селектора со шторкой (ProfileMobileNav).
@@ -58,7 +59,7 @@ const TAB_ICONS: Record<ManagerTabKey, typeof IdCard> = {
 const GROUP: Record<string, number> = {
   'tab:profile': 0,
   'report': 1, 'tab:stats': 1,
-  'tab:planyorka': 2, 'repeat-kanban': 2, 'logist-requests': 2, 'tab:customers': 2, 'tab:quests': 2,
+  'tab:planyorka': 2, 'repeat-kanban': 2, 'logist-requests': 2, 'tests': 2, 'tab:customers': 2, 'tab:quests': 2,
   'tab:rewards': 3, 'tab:skills': 3, 'tab:wallet': 3, 'tab:shop': 3, 'tab:wheel': 3, 'tab:inventory': 3,
   'team': 4, 'requests': 4, 'people': 4, 'pulse': 4,
   'notifications': 5,
@@ -81,7 +82,7 @@ const DEFAULT_GROUP = 2;
 // отдельно они больше не нужны». Сама вкладка ?tab=customers жива для старых ссылок (дайджест бота, ?customer=),
 // но в меню её нет ни у кого. Канбан — отдельная страница вне /profile (своё право section.repeat_kanban).
 // «Запросы логистам» (S5, 19.11) — рабочий раздел менеджера: виден всем, у кого есть карточка (manager/department).
-const RESTRICTED_KEYS = new Set(['repeat-kanban', 'logist-requests', 'tab:stats', 'report', 'team', 'settings']); // «Настройки» — личные (тема, пароль), нужны всем; их ошибочно прятали вместе с остальным (07.10)
+const RESTRICTED_KEYS = new Set(['repeat-kanban', 'logist-requests', 'tests', 'tab:stats', 'report', 'team', 'settings']); // «Настройки» — личные (тема, пароль), нужны всем; их ошибочно прятали вместе с остальным (07.10)
 
 export function useProfileNav({ mode, canManageRequests = false, restricted = false, canRepeatKanban = false }: {
   mode: 'manager' | 'department' | 'none';
@@ -160,6 +161,16 @@ export function useProfileNav({ mode, canManageRequests = false, restricted = fa
     items.push({
       key: 'logist-requests', href: '/profile/logist-requests', label: 'Запросы логистам', Icon: PackageSearch,
       active: pathname.startsWith('/profile/logist-requests'), badge: logistCount?.attention ?? 0,
+    });
+  }
+
+  // «Тесты» (26.11, TASKER_SPEC «Тесты»): назначенные тренером/РОПом тесты — всем, у кого есть карточка; счётчик — сколько
+  // ждут прохождения. Тот же queryKey, что у страницы раздела.
+  const { data: myTests } = useMyTestsCount(withLogist);
+  if (withLogist) {
+    items.push({
+      key: 'tests', href: '/profile/tests', label: 'Тесты', Icon: ListChecks,
+      active: pathname.startsWith('/profile/tests'), badge: myTests?.pending ?? 0,
     });
   }
 

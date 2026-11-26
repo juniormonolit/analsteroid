@@ -6,6 +6,7 @@ import type { TrainingEffectMetricRow, TrainingEffectRow, TrainingEffectivenessR
 import { getJson } from './api';
 import { addDaysKey, deltaTone, fmtDelta, mskDateKey } from './format';
 import { ManagerTrainingHistory } from './ManagerTrainingHistory';
+import { TrainingTestsPeriod } from '../../tests/ui/TrainingTestsPeriod';
 
 const PERIODS = [30, 90, 180, 365] as const;
 const TH = 'whitespace-nowrap px-3 py-2 text-left text-[12px] font-medium text-[var(--color-text-muted)]';
@@ -74,6 +75,8 @@ export function EffectivenessView({ canPickManager, initialManager }: { canPickM
               <EffectTable title="По темам" first="Тема" rows={q.data.byTopic} />
               <MetricTable rows={q.data.byMetric} />
             </>)}
+
+      <TrainingTestsPeriod from={from} to={to} />
 
       <section className="flex min-w-0 flex-col gap-2">
         <h2 className="text-[15px] font-semibold">История обучений менеджера</h2>

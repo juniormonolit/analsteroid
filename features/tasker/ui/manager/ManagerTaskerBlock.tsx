@@ -11,6 +11,7 @@ import { hasPerm } from '@/lib/auth/perms';
 import type { SessionUser } from '@/lib/auth/session';
 import { TASKER_VERDICT_LABELS, type TaskerTask, type TaskerTasksResponse } from '../../types';
 import { ManagerTrainingHistory } from '../../trainings/ui/ManagerTrainingHistory';
+import { ManagerTestsList } from '../../tests/ui/ManagerTestsList';
 import { CreateTaskDrawer, type CreateTaskDrawerProps } from '../create/CreateTaskDrawer';
 import {
   BOARD_COLUMN_LABELS, TASK_KIND_LABELS, VERDICT_CLS, addDays, boardColumn, fmtD, fmtValue, isOverdue, shortName, taskExtras, todayMsk,
@@ -153,6 +154,7 @@ export function ManagerTaskerBlock({ managerId, managerName, department, period 
         <div className="flex min-w-0 flex-col gap-2">
           <h3 className="text-sm font-semibold text-[var(--color-text)]">Обучения</h3>
           <ManagerTrainingHistory managerId={Number(managerId)} compact />
+          <ManagerTestsList managerId={managerId} />
         </div>
       </div>
 
