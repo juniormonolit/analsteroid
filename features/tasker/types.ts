@@ -510,8 +510,11 @@ export interface TaskerTopicCatalogResponse {
     id: string; name: string; shortName: string | null; category: string | null; format: TaskerMetric['format'];
     /** Направление, если его можно вывести надёжно (уже заведённая тема / узлы диагностики); null — неизвестно. */
     higherIsBetter: boolean | null;
+    /** Уже заведена активной темой — её название (в каталоге имя другое: «Доля продажи повторных продаж, %» = тема
+     *  «Доля повторных продаж»). Форма не даёт создать дубль, а предлагает открыть существующую. */
+    existingTopic: string | null;
   }[];
-  productGroups: { id: string; name: string }[];
+  productGroups: { id: string; name: string; existingTopic: string | null; existingShare: string | null }[];
 }
 
 /** POST /api/tasker/templates/images (multipart `file`) → абсолютная ссылка на картинку. */

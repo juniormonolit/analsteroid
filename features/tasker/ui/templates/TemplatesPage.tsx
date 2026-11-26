@@ -229,7 +229,8 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
     },
     onError: e => setErr(e instanceof Error ? e.message : 'Не получилось'),
   });
-  const ready = topic ? !!label.trim() : kind === 'metric' ? !!metricId : !!pgId;
+  const pgDup = kind === 'product_group' && pickedPg ? (measure === 'share' ? pickedPg.existingShare : pickedPg.existingTopic) : null;
+  const ready = topic ? !!label.trim() : kind === 'metric' ? !!metricId && !picked?.existingTopic : !!pgId && !pgDup;
 
   return (
     <div className="flex min-w-0 flex-col gap-3 rounded-xl border border-[var(--color-accent)] bg-[var(--color-bg-surface)] p-3">
@@ -242,20 +243,30 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
       {isNew && kind === 'metric' && cat && (
         <div className={FIELD}>
           Показатель из каталога отчётов
-          <SearchSelect searchable options={cat.metrics.map(m => ({ value: m.id, label: m.name, hint: m.category }))} value={metricId}
+          <SearchSelect searchable options={cat.metrics.map(m => ({ value: m.id, label: m.name,
+            hint: m.existingTopic ? `уже есть: «${m.existingTopic}»` : m.category }))} value={metricId}
             onChange={v => {
               setMetricId(v);
               // Направление — дефолтом, если оно известно (уже заведённая тема / диагностика); поле можно поменять.
               const known = cat.metrics.find(m => m.id === v)?.higherIsBetter;
               if (known != null) setHigher(known ? 'up' : 'down');
             }} placeholder="Выберите показатель" ariaLabel="Показатель из каталога" className="w-full" />
+          {picked?.existingTopic && (
+            <p className="text-[13px] text-[var(--color-text)]">
+              Эта тема уже есть — «{picked.existingTopic}».{' '}
+              <button type="button" onClick={() => onDone(picked.id)} className="min-h-11 font-medium text-[var(--color-accent)] hover:underline">
+                Открыть её
+              </button>
+            </p>
+          )}
         </div>
       )}
       {isNew && kind === 'product_group' && cat && (
         <>
           <div className={FIELD}>
             Товарная группа (как в отчёте «По товарным группам»)
-            <SearchSelect searchable options={cat.productGroups.map(g => ({ value: g.id, label: g.name }))} value={pgId}
+            <SearchSelect searchable options={cat.productGroups.map(g => ({ value: g.id, label: g.name,
+              hint: [g.existingTopic && 'сумма уже есть', g.existingShare && 'доля уже есть'].filter(Boolean).join(', ') || undefined }))} value={pgId}
               onChange={setPgId} placeholder="Выберите группу" ariaLabel="Товарная группа" className="w-full" />
           </div>
           <div className={FIELD}>
@@ -263,6 +274,14 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
             <Segmented label="Замер товарной группы" value={measure} onChange={setMeasure}
               options={[{ value: 'amount', label: 'Сумма продаж группы' }, { value: 'share', label: 'Доля в его продажах' }]} />
           </div>
+          {pgDup && (
+            <p className="text-[13px] text-[var(--color-text)]">
+              Эта тема уже есть — «{pgDup}».{' '}
+              <button type="button" onClick={() => onDone(`pg_${pgId}_${measure}`)} className="min-h-11 font-medium text-[var(--color-accent)] hover:underline">
+                Открыть её
+              </button>
+            </p>
+          )}
         </>
       )}
       {topic && (

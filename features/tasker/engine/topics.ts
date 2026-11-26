@@ -68,6 +68,8 @@ export async function topicCatalog(): Promise<TaskerTopicCatalogResponse> {
       .then(r => r.rows).catch(() => [] as { id: number; name: string }[]),
     knownDirections(),
   ]);
+  const active = new Map((await systemDb().query<{ id: string; label: string }>(
+    'SELECT id, label FROM tasker_metrics WHERE active').then(r => r.rows).catch(() => [])).map(r => [r.id, r.label]));
   return {
     metrics: metrics
       .filter(m => m.isActive && !m.isHiddenInUi && !m.isTest)
@@ -75,8 +77,10 @@ export async function topicCatalog(): Promise<TaskerTopicCatalogResponse> {
       .map(m => ({
         id: m.id, name: m.nameRu, shortName: m.nameShortRu, category: m.category, format: formatOf(m),
         higherIsBetter: direction.get(m.id) ?? null,
+        existingTopic: active.get(m.id) ?? null,
       })),
-    productGroups: pg.map(g => ({ id: String(g.id), name: g.name })),
+    productGroups: pg.map(g => ({ id: String(g.id), name: g.name,
+      existingTopic: active.get(`pg_${g.id}_amount`) ?? null, existingShare: active.get(`pg_${g.id}_share`) ?? null })),
   };
 }
 
@@ -121,7 +125,7 @@ export async function createTopic(session: SessionUser, req: TaskerTopicSaveRequ
        WHERE NOT tasker_metrics.active`,
       [id, label, 'product', c.higherIsBetter ?? true, format, label.slice(0, 40), measure === 'amount',
         c.sortOrder ?? null, pgId, measure, session.login],
-    ).then(r => { if (!r.rowCount) throw new TaskerError('Такая тема уже есть'); });
+    ).then(r => { if (!r.rowCount) throw new TaskerError(`Эта тема уже есть в списке — «${label}»`); });
     return topicById(id);
   }
 
@@ -140,7 +144,11 @@ export async function createTopic(session: SessionUser, req: TaskerTopicSaveRequ
      WHERE NOT tasker_metrics.active`,
     [m.id, label, groupOfMetric(m, format), c.higherIsBetter ?? (await knownDirections()).get(m.id) ?? true, format, label.slice(0, 40), additiveOf(m),
       c.sortOrder ?? null, session.login],
-  ).then(r => { if (!r.rowCount) throw new TaskerError('Такая тема уже есть'); });
+  ).then(async r => {
+    if (r.rowCount) return;
+    const ex = (await loadMetricDefs()).find(x => x.id === m.id);
+    throw new TaskerError(`Этот показатель уже есть в списке тем — «${ex?.label ?? label}». Выберите его слева`);
+  });
   return topicById(m.id);
 }
 
