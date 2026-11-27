@@ -146,7 +146,7 @@ export async function scanAccount(sourceId: number, onProgress?: (stage: string)
     push({
       kind: 'deal_primary', entityId: id, title: d.TITLE?.trim() || `Сделка #${id}`, url: dealUrl(id),
       subtitle: join(name, fmtMoney(d.OPPORTUNITY, d.CURRENCY_ID), `создана ${fmtDate(d.DATE_CREATE) ?? '—'}`),
-      info: { funnelId: funnel, stageName: name ?? undefined, amount, qualified: byStage || byAmount, qualifyReason, brakAvailable: !!brakStage && stageId !== brakStage },
+      info: { funnelId: funnel, stageName: name ?? undefined, stageEvent: ref?.eventType ?? undefined, amount, qualified: byStage || byAmount, qualifyReason, brakAvailable: !!brakStage && stageId !== brakStage },
       meta: { stageId, funnelId: funnel, brakStage: brakStage ?? null, contactId: num(d.CONTACT_ID) || null, companyId: num(d.COMPANY_ID) || null },
     });
     dealKeyOf.set(id, `deal_primary:${id}`);
