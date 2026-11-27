@@ -3,7 +3,8 @@
 //  - раз в 15 минут — автозамер задач с наступившей контрольной датой и проверка задач по сделке к сроку (dealTasks.ts);
 //  - обучения (features/tasker/trainings/engine/measure.ts → trainingsTick): запись из задач, замер эффективности;
 //  - при старте и раз в 15 минут — прогрев снимков («Сейчас» карточек и снимок формы), warm.ts;
-//  - каждую минуту — календарь регулярных собраний: повтор несинхронизированных и перенос «скользящих».
+//  - каждую минуту — календарь регулярных собраний: повтор несинхронизированных и перенос «скользящих»;
+//  - каждую минуту — сообщения менеджерам о работе с ними: назначено / перенос / отмена / напоминание (managerNotify.ts, 302).
 // Один исполнитель на кластер — advisory lock на отдельном соединении.
 import { systemDb } from '@/lib/db/clients';
 import { drainAll } from './bitrix';
@@ -40,6 +41,12 @@ export async function taskerTick(): Promise<{ drained: number; measured: number;
       // Тесты (300): авто-назначение по обучениям + закрытие попыток с истёкшим временем (свой интервал внутри).
       const { testsTick } = await import('../tests/engine');
       await testsTick();
+      // Сообщения менеджерам (302): после записи на занятия из задач — чтобы «назначено» ушло уже с временем занятия.
+      const { reconcileWorkNotices } = await import('./managerNotify');
+      await reconcileWorkNotices().catch(e => {
+        const code = (e as { code?: string }).code;
+        if (code !== '42P01' && code !== '42703') console.warn('[tasker] уведомления менеджерам:', e instanceof Error ? e.message : e);
+      });
       return { drained: d.done, measured: m.measured + t.measured, failed: m.failed + t.failed };
     } finally {
       await client.query(`SELECT pg_advisory_unlock(hashtext('tasker_job'))`).catch(() => {});

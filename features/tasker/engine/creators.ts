@@ -11,11 +11,16 @@
 //   (scope 'all' — все РОПы компании, 'depts' — РОПы менеджеров его отделов) + все директора из
 //   настроек. Обычный РОП других РОПов не выбирает — «только себя или своего директора».
 // Сервер проверяет выбор тем же списком (createTasks), клиент лишь показывает его.
+//
+// Исполнитель «Практики» (собрание 26.11, ТЗ tz/2026-11-26_tasker.md п.1) — отдельное поле: по умолчанию РОП
+// выбранного менеджера; можно выбрать любого из списка постановщиков (себя, директора, для широких — РОПов)
+// плюс РОПов выбранных менеджеров всегда. executors / ropByManager — в том же ответе.
 import { analyticsDb } from '@/lib/db/clients';
 import type { SessionUser } from '@/lib/auth/session';
 import { canSeeManager, type SessionScope } from '@/lib/org/sessionScope';
 import { getEmployeeDirectory } from '@/lib/org/employeeDirectory';
 import type { TaskerCreatorOption, TaskerCreatorsResponse } from '../types';
+import { ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
 import { directorFor, type TaskerSettings } from './config';
 import { canOverrideLimits } from './create';
 
@@ -63,6 +68,18 @@ export async function creatorOptions(
   }
 
   const order = { self: 0, director: 1, rop: 2 } as const;
-  const creators = [...out.values()].sort((a, b) => order[a.role] - order[b.role] || a.name.localeCompare(b.name, 'ru'));
-  return { creators, selfId };
+  const sort = (xs: TaskerCreatorOption[]) => xs.sort((a, b) => order[a.role] - order[b.role] || a.name.localeCompare(b.name, 'ru'));
+  const creators = sort([...out.values()]);
+
+  // Исполнители: постановщики + РОПы выбранных менеджеров (обычному РОПу — свой РОП-коллега того же отдела тоже).
+  const ropByManager: Record<string, number | null> = {};
+  await Promise.all(managers.map(async id => {
+    const rop = await ropOfManager(id).catch(() => null);
+    ropByManager[id] = rop && /^\d+$/.test(rop) && dir.get(Number(rop))?.isActive !== false ? Number(rop) : null;
+  }));
+  for (const rop of Object.values(ropByManager)) {
+    if (rop) add(rop, 'rop', 'РОП менеджера');
+  }
+  const executors = sort([...out.values()]);
+  return { creators, selfId, executors, ropByManager };
 }

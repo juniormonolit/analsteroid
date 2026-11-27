@@ -37,6 +37,8 @@ export interface TaskerMetric {
   pgMeasure?: TaskerPgMeasure | null;
   /** false — тема в архиве: в форме не предлагается, старые задачи с ней живут. Нет — активна. */
   active?: boolean;
+  /** План разбора для РОПа (миграция 302, собрание 26.11 п.6) — уходит в описание задачи «Практика». */
+  practicePlan?: string | null;
 }
 
 /** Тема задачи (миграция 282): «metric» — показатель каталога отчётов, «product_group» — товарная группа.
@@ -368,6 +370,14 @@ export interface TaskerCreateRequest {
   /** Постановщик (Bitrix user id) — из GET /api/tasker/creators. Нет — сам нажавший. Не от себя → нажавший
    *  добавляется наблюдателем; в БД creator_* = выбранный, creator_user_id = кто нажал. */
   creatorBitrixId?: number | null;
+  /** «Практика»: исполнитель (Bitrix id) из executors GET /api/tasker/creators. Нет — РОП каждого менеджера
+   *  (не нашёлся — постановщик). Собрание 26.11, п.1. */
+  executorBitrixId?: number | null;
+  /** «Практика»: несколько дат/слотов за одну постановку (п.4) — по задаче на каждую дату и менеджера.
+   *  Заданы — поле slot игнорируется. */
+  slots?: { start: string }[] | null;
+  /** «Практика» без времени, только срок (п.5) — явная галочка; иначе время обязательно. */
+  noTime?: boolean;
 }
 
 export type TaskerWarningCode =
@@ -378,6 +388,9 @@ export type TaskerWarningCode =
   | 'not_enough_data'
   | 'bitrix_failed'
   | 'training_joined'
+  | 'training_auto'
+  | 'training_queue'
+  | 'time_conflict'
   | 'forbidden_manager'
   | 'no_snapshot';
 
@@ -495,6 +508,8 @@ export interface TaskerTopicSaveRequest {
   pgMeasure?: TaskerPgMeasure;
   /** Короткое название темы (по умолчанию — короткое имя метрики / имя группы). */
   label?: string;
+  /** План разбора для РОПа («Практика»); '' — убрать. */
+  practicePlan?: string | null;
   /** Игнорируется сервером: группа считается по категории метрики каталога (product — у товарной группы). */
   group?: TaskerMetricGroup;
   higherIsBetter?: boolean;
@@ -674,6 +689,10 @@ export interface TaskerCreatorsResponse {
   creators: TaskerCreatorOption[];
   /** Bitrix id самого пользователя (дефолт поля); null — аккаунт не связан с Битриксом. */
   selfId: number | null;
+  /** Исполнители «Практики» (п.1 собрания 26.11): постановщики + РОПы выбранных менеджеров. */
+  executors?: TaskerCreatorOption[];
+  /** РОП каждого выбранного менеджера (исполнитель по умолчанию); null — не нашли. */
+  ropByManager?: Record<string, number | null>;
 }
 
 // ── Проверка занятости (наложение времени при планировании) ─────────────────────────────
@@ -693,6 +712,22 @@ export interface TaskerBusyInterval {
 }
 
 /** POST /api/tasker/availability. Свои события при правке — в exclude (не конфликт сами с собой). */
+/** POST /api/tasker/busy — лента занятости формы «Практики» (собрание 26.11, п.3). */
+export interface TaskerBusyDaysRequest {
+  bitrixIds: number[];
+  /** YYYY-MM-DD (МСК) — первый день ленты. */
+  from: string;
+  /** Сколько календарных дней (1–10). */
+  days: number;
+}
+
+export interface TaskerBusyDaysResponse {
+  people: { id: number; name: string; busy: TaskerBusyInterval[] }[];
+  bitrixChecked: boolean;
+  from: string;
+  to: string;
+}
+
 export interface TaskerAvailabilityRequest {
   bitrixIds?: number[];
   /** Отделы целиком (uuid, с поддеревом) — для формы собрания. */

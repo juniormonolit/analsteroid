@@ -175,6 +175,7 @@ const SOURCE_GENERIC: Record<TaskerBusySource, string> = {
  */
 export async function checkAvailability(
   personIds: string[], slots: Slot[], exclude: AvailabilityExclude, canSeeTitle: (id: string) => boolean,
+  opts: { bitrix?: boolean } = {},
 ): Promise<TaskerAvailabilityResponse> {
   const people = [...new Set(personIds.filter(id => /^\d+$/.test(id)))];
   if (!people.length || !slots.length) return { busy: [], checkedCount: people.length, bitrixChecked: true };
@@ -184,7 +185,7 @@ export async function checkAvailability(
 
   const [mono, bitrix, dir] = await Promise.all([
     monolitikaBusy(want, from, to, exclude),
-    bitrixBusy(people, mskYmd(from), mskYmd(to)).then(m => ({ ok: true as const, m }), e => {
+    (opts.bitrix === false ? Promise.resolve(new Map<string, Busy[]>()) : bitrixBusy(people, mskYmd(from), mskYmd(to))).then(m => ({ ok: opts.bitrix !== false, m }), e => {
       console.warn('[tasker] calendar.accessibility.get:', e instanceof Error ? e.message : e);
       return { ok: false as const, m: new Map<string, Busy[]>() };
     }),
@@ -220,4 +221,70 @@ export async function checkAvailability(
   }
   busy.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   return { busy, checkedCount: people.length, bitrixChecked: bitrix.ok };
+}
+
+// ── Запрет пересечений (собрание 26.11, ТЗ tz/2026-11-26_tasker.md п.3) ─────
+
+/** Источники, которые ЗАПРЕЩАЮТ время: работа Задачника. Календарь Битрикса и собрания — только предупреждение. */
+export const HARD_SOURCES: ReadonlySet<TaskerBusySource> = new Set<TaskerBusySource>(['task', 'session', 'training']);
+
+const fmtMsk = (iso: string) => {
+  const d = new Date(Date.parse(iso) + 3 * 3600_000).toISOString();
+  return `${d.slice(8, 10)}.${d.slice(5, 7)} ${d.slice(11, 16)}`;
+};
+
+/**
+ * Жёсткие пересечения людей на слотах: задачи Задачника, сессии, занятия тренера (Монолитика, без Битрикса).
+ * Возвращает понятный текст «Новиков в 15:00–15:30 уже: Сессия · …» или null — свободны.
+ */
+export async function hardConflictMessage(
+  people: { id: string; role: string }[], slots: Slot[], exclude: AvailabilityExclude,
+): Promise<string | null> {
+  const ids = [...new Set(people.map(p => p.id).filter(id => /^\d+$/.test(id)))];
+  if (!ids.length || !slots.length) return null;
+  const res = await checkAvailability(ids, slots, exclude, () => true, { bitrix: false });
+  const parts: string[] = [];
+  for (const p of res.busy) {
+    const hits = p.conflicts.filter(c => HARD_SOURCES.has(c.source));
+    if (!hits.length) continue;
+    const role = people.find(x => x.id === String(p.id))?.role;
+    const what = [...new Set(hits.map(c => `${fmtMsk(c.start)}–${fmtMsk(c.end).slice(6)} ${c.title}`))].slice(0, 2).join('; ');
+    parts.push(`${role ? `${role} ` : ''}${p.name} уже занят: ${what}`);
+  }
+  return parts.length ? parts.join('. ') : null;
+}
+
+// ── Лента занятости (форма «Практики», п.3) ─────────────────────────────────
+
+export interface BusyDayPerson { id: number; name: string; busy: TaskerBusyInterval[] }
+
+/** Все интервалы занятости людей в окне [from, to) — Монолитика + (если ответил) календарь Битрикса. */
+export async function busyIntervals(
+  personIds: string[], from: number, to: number, canSeeTitle: (id: string) => boolean,
+): Promise<{ people: BusyDayPerson[]; bitrixChecked: boolean }> {
+  const people = [...new Set(personIds.filter(id => /^\d+$/.test(id)))];
+  if (!people.length) return { people: [], bitrixChecked: true };
+  const want = new Set(people);
+  const [mono, bitrix, dir] = await Promise.all([
+    monolitikaBusy(want, from, to, {}),
+    bitrixBusy(people, mskYmd(from), mskYmd(to)).then(m => ({ ok: true as const, m }), e => {
+      console.warn('[tasker] calendar.accessibility.get (лента):', e instanceof Error ? e.message : e);
+      return { ok: false as const, m: new Map<string, Busy[]>() };
+    }),
+    getEmployeeDirectory(),
+  ]);
+  const win: Slot = { start: from, end: to };
+  const out: BusyDayPerson[] = people.map(id => {
+    const own = mono.get(id) ?? [];
+    const ownKeys = new Set(own.map(b => `${b.start}|${b.end}`));
+    const titled = canSeeTitle(id);
+    const seen = new Set<string>();
+    const busy = [...own, ...(bitrix.m.get(id) ?? []).filter(b => !ownKeys.has(`${b.start}|${b.end}`))]
+      .filter(b => overlaps(win, { start: Date.parse(b.start), end: Date.parse(b.end) }))
+      .filter(b => { const k = `${b.start}|${b.end}|${b.title}`; if (seen.has(k)) return false; seen.add(k); return true; })
+      .map(b => ({ start: b.start, end: b.end, source: b.source, allDay: b.allDay, title: titled ? b.title : SOURCE_GENERIC[b.source] }))
+      .sort((a, b) => a.start.localeCompare(b.start));
+    return { id: Number(id), name: dir.get(Number(id))?.name ?? `#${id}`, busy };
+  });
+  return { people: out, bitrixChecked: bitrix.ok };
 }

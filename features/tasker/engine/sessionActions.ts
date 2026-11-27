@@ -13,7 +13,7 @@ import type { TaskerSessionPatchRequest, TaskerSessionPatchResponse } from '../t
 import { bxDate, loadSettings, TaskerError } from './config';
 import { drainTask, enqueue, type BxOp } from './bitrix';
 import { canManageSession, listSessions } from './repo';
-import { checkAvailability } from './availability';
+import { checkAvailability, hardConflictMessage } from './availability';
 import { invalidateLive } from './live';
 import { syncSessionCalendar } from './calendar';
 
@@ -49,6 +49,12 @@ export async function patchSession(
     const dur = b.durationMin === undefined || b.durationMin === null ? s.duration_min : Math.round(Number(b.durationMin));
     if (!Number.isFinite(dur) || dur < 5 || dur > 480) throw new TaskerError('Длительность — от 5 минут до 8 часов');
     const startIso = start.toISOString();
+    // Собрание 26.11, п.3: работа Задачника в это время у исполнителя или менеджеров сессии — отказ.
+    const mgrs = (await systemDb().query<{ m: string }>(
+      `SELECT DISTINCT manager_bitrix_id AS m FROM tasker_tasks WHERE session_id = $1 AND cancelled_at IS NULL`, [id])).rows.map(x => x.m);
+    const busyMsg = await hardConflictMessage([{ id: s.rop_bitrix_id, role: 'Исполнитель' }, ...mgrs.map(m => ({ id: m, role: 'Менеджер' }))],
+      [{ start: start.getTime(), end: start.getTime() + dur * 60_000 }], { sessionId: id });
+    if (busyMsg) throw new TaskerError(`Время занято — перенос не сохранён. ${busyMsg}`, 'bad_request', 409);
 
     const client = await systemDb().connect();
     let tasks: { id: string; duration_min: number; bitrix_task_id: string | null; sync_state: string; manager_bitrix_id: string }[] = [];

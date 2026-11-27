@@ -172,6 +172,14 @@ export async function updateTopic(session: SessionUser, id: string, req: TaskerT
       WHERE id = $1`,
     [id, c.label ?? null, null /* группа — только автоматически при создании */, c.higherIsBetter ?? null, null /* формат — только из каталога/замера при создании */, c.sortOrder ?? null, c.active ?? null, session.login],
   );
+  // План разбора для РОПа (302, собрание 26.11 п.6) — отдельно: без колонки остальное сохраняется.
+  if (req.practicePlan !== undefined) {
+    const plan = typeof req.practicePlan === 'string' ? req.practicePlan.trim().slice(0, 8000) : '';
+    await systemDb().query('UPDATE tasker_metrics SET practice_plan = $2 WHERE id = $1', [id, plan || null]).catch(e => {
+      if ((e as { code?: string })?.code === '42703') throw new TaskerError('План разбора появится после миграции 302');
+      throw e;
+    });
+  }
   return topicById(id);
 }
 

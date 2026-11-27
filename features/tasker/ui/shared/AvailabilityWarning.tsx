@@ -1,6 +1,7 @@
 'use client';
 // Предупреждение о наложении времени (POST /api/tasker/availability) — под полем времени в формах
-// Задачника: собрание, обучение, запись на обучение, слот сессии задачи. Не запрещает сохранить.
+// Задачника: собрание, обучение, запись на обучение, слот сессии задачи. Сам не запрещает; в форме задачи (hardBlock)
+// подсвечивает пересечение с работой Задачника — её сервер не примет (собрание 26.11, п.3).
 // Запрос — с задержкой 600 мс после последней правки (debounce) и кэшем React Query на минуту.
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -45,10 +46,12 @@ function span(c: { start: string; end: string; allDay?: boolean }, withDay: bool
  * Блок под полем времени. multiSlot — проверяются несколько дат (вхождения серии): у каждого конфликта
  * показываем день.
  */
-export function AvailabilityWarning({ req, multiSlot = false, className = '' }: {
+export function AvailabilityWarning({ req, multiSlot = false, className = '', hardBlock = false }: {
   req: TaskerAvailabilityRequest | null;
   multiSlot?: boolean;
   className?: string;
+  /** Форма задачи (собрание 26.11, п.3): работа Задачника (задача/сессия/занятие) в это время — сервер откажет. */
+  hardBlock?: boolean;
 }) {
   const q = useAvailability(req);
   if (!req) return null;
@@ -70,6 +73,7 @@ export function AvailabilityWarning({ req, multiSlot = false, className = '' }: 
     );
   }
 
+  const hard = hardBlock && d.busy.some(p => p.conflicts.some(c => c.source === 'task' || c.source === 'session' || c.source === 'training'));
   const first = (p: (typeof d.busy)[number]) => `${shortName(p.name)} — ${p.conflicts[0].title} ${span(p.conflicts[0], multiSlot)}`;
   const inline = d.busy.slice(0, 2).map(first).join('; ');
   return (
@@ -78,7 +82,9 @@ export function AvailabilityWarning({ req, multiSlot = false, className = '' }: 
         <AlertTriangle size={13} className="mt-px shrink-0 text-[var(--color-warning)]" aria-hidden />
         <span className="min-w-0 break-words">
           В это время {d.busy.length === 1 ? 'занят' : 'заняты'} <b>{d.busy.length} из {d.checkedCount}</b>: {inline}{d.busy.length > 2 ? ', …' : ''}.
-          {' '}Сохранить можно и так.{noBitrix}
+          {' '}{hard
+            ? <b className="text-[var(--color-negative)]">Это работа в Задачнике — в одно время две нельзя, сервер не поставит. Выберите свободное окно.</b>
+            : hardBlock ? 'Это календарь Битрикса — сохранить можно, решите сами.' : 'Сохранить можно и так.'}{noBitrix}
         </span>
       </div>
       <details className="mt-1">

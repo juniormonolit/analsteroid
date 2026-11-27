@@ -16,6 +16,7 @@ import {
 } from '../../types';
 import { TaskerTabs } from '../shared/TaskerPage';
 import { insertAt, renderTemplateBody } from './templateBody';
+import { NotifySettings } from './NotifySettings';
 import {
   TEMPLATES_FULL_KEY, TOPICS_KEY, createTemplate, createTopic, deleteTemplate, fetchTemplatesFull, fetchTopicCatalog, fetchTopics,
   reorderTemplates, reorderTopics, updateTemplate, updateTopic, uploadTemplateImage,
@@ -200,6 +201,7 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
   const [measure, setMeasure] = useState<TaskerPgMeasure>('amount');
   const [label, setLabel] = useState(topic?.label ?? '');
   const [higher, setHigher] = useState<'up' | 'down'>(topic?.higherIsBetter === false ? 'down' : 'up');
+  const [plan, setPlan] = useState(topic?.practicePlan ?? '');
   const [err, setErr] = useState<string | null>(null);
 
   const cat = catalogQ.data;
@@ -216,7 +218,7 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
         label: label.trim() || undefined,
         higherIsBetter: higher === 'up',
       };
-      if (topic) return updateTopic(topic.id, { ...common, label: label.trim() });
+      if (topic) return updateTopic(topic.id, { ...common, label: label.trim(), practicePlan: plan });
       return createTopic(kind === 'metric'
         ? { ...common, kind, metricId }
         : { ...common, kind, productGroupId: pgId, pgMeasure: measure });
@@ -303,6 +305,18 @@ function TopicForm({ topic, onDone, onCancel }: { topic?: TaskerMetric; onDone: 
             options={[{ value: 'up', label: 'Больше — лучше' }, { value: 'down', label: 'Меньше — лучше' }]} />
         </div>
       </div>
+      {topic && topic.kind !== 'deal' && (
+        <label className={FIELD}>
+          План разбора для РОПа («Практика»)
+          <textarea value={plan} onChange={e => setPlan(e.target.value)} rows={5} maxLength={8000}
+            placeholder={'Например:\n1. Открыть последние 10 первичных сделок {менеджер} за {период}, где клиент ушёл.\n2. Была ли отработка возражений и смета?\n3. Разобрать 2–3 звонка вместе.'}
+            className={`${INPUT} min-h-[120px] resize-y py-2 leading-snug`} aria-label="План разбора для РОПа" />
+          <span className="text-[11px] font-normal leading-snug text-[var(--color-text-muted)]">
+            Подставляется в описание каждой задачи «Практика» по этой теме вместе со ссылкой на статистику менеджера.
+            Можно писать {'{менеджер}'}, {'{период}'}, {'{метрика}'} — заменятся сами.
+          </span>
+        </label>
+      )}
       {effFormat && (
         <p className="text-xs text-[var(--color-text-muted)]">
           Формат значения: {FORMAT_LABEL[effFormat].toLowerCase()} — {kind === 'product_group' || topic?.kind === 'product_group' ? 'по способу замера' : 'из каталога отчётов'}.
@@ -443,6 +457,8 @@ export function TemplatesPage() {
             выбирает тему, вариант инструкции (первый — по умолчанию) и дописывает своё.
           </p>
         </details>
+
+        <NotifySettings />
 
         {loadErr && (
           <p className="rounded-lg bg-[var(--color-negative)]/10 p-3 text-sm text-[var(--color-negative)]">

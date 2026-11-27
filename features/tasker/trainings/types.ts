@@ -98,6 +98,9 @@ export interface TrainingEvent {
   slotId: number | null;
   /** Подпись отдела в сетке («Москва», «Руденко»). */
   departmentLabel: string | null;
+  /** «Утвердить состав и тему» (302, собрание 26.11 п.7): когда и кто утвердил — участникам ушло сообщение. */
+  approvedAt?: string | null;
+  approvedBy?: string | null;
   effect: TrainingEffectSummary;
   /** Событие в календаре тренера в Битриксе (фаза 1b). failed — «не синхронизировано», будет повтор. */
   calendar: {

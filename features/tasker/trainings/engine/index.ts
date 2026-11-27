@@ -64,7 +64,7 @@ interface EventRow {
   cancelled_at: Date | null; enrolled_count: string;
   calendar_event_id: string | null; calendar_sync_state: string; calendar_sync_error: string | null;
   metric_ids: string[]; measure_before_days: number; measure_after_days: number;
-  slot_id: string | null; department_label: string | null;
+  slot_id: string | null; department_label: string | null; approved_at: string | null; approved_by: string | null;
 }
 interface EnrollRow {
   event_id: string; manager_bitrix_user_id: string; enrolled_by_name: string | null;
@@ -101,6 +101,7 @@ export async function listEvents(actor: TrainingActor, p: ListEventsParams = {})
             e.metric_ids, e.measure_before_days, e.measure_after_days,
             -- колонки 281 через to_jsonb: до наката миграции расписание продолжает работать
             to_jsonb(e) ->> 'slot_id' AS slot_id, to_jsonb(e) ->> 'department_label' AS department_label,
+            to_jsonb(e) ->> 'approved_at' AS approved_at, to_jsonb(e) ->> 'approved_by' AS approved_by, -- 302
             (SELECT count(*) FROM tasker_training_enrollments x WHERE x.event_id = e.id) AS enrolled_count
        FROM tasker_training_events e
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
@@ -173,6 +174,8 @@ export async function listEvents(actor: TrainingActor, p: ListEventsParams = {})
     measureAfterDays: r.measure_after_days ?? DEFAULT_MEASURE_DAYS,
     slotId: r.slot_id ? Number(r.slot_id) : null,
     departmentLabel: r.department_label,
+    approvedAt: r.approved_at ? new Date(r.approved_at).toISOString() : null,
+    approvedBy: r.approved_by,
     effect: summarize(
       (byEvent.get(r.id) ?? []).map(a => ({
         attended: a.attended, outcome: a.outcome, resultsComplete: a.outcome !== null,
