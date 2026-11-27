@@ -72,13 +72,26 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
     for (const s of slots) used.add(s.weekday);
     for (const e of events) used.add(isoWeekday(mskDateKey(e.startsAt)));
     const cols = days.filter(d => used.has(isoWeekday(d)));
-    const times = new Set<string>(slots.map(s => s.startTime));
-    for (const e of events) times.add(mskTime(e.startsAt));
-    const rows = [...times].sort();
     const slotAt = new Map<string, TrainingSlot>(slots.map(s => [`${s.weekday}|${s.startTime}`, s]));
+    // Занятие не ровно по сетке («Теория» со своим временем РОПа — 11:10 при слоте 11:15) рисуется в ячейке слота,
+    // который оно перекрывает, с подписью своего времени, — а не отдельной строкой рядом с пустым слотом.
+    const rowOf = (e: TrainingEvent) => {
+      const day = mskDateKey(e.startsAt);
+      const own = mskTime(e.startsAt);
+      const wd = isoWeekday(day);
+      if (slotAt.has(`${wd}|${own}`)) return own;
+      const st = Date.parse(e.startsAt);
+      const en = st + e.durationMin * 60_000;
+      const hit = slots.find(s => s.weekday === wd && Date.parse(`${day}T${s.startTime}:00+03:00`) < en
+        && st < Date.parse(`${day}T${s.startTime}:00+03:00`) + s.durationMin * 60_000);
+      return hit ? hit.startTime : own;
+    };
+    const times = new Set<string>(slots.map(s => s.startTime));
+    for (const e of events) times.add(rowOf(e));
+    const rows = [...times].sort();
     const evAt = new Map<string, TrainingEvent[]>();
     for (const e of events) {
-      const k = `${mskDateKey(e.startsAt)}|${mskTime(e.startsAt)}`;
+      const k = `${mskDateKey(e.startsAt)}|${rowOf(e)}`;
       evAt.set(k, [...(evAt.get(k) ?? []), e]);
     }
     // Заголовок строки: длительность и подпись, общая для всех слотов этого времени (если одинакова).
@@ -125,7 +138,8 @@ export function WeekGrid({ canManage, canEnroll, onOpen, onCreate, onOpenQueue }
   const cell = (day: string, time: string, showMeta: boolean) => {
     const evs = grid.evAt.get(`${day}|${time}`) ?? [];
     const slot = grid.slotAt.get(`${isoWeekday(day)}|${time}`) ?? null;
-    if (evs.length) return evs.map(e => <EventCard key={e.id} e={e} compact={!showMeta} past={endOf(e.startsAt, e.durationMin).getTime() < nowMs} onOpen={() => onOpen(e.id)} />);
+    if (evs.length) return evs.map(e => <EventCard key={e.id} e={e} compact={!showMeta} past={endOf(e.startsAt, e.durationMin).getTime() < nowMs} onOpen={() => onOpen(e.id)}
+      offTime={mskTime(e.startsAt) !== time ? `${mskTime(e.startsAt)}–${mskTime(endOf(e.startsAt, e.durationMin))}` : null} />);
     if (!slot) return null;
     const past = startMsOf(day, time) <= nowMs;
     const closed = past ? [] : closuresAt(closures, startMsOf(day, time), startMsOf(day, time) + slot.durationMin * 60_000);
@@ -391,7 +405,7 @@ const SLOT_COL = 128;
 const DAY_MIN = 150;
 
 /** compact — ячейка таблицы: название без разрыва слов (2 строки + «…», полное — в title), одна фамилия «+N». */
-function EventCard({ e, past, compact, onOpen }: { e: TrainingEvent; past: boolean; compact?: boolean; onOpen: () => void }) {
+function EventCard({ e, past, compact, onOpen, offTime }: { e: TrainingEvent; past: boolean; compact?: boolean; onOpen: () => void; offTime?: string | null }) {
   const names = e.attendees.map(a => surname(a.manager.name));
   const shown = names.slice(0, compact ? 1 : 3);
   const more = e.enrolledCount - shown.length;
@@ -402,6 +416,7 @@ function EventCard({ e, past, compact, onOpen }: { e: TrainingEvent; past: boole
     <button type="button" onClick={onOpen} title={[e.title, e.departmentLabel, names.join(', ')].filter(Boolean).join('\n')}
       className={`flex w-full min-w-0 flex-col gap-0.5 overflow-hidden rounded-lg border border-[var(--color-border)] border-l-[3px] bg-[var(--color-bg)] px-2 py-1.5 text-left shadow-sm hover:shadow ${past ? 'border-l-[var(--color-text-muted)] opacity-75' : small ? 'border-l-[var(--color-warning)]' : 'border-l-[var(--color-accent)]'}`}>
       {/* Без break-words: слово не рвётся по слогам; не влезает — обрезается многоточием строки (полное — в title). */}
+      {offTime && <span title="Время занятия не совпадает со слотом" className="min-w-0 truncate text-[11.5px] font-medium tabular-nums text-[var(--color-warning)]">{offTime}</span>}
       <span className="line-clamp-2 min-w-0 text-[12.5px] font-semibold leading-snug [hyphens:none] [overflow-wrap:normal]">{e.title}</span>
       {e.departmentLabel && <span className="min-w-0 truncate text-[11.5px] text-[var(--color-text-secondary)]">{e.departmentLabel}</span>}
       <span className={`inline-flex min-w-0 items-center gap-1 whitespace-nowrap text-[11.5px] tabular-nums ${full ? 'text-[var(--color-negative)]' : 'text-[var(--color-text-secondary)]'}`}>
