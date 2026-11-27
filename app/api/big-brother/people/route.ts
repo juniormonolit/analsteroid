@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
       people: people.map(p => {
         const d = byId.get(p.id);
         return {
-          id: p.id, name: p.name, role: p.role, departmentId: p.departmentId, departmentName: p.departmentName, ropName: p.ropName,
+          id: p.id, name: p.name, role: p.role, departmentId: p.departmentId, departmentName: p.departmentName, ropId: p.ropId, ropName: p.ropName,
           day: d ? { inWork: d.inWork, monoMinutes: d.monoMinutes, buckets: d.buckets, firstSignalAt: d.firstSignalAt, lastSignalAt: d.lastSignalAt, counts: d.counts } : null,
         };
       }),

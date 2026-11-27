@@ -27,6 +27,7 @@ function PeopleList({ date, onDate, onOpen }: { date: string; onDate: (d: string
   const [dept, setDept] = useUrlState('dept', stringParam(''));
   const [role, setRole] = useUrlState('role', stringParam(''));
   const [status, setStatus] = useUrlState('status', stringParam(''));
+  const [team, setTeam] = useUrlState('team', stringParam(''));
 
   const { data, error, isLoading, isFetching } = useQuery<PeopleResponse, Error>({
     queryKey: ['big-brother-people', date],
@@ -46,14 +47,22 @@ function PeopleList({ date, onDate, onOpen }: { date: string; onDate: (d: string
     return [...m].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label, 'ru'));
   }, [data]);
 
+  // «Команда РОПа» (собрание 26.11): сам РОП и все, у кого он РОП по оргструктуре.
+  const teamOpts = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of data?.people ?? []) if (p.ropId) m.set(p.ropId, p.ropName ?? data?.people.find(x => x.id === p.ropId)?.name ?? `#${p.ropId}`);
+    return [...m].map(([value, name]) => ({ value, label: `Команда: ${name}` })).sort((a, b) => a.label.localeCompare(b.label, 'ru'));
+  }, [data]);
+
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return (data?.people ?? []).filter(p => (!dept || p.departmentId === dept) && (!role || p.role === role)
+      && (!team || p.id === team || p.ropId === team)
       && (!status || (status === 'in' ? p.day?.inWork : !p.day?.inWork))
       && (!needle || `${p.name} ${p.departmentName ?? ''} ${p.ropName ?? ''}`.toLowerCase().includes(needle)))
       .sort((a, b) => Number(!!b.day?.inWork) - Number(!!a.day?.inWork) || (b.day?.buckets ?? 0) - (a.day?.buckets ?? 0)
         || a.name.localeCompare(b.name, 'ru'));
-  }, [data, q, dept, role, status]);
+  }, [data, q, dept, role, status, team]);
   const inWork = (data?.people ?? []).filter(p => p.day?.inWork).length;
 
   return (
@@ -63,6 +72,7 @@ function PeopleList({ date, onDate, onOpen }: { date: string; onDate: (d: string
         <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск: сотрудник, отдел, РОП"
           className="min-h-11 w-full min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-base text-[var(--color-text)] sm:w-64 sm:text-sm" />
         <SearchSelect ariaLabel="Отдел" options={deptOpts} value={dept} onChange={setDept} allLabel="Все отделы" searchable className="min-h-11 max-w-full" />
+        <SearchSelect ariaLabel="Команда РОПа" options={teamOpts} value={team} onChange={setTeam} allLabel="Все команды" searchable className="min-h-11 max-w-full" />
         <SearchSelect ariaLabel="Роль" options={ROLE_OPTS} value={role} onChange={setRole} allLabel="Все роли" className="min-h-11 max-w-full" />
         <SearchSelect ariaLabel="Статус дня" options={STATUS_OPTS} value={status} onChange={setStatus} allLabel="Все" className="min-h-11 max-w-full" />
       </div>

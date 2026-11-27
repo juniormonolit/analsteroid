@@ -53,10 +53,13 @@ export interface DeptMetrics {
   planPct: number | null;
   /** CR Сделка → Продажа (все), доля. */
   cr: number | null;
+  /** CR Сделка → Бронь (все) = Σ reservations_count / Σ deals_count, доля (итерация 27.11, «Месяц по РОПам»). */
+  crReserve: number | null;
   /** Средний чек (все продажи), ₽. */
   avgCheck: number | null;
   salesCount: number;
   dealsCount: number;
+  reservationsCount: number;
 }
 
 export interface RopSubordinate {
@@ -186,5 +189,111 @@ export interface RopLagResponse {
   /** Пирсон по всем точкам; null — точек < 5. */
   r: number | null;
   rops: number;
+  notes: string[];
+}
+
+// ── «День РОПа» и «Месяц по РОПам» (собрание 26.11, ТЗ tz/2026-11-26_big-brother.md) ─────────────────────────
+
+/** Вид события дня РОПа. */
+export type RopDayKind =
+  | 'task_set'      // поставил задачу (любой из трёх сервисов, через Монолитику или прямо в Битриксе)
+  | 'training'      // отправил на обучение — задача Задачника «Теория»
+  | 'task_done'     // закрыл задачу (свою или ту, где он исполнитель)
+  | 'task_accept'   // проверил и принял: закрыл задачу, которую ставил сам, / приёмка в канбане
+  | 'task_return'   // вернул на доработку (канбан повторки / больших)
+  | 'meeting'       // разбор: сессия Задачника или «Практика» один на один
+  | 'kanban'        // прочие действия в канбанах повторки и больших
+  | 'calls';        // звонки за день (одна строка на день)
+
+export const ROP_DAY_KIND_LABEL: Record<RopDayKind, string> = {
+  task_set: 'поставил', training: 'на обучение', task_done: 'закрыл', task_accept: 'проверил', task_return: 'вернул',
+  meeting: 'разбор', kanban: 'канбан', calls: 'звонки',
+};
+
+export interface RopDayLink { label: string; href: string }
+
+export interface RopDayItem {
+  /** Ключ для React и дедупликации. */
+  key: string;
+  at: string;
+  kind: RopDayKind;
+  /** «Поставил задачу», «Принял задачу в канбане повторки», «Разбор: Конверсия в бронь» … */
+  title: string;
+  /** Название задачи / тема / подробности. */
+  detail: string | null;
+  service: RopService | null;
+  via: 'mono' | 'direct' | null;
+  /** Кому / с кем. */
+  who: string | null;
+  /** Ссылки на объект: задача Битрикса, сделка, лента человека. Пусто — объекта нет (см. notes). */
+  links: RopDayLink[];
+}
+
+export interface RopDaySummary {
+  set: number;
+  training: number;
+  done: number;
+  accepted: number;
+  returned: number;
+  meetings: number;
+  meetingMin: number;
+  kanban: number;
+  calls: number;
+  callsReached: number;
+  callMin: number;
+}
+
+export interface RopDayPerson {
+  id: string;
+  name: string;
+  /** РОП / директор (по оргструктуре и ролям — как на «Людях»). */
+  role: string;
+  deptNames: string[];
+  teamSize: number;
+  summary: RopDaySummary;
+  firstAt: string | null;
+  lastAt: string | null;
+}
+
+export interface RopDayResponse {
+  date: string;
+  generatedAt: string;
+  /** Все руководители за дату — для списка и выбора. */
+  rops: RopDayPerson[];
+  /** Выбранный руководитель (?id=) — с лентой событий. */
+  detail: { person: RopDayPerson; items: RopDayItem[] } | null;
+  /** Источники, которые не прочитались. */
+  failed: string[];
+  notes: string[];
+}
+
+export interface RopMonthRow {
+  id: string;
+  name: string;
+  deptNames: string[];
+  subordinates: number;
+  // действия
+  tasks: number;
+  tasksPerSub: number | null;
+  coverage: number | null;
+  /** Разборы: сессии Задачника со слотом в периоде (до «сейчас») + «Практики» один на один. */
+  meetings: number;
+  /** Из них отмечено «Провёл» (tasker_sessions.held_at). */
+  meetingsHeld: number;
+  /** Отправлено на обучение — задачи «Теория». */
+  training: number;
+  /** Проверено (как в рейтинге): закрыл свои задачи сам + приёмки в канбане повторки. */
+  accepted: number;
+  returned: number;
+  // результат команды: сейчас и прошлый такой же период
+  dept: DeptMetrics | null;
+  prev: DeptMetrics | null;
+}
+
+export interface RopMonthResponse {
+  period: BbPeriod;
+  prevPeriod: BbPeriod;
+  generatedAt: string;
+  rows: RopMonthRow[];
   notes: string[];
 }

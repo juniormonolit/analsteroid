@@ -10,6 +10,8 @@ import type { RopRatingResponse, RopRow, RopSubordinate } from '../../engine/rop
 import { stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { PeriodBar, usePeriod } from './PeriodBar';
 import { AttentionView, LagView, ReportToTaskView, RhythmView } from './RopContextViews';
+import { RopDayView } from './RopDayView';
+import { RopMonthView } from './RopMonthView';
 import { RopScatter } from './RopScatter';
 import { fmtDate, fmtInt, fmtMoney, fmtOne, fmtPct } from './format';
 
@@ -165,9 +167,12 @@ function RatingView() {
   );
 }
 
-// Вкладки: рейтинг + контекст рядом с ним (не баллы). flex-wrap вместо горизонтальной ленты (CLAUDE.md, правило 12).
+// Вкладки (flex-wrap вместо горизонтальной ленты, CLAUDE.md, правило 12). Собрание 26.11: первым — «День РОПа» (что сделал
+// РОП X сегодня, два клика), затем «Месяц по РОПам» (действия × результат команды); бывший «Рейтинг» — сводка по задачам —
+// убран с первого экрана в раскрывашку «Месяца». Старые ссылки ?view=rating открывают «Месяц».
 const VIEWS = [
-  { key: 'rating', label: 'Рейтинг' },
+  { key: 'day', label: 'День РОПа' },
+  { key: 'month', label: 'Месяц по РОПам' },
   { key: 'report-task', label: 'Отчёт → задача' },
   { key: 'attention', label: 'Внимание' },
   { key: 'rhythm', label: 'Ритм' },
@@ -175,13 +180,13 @@ const VIEWS = [
 ] as const;
 
 export function RopRatingPage() {
-  const [view, setView] = useUrlState('view', stringParam('rating'));
-  const cur = VIEWS.some(v => v.key === view) ? view : 'rating';
+  const [view, setView] = useUrlState('view', stringParam('day'));
+  const cur = view === 'rating' ? 'month' : VIEWS.some(v => v.key === view) ? view : 'day';
   return (
     <div className="flex min-w-0 flex-col gap-3 px-4 pb-6 pt-3 sm:px-6">
       <div role="tablist" aria-label="Вид" className="flex min-w-0 flex-wrap gap-1 rounded-lg bg-[var(--color-bg-surface)] p-0.5 sm:self-start">
         {VIEWS.map(v => (
-          <button key={v.key} type="button" role="tab" aria-selected={cur === v.key} onClick={() => setView(v.key === 'rating' ? '' : v.key)}
+          <button key={v.key} type="button" role="tab" aria-selected={cur === v.key} onClick={() => setView(v.key === 'day' ? '' : v.key)}
             className={`min-h-11 rounded-md px-3 text-sm ${cur === v.key ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
             {v.label}
           </button>
@@ -189,8 +194,9 @@ export function RopRatingPage() {
       </div>
       {cur === 'lag'
         ? <p className="text-xs text-[var(--color-text-muted)]">Последние 18 завершённых недель — период вверху здесь не действует.</p>
-        : <PeriodBar />}
-      {cur === 'rating' && <RatingView />}
+        : cur !== 'day' && <PeriodBar />}
+      {cur === 'day' && <RopDayView />}
+      {cur === 'month' && <RopMonthView details={<RatingView />} />}
       {cur === 'report-task' && <ReportToTaskView />}
       {cur === 'attention' && <AttentionView />}
       {cur === 'rhythm' && <RhythmView />}
