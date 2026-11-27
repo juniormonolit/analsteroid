@@ -123,7 +123,7 @@ export function StepPrimary({ ctx }: { ctx: WizardCtx }) {
         <>
           <div className="mb-3"><SearchBox value={q} onChange={v => { setQ(v); setLimit(PAGE); }} placeholder="Сделка, стадия или №" /></div>
           <div className={card} tabIndex={0} onKeyDown={onKeyDown} aria-label="Сладкая первичка" role="group">
-            <DealHeader grid={DEAL_GRID_Q} cols={['Сделка', 'Стадия', 'Сумма', 'Почему', 'Кому']} />
+            <DealHeader grid={DEAL_GRID_Q} cols={['Сделка и стадия', 'Сумма', 'Почему', 'Кому']} />
             <ul className="divide-y divide-[var(--color-border)]">
               {visible.map(it => (
                 <DealRow key={it.key} item={it} grid={DEAL_GRID_Q} focused={sel.focus === it.key} selected={sel.selected.has(it.key)}

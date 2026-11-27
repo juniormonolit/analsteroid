@@ -121,7 +121,7 @@ export function StepBrak({ ctx }: { ctx: WizardCtx }) {
         <>
           <div className="mb-3"><SearchBox value={q} onChange={setQ} placeholder="Сделка, стадия или №" /></div>
           <div className={card} tabIndex={0} onKeyDown={onKeyDown} aria-label="Оставшаяся первичка" role="group">
-            <DealHeader grid={DEAL_GRID_N} cols={['Сделка', 'Стадия', 'Сумма', 'Что делаем']} />
+            <DealHeader grid={DEAL_GRID_N} cols={['Сделка и стадия', 'Сумма', 'Что делаем']} />
             {order.map((g, gi) => groups[g].length === 0 ? null : (
               <div key={g} className={gi ? 'border-t border-[var(--color-border)]' : ''}>
                 <button type="button" onClick={() => setOpen(o => ({ ...o, [g]: !o[g] }))} aria-expanded={open[g]}

@@ -155,6 +155,8 @@ export interface DismissalPlan {
 export interface DismissalItemInfo {
   funnelId?: number;
   stageName?: string;
+  /** deal_primary: event_type стадии из sa.stages (sold = продано, ещё не отгружено). Нет в старых черновиках. */
+  stageEvent?: string;
   amount?: number | null;
   /** deal_primary: проходит ли критерий «бронь+ или чек ≥ PRIMARY_MIN_AMOUNT» и почему */
   qualified?: boolean;
