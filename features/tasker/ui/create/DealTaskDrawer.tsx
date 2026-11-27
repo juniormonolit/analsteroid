@@ -8,6 +8,8 @@ import { TASKER_DEAL_TOPIC_ID, type TaskerCreateResponse, type TaskerDealSnapsho
 import { createDealTasks, fetchCreators, fetchDealPreview, fetchTemplates, TaskerApiError } from './api';
 import { Banner } from './CreateTaskDrawer';
 import { renderTemplateBody, templateToBitrix } from '../templates/templateBody';
+import { DeadlineField, mskInputToIso, quickDeadline } from '@/features/big-deals-kanban/ui/DeadlineField';
+import { useStoredDraft } from '@/lib/hooks/useStoredDraft';
 
 /**
  * Форма Задачника в режиме «Сделка» (миграция 289, TASKER_SPEC.md «Задачи по сделкам»): кнопка в строке сделки
@@ -43,9 +45,6 @@ function Field({ label, hint, children }: { label: string; hint?: React.ReactNod
   );
 }
 
-const pad = (n: number) => String(n).padStart(2, '0');
-const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const plusDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
 const money = (v: number | null) => (v === null ? '—' : `${Math.round(v).toLocaleString('ru-RU')} ₽`);
 const dmy = (s: string | null) => (s ? new Date(s).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—');
 
@@ -113,7 +112,6 @@ function DealTaskForm({ onClose, dealIds, onCreated }: DealTaskDrawerProps) {
     })),
     [creatorsQ.data],
   );
-  const [creatorId, setCreatorId] = useState('');
 
   const templatesQ = useQuery({
     queryKey: ['tasker', 'templates', TASKER_DEAL_TOPIC_ID],
@@ -121,25 +119,35 @@ function DealTaskForm({ onClose, dealIds, onCreated }: DealTaskDrawerProps) {
     staleTime: 5 * 60_000,
   });
   const templates = useMemo(() => templatesQ.data?.templates ?? [], [templatesQ.data]);
-  const [templateChoice, setTemplateChoice] = useState('');
+  // Черновик (текст, шаблон, постановщик, срок) — в localStorage по сделкам: переживает закрытие шторки и
+  // перезагрузку вкладки (ТЗ канбана больших 26.11, п.1). Чистится постановкой задачи.
+  const [draft, setDraft, clearDraft] = useStoredDraft(`tasker-deal:${dealIds.join(',')}`,
+    { extra: '', templateChoice: '', creatorId: '', deadline: quickDeadline(0) },
+    d => !d.extra.trim() && !d.templateChoice && !d.creatorId);
+  const { extra, templateChoice, creatorId, deadline } = draft;
+  const setExtra = (v: string) => setDraft(d => ({ ...d, extra: v }));
+  const setTemplateChoice = (v: string) => setDraft(d => ({ ...d, templateChoice: v }));
+  const setCreatorId = (v: string) => setDraft(d => ({ ...d, creatorId: v }));
+  const setDeadline = (v: string) => setDraft(d => ({ ...d, deadline: v }));
   const [templateOpen, setTemplateOpen] = useState(false);
-  const [extra, setExtra] = useState('');
   const template = templateChoice === 'none' ? null
     : templates.find(t => String(t.id) === templateChoice) ?? (templateChoice === '' ? templates[0] ?? null : null);
   const body = [template ? templateToBitrix(template.body) : '', extra.trim()].filter(Boolean).join('\n\n');
 
-  const today = ymd(new Date());
-  const [deadline, setDeadline] = useState(plusDays(2));
+  // Срок — день и время по Москве, как «Назначить» в канбане больших (собрание 26.11: «сегодня через 10 минут» —
+  // «и здесь нет времени»). По умолчанию «Сегодня», через час.
+  const deadlineIso = mskInputToIso(deadline);
+  const deadlinePast = !!deadlineIso && Date.parse(deadlineIso) < Date.now();
 
   const [result, setResult] = useState<TaskerCreateResponse | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const mutation = useMutation({
     mutationFn: () => createDealTasks({
-      dealIds: ok.map(d => d.dealId), body, templateId: template?.id ?? null, deadline,
+      dealIds: ok.map(d => d.dealId), body, templateId: template?.id ?? null, deadline: deadlineIso ?? '',
       creatorBitrixId: creatorId ? Number(creatorId) : null,
     }),
     onMutate: () => setSubmitError(null),
-    onSuccess: res => { setResult(res); if (res.created.length) onCreated?.(res); },
+    onSuccess: res => { setResult(res); if (res.created.length) { clearDraft(); onCreated?.(res); } },
     onError: (e: unknown) => setSubmitError(e instanceof TaskerApiError && e.code === 'not_configured'
       ? e.message
       : e instanceof Error ? e.message : 'Не удалось поставить задачу'),
@@ -151,6 +159,7 @@ function DealTaskForm({ onClose, dealIds, onCreated }: DealTaskDrawerProps) {
   if (!ok.length) problems.push('нет сделок, по которым можно поставить задачу');
   if (!body.trim()) problems.push('напишите, что сделать');
   if (!deadline) problems.push('укажите срок');
+  else if (deadlinePast) problems.push('срок уже прошёл');
   const canSubmit = problems.length === 0 && !mutation.isPending && !previewQ.isFetching;
 
   return (
@@ -203,7 +212,7 @@ function DealTaskForm({ onClose, dealIds, onCreated }: DealTaskDrawerProps) {
         </Field>
 
         <Field label="Срок" hint="К сроку Задачник сам проверит сделку: сменила стадию, продана, проиграна или без движения — итог придёт комментарием в задачу">
-          <input type="date" value={deadline} min={today} onChange={e => setDeadline(e.target.value)} className={`${INPUT} sm:max-w-[200px]`} />
+          <DeadlineField label="День и время" value={deadline} onChange={setDeadline} />
         </Field>
 
         {submitError && <Banner tone="error">{submitError}</Banner>}

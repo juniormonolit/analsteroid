@@ -16,7 +16,6 @@ import { plural } from './format';
 
 const POLL_MS = 10_000;
 const POLL_LIMIT_MS = 10 * 60_000;
-const OPEN_BY_DEFAULT = 3;
 
 async function getJson<T>(url: string): Promise<T> {
   const r = await apiFetch(url);
@@ -137,11 +136,13 @@ export function CallsTab({ taskId, contactId, companyId, mock }: { taskId: numbe
   });
   const calls = useMemo(() => list.data?.calls ?? [], [list.data]);
 
-  // Развёрнуты по умолчанию последние 3 с текстом; клик переключает (храним отличия от умолчания).
-  const defaultOpen = useMemo(() => new Set(calls.filter(c => c.hasText).slice(0, OPEN_BY_DEFAULT).map(c => c.id)), [calls]);
-  const [toggled, setToggled] = useState<Set<string>>(new Set());
-  const isOpen = (id: string) => defaultOpen.has(id) !== toggled.has(id);
-  const toggle = (id: string) => setToggled(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  // Все свёрнуты в строку (собрание 26.11: «звонки свернуть»; раньше первые 3 с текстом были развёрнуты и
+  // уталкивали список); клик — развернуть один, «Развернуть все» — все с текстом.
+  const [opened, setOpened] = useState<Set<string>>(new Set());
+  const isOpen = (id: string) => opened.has(id);
+  const toggle = (id: string) => setOpened(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const withText = calls.filter(c => c.hasText);
+  const allOpen = withText.length > 0 && withText.every(c => opened.has(c.id));
 
   const days = useMemo(() => {
     const out: { key: string; title: string; items: CallListItem[] }[] = [];
@@ -228,7 +229,13 @@ export function CallsTab({ taskId, contactId, companyId, mock }: { taskId: numbe
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 text-[13px] text-[var(--color-text-muted)]">
-        <span>{calls.length} {plural(calls.length, 'звонок', 'звонка', 'звонков')} · с текстом {calls.filter(c => c.hasText).length}</span>
+        <span>{calls.length} {plural(calls.length, 'звонок', 'звонка', 'звонков')} · с текстом {withText.length}</span>
+        {withText.length > 0 && (
+          <button type="button" onClick={() => setOpened(allOpen ? new Set() : new Set(withText.map(c => c.id)))} aria-pressed={allOpen}
+            className="flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-[13px] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] sm:min-h-9">
+            <ChevronDown size={15} className={`transition-transform ${allOpen ? 'rotate-180' : ''}`} /> {allOpen ? 'Свернуть все' : 'Развернуть все'}
+          </button>
+        )}
         {job ? (
           <span className="flex min-h-11 items-center gap-2 text-[var(--color-text)]">
             <Loader2 size={15} className="animate-spin" /> Расшифровываю {pendingN} {plural(pendingN, 'звонок', 'звонка', 'звонков')}…
@@ -248,7 +255,7 @@ export function CallsTab({ taskId, contactId, companyId, mock }: { taskId: numbe
           <h4 className="sticky top-0 z-[1] bg-[var(--color-bg-surface,var(--color-bg))] py-1 text-[12px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">{d.title}</h4>
           <div className="flex flex-col divide-y divide-[var(--color-border)]">
             {d.items.map(c => {
-              const opened = c.hasText && isOpen(c.id);
+              const open = c.hasText && isOpen(c.id);
               const Icon = c.result !== 'completed' ? PhoneMissed : c.direction === 'inbound' ? PhoneIncoming : c.direction === 'outbound' ? PhoneOutgoing : Phone;
               const head = (
                 <>
@@ -266,15 +273,15 @@ export function CallsTab({ taskId, contactId, companyId, mock }: { taskId: numbe
               return (
                 <div key={c.id} className="min-w-0 py-1">
                   {c.hasText ? (
-                    <button type="button" aria-expanded={opened} onClick={() => toggle(c.id)}
+                    <button type="button" aria-expanded={open} onClick={() => toggle(c.id)}
                       className="flex min-h-11 w-full min-w-0 items-center gap-2 text-left text-[14px]">
                       {head}
-                      <ChevronDown size={16} className={`shrink-0 transition-transform ${opened ? 'rotate-180' : ''}`} />
+                      <ChevronDown size={16} className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
                     </button>
                   ) : (
                     <div className="flex min-h-11 w-full min-w-0 items-center gap-2 text-[14px]">{head}</div>
                   )}
-                  {opened && <div className="pb-2"><Dialogue call={c} /></div>}
+                  {open && <div className="pb-2"><Dialogue call={c} /></div>}
                 </div>
               );
             })}

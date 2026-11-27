@@ -4,6 +4,7 @@
 // вернуть на доработку (задача ждёт контроля; текст необязателен, есть шаблоны вопросов), «Не продано → завершить» (сразу в «проверено»). POST /api/big-deals-kanban/action.
 // Закрытие задачи (перенос в AUTO_COMPLETE_COLUMNS, «Не продано → завершить») — только через ConfirmCloseModal.
 import { useState } from 'react';
+import { useStoredDraft } from '@/lib/hooks/useStoredDraft';
 import { MoreHorizontal } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Popover } from '@/components/ui/Popover';
@@ -21,8 +22,16 @@ type Mode = null | 'reassign' | 'return' | 'accept' | 'approve' | 'renew' | 'dea
 /** Ждёт подтверждения закрытия: перенос в закрывающую колонку или «Не продано → завершить». */
 type PendingClose = null | { type: 'move'; column: BigColumnKey } | { type: 'complete' };
 
-const btn = 'inline-flex min-h-11 items-center justify-center rounded-md border border-[var(--color-border)] px-3 text-[13px] hover:bg-[var(--color-bg-hover)] disabled:opacity-50';
-const primary = 'inline-flex min-h-11 items-center justify-center rounded-md bg-[var(--color-accent)] px-4 text-[13px] font-medium text-white disabled:opacity-50';
+// Кнопки действий заметнее (собрание 26.11: «кнопочки выделить» — серые рамки терялись на фоне описания):
+// второстепенные — акцентная рамка и мягкая заливка, первичное — сплошная заливка с тенью.
+const btn = 'inline-flex min-h-11 items-center justify-center rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-3.5 text-[13px] font-medium text-[var(--color-accent)] hover:brightness-95 disabled:opacity-50';
+const primary = 'inline-flex min-h-11 items-center justify-center rounded-lg bg-[var(--color-accent)] px-4 text-[13px] font-semibold text-white shadow-sm hover:brightness-110 disabled:opacity-50';
+type Draft = { mode: Mode; manager: string; tz: string; comment: string; deadline: string };
+const EMPTY_DRAFT: Draft = { mode: null, manager: '', tz: '', comment: '', deadline: '' };
+/** Пусто — нечего хранить: ни текста, ни срока. Открытая форма без текста и выбранный менеджер — не черновик. */
+const isEmptyDraft = (d: Draft) => !d.tz.trim() && !d.comment.trim() && !d.deadline;
+/** Метка «есть черновик» на кнопке действия. */
+const DraftDot = () => <span className="ml-1.5 h-2 w-2 shrink-0 rounded-full bg-[var(--color-warning)]" title="Есть несохранённый черновик" aria-label="есть черновик" />;
 const input = 'w-full min-w-0 rounded-md border border-[var(--color-border)] bg-transparent px-2.5 py-2 text-base sm:text-sm';
 
 export function TaskActions({ card, managers, onChanged, questions, mock = false }: {
@@ -31,14 +40,20 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
   questions?: string[];
   mock?: boolean;
 }) {
-  const [mode, setMode] = useState<Mode>(null);
+  // Черновик формы (открытая форма, менеджер, ТЗ, комментарий, срок) — в localStorage по задаче (ТЗ 26.11, п.1):
+  // переживает закрытие шторки, переход на связанную задачу и перезагрузку вкладки. Чистится отправкой или «Сбросить».
+  const [draft, setDraft, clearDraft] = useStoredDraft<Draft>(`big-deals:${card.id}`, EMPTY_DRAFT, isEmptyDraft);
+  const { mode, manager, tz, comment, deadline } = draft;
+  const patch = (p: Partial<Draft>) => setDraft(d => ({ ...d, ...p }));
+  const setMode = (m: Mode) => patch({ mode: m });
+  const setManager = (v: string) => patch({ manager: v });
+  const setComment = (v: string) => patch({ comment: v });
+  const setDeadline = (v: string) => patch({ deadline: v });
+  const setTz = (f: (prev: string) => string) => setDraft(d => ({ ...d, tz: f(d.tz) }));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
-  const [manager, setManager] = useState('');
-  const [tz, setTz] = useState('');
-  const [comment, setComment] = useState('');
-  const [deadline, setDeadline] = useState('');
+  const hasText = !!(tz.trim() || comment.trim() || deadline);
   const [pending, setPending] = useState<PendingClose>(null);
   const [sure, setSure] = useState(false);
   const closed = card.state === 'done';
@@ -50,9 +65,9 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
     try {
       const r = await postBigAction({ taskId: card.id, ...body });
       if (r.warnings?.length) setWarn(r.warnings.join('; '));
-      setMode(null); setComment(''); setDeadline(''); setSure(false);
       // Выбранного менеджера и ТЗ сбрасывает только само назначение: срок/перенос между делом их не теряют.
-      if (body.type === 'reassign') { setTz(''); setManager(''); }
+      setDraft(d => ({ ...d, mode: null, comment: '', deadline: '', ...(body.type === 'reassign' ? { tz: '', manager: '' } : {}) }));
+      setSure(false);
       setPending(null);
       onChanged(r.card);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setPending(null); }
@@ -65,11 +80,14 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
     ...(dealOwner ? [{ value: dealOwner.id, label: dealOwner.name, hint: 'ответственный по сделке' }] : []),
     ...managers.filter(m => m.id !== dealOwner?.id).map(m => ({ value: m.id, label: m.name })),
   ];
-  const toggle = (m: Mode) => { setMode(mode === m ? null : m); setSure(false); setErr(null); if (m === 'reassign' && mode !== 'reassign' && !manager && dealOwner && dealOwner.id !== card.responsible.id) setManager(dealOwner.id); };
+  const toggle = (m: Mode) => {
+    const preset = m === 'reassign' && mode !== 'reassign' && !manager && dealOwner && dealOwner.id !== card.responsible.id ? { manager: dealOwner.id } : {};
+    patch({ mode: mode === m ? null : m, ...preset }); setSure(false); setErr(null);
+  };
   const deadlineIso = mskInputToIso(deadline);
   const columnOptions = BIG_COLUMNS.filter(c => c.key !== card.column).map(c => ({ value: c.key, label: c.title, hint: c.hint ?? null }));
   const addTz = (t: string) => setTz(prev => (prev.trim() ? `${prev.trimEnd()}\n${t}` : t));
-  const addComment = (t: string) => setComment(prev => (prev.trim() ? `${prev.trimEnd()}\n${t}` : t));
+  const addComment = (t: string) => setDraft(d => ({ ...d, comment: d.comment.trim() ? `${d.comment.trimEnd()}\n${t}` : t }));
 
   const TITLES: Record<Exclude<Mode, null>, string> = {
     reassign: 'Назначить менеджера', return: 'Вернуть на доработку', approve: 'Принять работу', accept: 'Принял, работаем дальше',
@@ -87,8 +105,8 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         {closed && <button type="button" className={primary} disabled={busy} onClick={() => toggle('renew')}>Возобновить</button>}
         {canApprove && <button type="button" className={primary} disabled={busy} onClick={() => toggle('approve')} title="Работа принята — задача закроется">Принять</button>}
-        {control && <button type="button" className={btn} disabled={busy} onClick={() => toggle('return')}>Вернуть</button>}
-        {!closed && !control && <button type="button" className={card.unassigned ? primary : btn} disabled={busy} onClick={() => toggle('reassign')}>Назначить</button>}
+        {control && <button type="button" className={btn} disabled={busy} onClick={() => toggle('return')}>Вернуть{comment.trim() && <DraftDot />}</button>}
+        {!closed && !control && <button type="button" className={card.unassigned ? primary : btn} disabled={busy} onClick={() => toggle('reassign')}>Назначить{tz.trim() && <DraftDot />}</button>}
         {!closed && <button type="button" className={btn} disabled={busy} onClick={() => toggle('deadline')} title={card.deadlineAt ? `Сейчас: ${fmtDT(card.deadlineAt)}` : 'Срок не задан'}>Срок</button>}
         <SearchSelect options={columnOptions} value="" placeholder="Перенести в…" ariaLabel="Перенести в колонку" disabled={busy}
           className="min-h-11 w-44 max-w-full" onChange={v => {
@@ -119,7 +137,7 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
           <div className="flex flex-col gap-2">
             <SearchSelect options={managerOptions} value={manager} onChange={setManager} placeholder="Выберите менеджера" searchable ariaLabel="Менеджер" className="min-h-11 w-full" />
             <TemplatePicker questions={questions} deal={card.deal} mock={mock} onInsert={addTz} />
-            <textarea value={tz} onChange={e => setTz(e.target.value)} rows={4} placeholder="ТЗ менеджеру — уйдёт в чат задачи" className={input} />
+            <textarea value={tz} onChange={e => { const v = e.target.value; setTz(() => v); }} rows={4} placeholder="ТЗ менеджеру — уйдёт в чат задачи" className={input} />
             {/* Срок — здесь же (Осипов 25.11: выбирал менеджера, шёл в «Изменить срок» → «Сегодня», и выбор менеджера пропадал). */}
             <DeadlineField label={`Срок (необязательно${card.deadlineAt ? `, сейчас ${fmtDT(card.deadlineAt)}` : ''})`} value={deadline} onChange={setDeadline} />
             <button type="button" className={`${primary} self-end`} disabled={busy || !manager} onClick={() => run({ type: 'reassign', responsibleId: manager, comment: tz.trim() || undefined, deadline: deadlineIso })}>
@@ -192,6 +210,12 @@ export function TaskActions({ card, managers, onChanged, questions, mock = false
         )}
 
         {err && <p className="text-[var(--color-negative)]">{err}</p>}
+        {hasText && !busy && (
+          <p className="flex flex-wrap items-center gap-x-2 text-[12px] text-[var(--color-text-muted)]">
+            Черновик сохраняется сам — закрыть окно или шторку можно, текст не пропадёт.
+            <button type="button" className="tap-target underline hover:text-[var(--color-text)]" onClick={() => { clearDraft(); setSure(false); }}>Сбросить черновик</button>
+          </p>
+        )}
       </div>
       </Modal>
 

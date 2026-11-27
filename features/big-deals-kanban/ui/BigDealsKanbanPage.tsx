@@ -284,9 +284,20 @@ export function BigDealsKanbanPage() {
             )}
           </label>
           {(data?.managers.length ?? 0) > 0 && (
-            <SearchSelect ariaLabel="Менеджер" value={f.manager} onChange={f.setManager} allLabel="Все менеджеры" searchable
-              searchPlaceholder="Поиск менеджера" className="min-w-0 max-w-full"
-              options={(data?.managers ?? []).map(m => ({ value: m.id, label: m.name }))} />
+            // Выбранный менеджер — сплошной заливкой и с «×» рядом (собрание 26.11: выбрал Стадника — «никакой непонятно»,
+            // что фильтр включён; бледная рамка терялась среди остальных полей).
+            <span className="flex min-w-0 max-w-full items-stretch">
+              <SearchSelect ariaLabel="Менеджер" value={f.manager} onChange={f.setManager} allLabel="Все менеджеры" searchable
+                searchPlaceholder="Поиск менеджера"
+                className={f.manager ? 'min-w-0 max-w-full rounded-r-none border-[var(--color-accent)] bg-[var(--color-accent)] font-semibold text-white hover:bg-[var(--color-accent)] hover:opacity-90 [&_svg]:text-white' : 'min-w-0 max-w-full'}
+                options={(data?.managers ?? []).map(m => ({ value: m.id, label: m.name }))} />
+              {f.manager && (
+                <button type="button" onClick={() => f.setManager('')} aria-label="Сбросить фильтр по менеджеру" title="Все менеджеры"
+                  className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-r-lg border border-l-0 border-[var(--color-accent)] bg-[var(--color-accent)] text-white hover:opacity-90">
+                  <X size={16} />
+                </button>
+              )}
+            </span>
           )}
           {(data?.productGroups.length ?? 0) > 0 && (
             <SearchMultiSelect ariaLabel="Товарные группы" allLabel="Любая товарная группа" unitLabel="групп" searchPlaceholder="Поиск группы"

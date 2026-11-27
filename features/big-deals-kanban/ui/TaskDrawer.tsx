@@ -148,30 +148,32 @@ export function TaskDrawer(props: { card: BigTaskCard; canManage: boolean; manag
               <button type="button" role="tab" aria-selected={seg === 'task'} className={segBtn(seg === 'task')} onClick={() => setSeg('task')}>Задача</button>
             </div>
             <div className={`${seg === 'task' ? 'flex' : 'hidden'} min-w-0 flex-col gap-3 lg:flex lg:min-h-0 lg:overflow-y-auto lg:pr-1`}>
-              {rel ? (
+              {rel && (
                 <RelatedSide taskId={card.id} rel={rel} card={card} mock={mock}
                   onMention={() => { if (rel.responsible) { setRelInject({ text: `[USER=${rel.responsible.id}]${rel.responsible.name}[/USER], `, key: Date.now() }); setSeg('chat'); } }} />
-              ) : (
-                <>
-                  {canManage && <TaskActions card={card} managers={managers} onChanged={changed} questions={d?.questions} mock={mock} />}
-                  <TaskBriefSection brief={d?.brief} dealProducts={d?.dealProducts} dealAmount={deal?.amount ?? null}
-                    loading={details.isLoading} error={details.error ? (details.error as Error).message : null}
-                    taskUrl={card.url} taskId={card.id} dealUrl={deal?.url ?? null} dealId={deal?.id ?? null} clientUrl={clientUrl} />
-                </>
               )}
+              {/* Действия задачи БЧ при открытой связанной — скрыты, но смонтированы: черновик формы не теряется (ТЗ 26.11). */}
+              <div className={rel ? 'hidden' : 'contents'}>
+                {canManage && <TaskActions card={card} managers={managers} onChanged={changed} questions={d?.questions} mock={mock} />}
+                <TaskBriefSection brief={d?.brief} dealProducts={d?.dealProducts} dealAmount={deal?.amount ?? null}
+                  loading={details.isLoading} error={details.error ? (details.error as Error).message : null}
+                  taskUrl={card.url} taskId={card.id} dealUrl={deal?.url ?? null} dealId={deal?.id ?? null} clientUrl={clientUrl} />
+              </div>
               <CardNoteField card={card} canEdit={canManage} onSaved={c => onChanged(c)} mock={mock} />
               {!rel && d && <ParticipantsField taskId={card.id} auditors={d.auditors ?? card.auditors} me={me} canManage={canManage && card.state !== 'done'} onChanged={changed} />}
             </div>
             <div className={`${seg === 'chat' ? 'flex' : 'hidden'} min-w-0 flex-col gap-2 lg:flex lg:min-h-0`}>
               <div className="hidden min-w-0 lg:block">{strip}</div>
-              {rel ? (
+              {rel && (
                 <RelatedChat key={rel.id} taskId={card.id} rel={rel} me={me} lastSeenAt={lastSeenAt} mock={mock} inject={relInject}
                   className="h-[70dvh] lg:h-auto lg:min-h-0 lg:flex-1" />
-              ) : (
+              )}
+              {/* Чат задачи БЧ тоже не размонтируем — недописанное сообщение остаётся. */}
+              <div className={rel ? 'hidden' : 'contents'}>
                 <TaskChat card={card} messages={d?.chat ?? null} loading={details.isLoading} onSent={changed} questions={d?.questions}
                   rop={d?.rop ?? null} inject={inject} me={me} lastSeenAt={lastSeenAt} mock={mock} title={null}
                   className="h-[70dvh] lg:h-auto lg:min-h-0 lg:flex-1" />
-              )}
+              </div>
             </div>
           </div>
 
@@ -233,12 +235,18 @@ function BigSlide({ card, onClose, blockEsc, children }: { card: BigTaskCard; on
         className="slide-panel-in-right relative flex h-dvh w-full max-w-full shrink-0 flex-col overflow-hidden bg-[var(--color-bg)] shadow-2xl sm:w-[80vw] sm:min-w-[min(100vw,720px)]">
         <div className="flex min-w-0 items-start gap-2 border-b border-[var(--color-border)] px-4 py-2.5">
           <h2 className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-semibold">{card.title}</h2>
-          <button type="button" onClick={onClose} aria-label="Закрыть"
-            className="tap-target flex min-h-9 min-w-9 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
-            <X size={18} />
+          {/* Крестик крупный и контрастный (собрание 26.11: серый 18px в углу «не нашли»). */}
+          <button type="button" onClick={onClose} aria-label="Закрыть" title="Закрыть (Esc). Черновики задач сохраняются"
+            className="flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[var(--color-border-strong,var(--color-border))] bg-[var(--color-bg-surface)] px-3 text-[13px] font-semibold text-[var(--color-text)] shadow-sm hover:bg-[var(--color-bg-hover)]">
+            <X size={20} strokeWidth={2.5} aria-hidden /><span className="hidden sm:inline">Закрыть</span>
           </button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+        {/* Телефон: второй крестик в зоне большого пальца — слева внизу, над полем ввода чата (отправка — справа). */}
+        <button type="button" onClick={onClose} aria-label="Закрыть карточку"
+          className="absolute bottom-[calc(env(safe-area-inset-bottom)+88px)] left-3 z-10 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--color-text)] text-[var(--color-bg)] shadow-lg sm:hidden">
+          <X size={22} strokeWidth={2.5} />
+        </button>
       </div>
     </div>,
     document.body,
