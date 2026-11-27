@@ -69,6 +69,8 @@ export interface PersonListItem {
   role: PersonRole;
   departmentId: string | null;
   departmentName: string | null;
+  /** Битрикс-id РОПа по оргструктуре (фильтр «Команда РОПа» на «Людях» и в «Дне РОПа»). */
+  ropId: string | null;
   ropName: string | null;
   /** Строка за выбранную дату (null — агрегат за дату ещё не собран). */
   day: Pick<DailyRowDto, 'inWork' | 'monoMinutes' | 'buckets' | 'firstSignalAt' | 'lastSignalAt' | 'counts'> | null;

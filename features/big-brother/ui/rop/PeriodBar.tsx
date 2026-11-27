@@ -8,6 +8,8 @@ const isDay = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
 const mskToday = () => new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
 const shift = (day: string, n: number) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 
+const prevMonthStart = (today: string) => `${shift(`${today.slice(0, 7)}-01`, -1).slice(0, 7)}-01`;
+
 export function usePeriod(): { from: string; to: string; set: (from: string, to: string) => void; custom: boolean } {
   const [fromRaw, setFrom] = useUrlState('from', stringParam(''));
   const [toRaw, setTo] = useUrlState('to', stringParam(''));
@@ -23,6 +25,7 @@ export function PeriodBar({ children }: { children?: ReactNode }) {
   const presets: [string, string, string][] = [
     ['30 дней', '', ''],
     ['Этот месяц', `${today.slice(0, 7)}-01`, today],
+    ['Прошлый месяц', prevMonthStart(today), shift(`${today.slice(0, 7)}-01`, -1)],
     ['90 дней', shift(today, -89), today],
   ];
   return (
