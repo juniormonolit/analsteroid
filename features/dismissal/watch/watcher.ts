@@ -25,7 +25,7 @@ import { protectedBitrixIds } from '../engine/scope';
 import { activeRunFor, createRun } from '../engine/store';
 import { findDismissalUser, userDirectory, userNameMap } from '../engine/users';
 import { DISMISSAL_KINDS } from '../types';
-import { parseAnnouncement, resolveLine, type DirectoryUser } from './parse';
+import { DISMISS_RE, parseAnnouncement, resolveLine, type DirectoryUser } from './parse';
 
 /** Александр Куликов — последний уровень эскалации. */
 export const KULIKOV_BITRIX_ID = 5;
@@ -76,7 +76,21 @@ async function claimPoll(): Promise<Settings | null> {
   const s = r.rows[0];
   return s ? { dryRun: s.dry_run, chatId: s.chat_id, cursor: s.cursor ? Number(s.cursor) : null, lastError: s.last_error } : null;
 }
-const saveCursor = (id: number) => systemDb().query(`UPDATE dismissal_watch_settings SET cursor = $1, updated_at = now() WHERE id = 1 AND (cursor IS NULL OR cursor < $1)`, [id]);
+// Чаты (миграция 301, владелец 27.11: «за чатом стажёров тоже надо следить»): у каждого свой курсор.
+// settings.chat_id/cursor после 301 не используются (перенесены в dismissal_watch_chats).
+interface WatchChat { chatId: string; title: string; cursor: number | null }
+const chatTitles = new Map<string, string>();
+const chatTitle = (chatId: string | null | undefined) => (chatId && chatTitles.get(chatId)) || 'Увольнения';
+async function loadChats(): Promise<WatchChat[]> {
+  const r = await systemDb().query<{ chat_id: string; title: string; cursor: string | null }>(
+    `SELECT chat_id, title, cursor::text FROM dismissal_watch_chats WHERE enabled ORDER BY chat_id`,
+  );
+  for (const c of r.rows) chatTitles.set(c.chat_id, c.title);
+  return r.rows.map(c => ({ chatId: c.chat_id, title: c.title, cursor: c.cursor ? Number(c.cursor) : null }));
+}
+const saveCursor = (chatId: string, id: number) => systemDb().query(
+  `UPDATE dismissal_watch_chats SET cursor = $2, updated_at = now() WHERE chat_id = $1 AND (cursor IS NULL OR cursor < $2)`, [chatId, id],
+);
 const saveError = (e: string | null) => systemDb().query(`UPDATE dismissal_watch_settings SET last_error = $1, updated_at = now() WHERE id = 1`, [e]);
 
 // ── Сообщения ───────────────────────────────────────────────────────────────
@@ -153,7 +167,7 @@ function choiceLine(runId: string | null): string {
 }
 const ddmm = (d: Date) => mskDate(d).split('-').reverse().join('.');
 function originText(c: Pick<CaseRow, 'origin' | 'chat_id' | 'message_id' | 'announced_at' | 'created_by_name'>): string {
-  if (c.origin === 'chat' && c.chat_id && c.message_id) return `объявлено ${ddmm(new Date(c.announced_at))} в [URL=${messageUrl(c.chat_id, Number(c.message_id))}]чате «Увольнения»[/URL]`;
+  if (c.origin === 'chat' && c.chat_id && c.message_id) return `объявлено ${ddmm(new Date(c.announced_at))} в [URL=${messageUrl(c.chat_id, Number(c.message_id))}]чате «${bbSafe(chatTitle(c.chat_id))}»[/URL]`;
   return `черновик заведён ${ddmm(new Date(c.announced_at))}${c.created_by_name ? ` (${bbSafe(c.created_by_name)})` : ''}`;
 }
 
@@ -161,26 +175,27 @@ function originText(c: Pick<CaseRow, 'origin' | 'chat_id' | 'message_id' | 'anno
 interface ChatMessage { id: number; author_id: number; date: string; text?: string }
 
 /** Привязать объявление к уже открытому ручному кейсу (без второго «первого» сообщения). */
-async function attachChat(where: { caseId?: string; runId?: string }, s: Settings, m: ChatMessage, line: string, author: number | null, authorName: string): Promise<boolean> {
+async function attachChat(where: { caseId?: string; runId?: string }, chat: WatchChat, m: ChatMessage, line: string, author: number | null, authorName: string): Promise<boolean> {
   const r = await systemDb().query(
     `UPDATE dismissal_watch_cases SET origin = 'chat', chat_id = $3, message_id = $4, message_text = $5, line = $6,
             author_bitrix_id = $7, author_name = $8, updated_at = now()
       WHERE ${where.caseId ? 'id = $1' : 'run_id = $2'} AND message_id IS NULL AND resolved_at IS NULL`,
-    [where.caseId ?? null, where.runId ?? null, s.chatId, m.id, m.text ?? '', line, author, authorName],
+    [where.caseId ?? null, where.runId ?? null, chat.chatId, m.id, m.text ?? '', line, author, authorName],
   );
   return (r.rowCount ?? 0) > 0;
 }
 
-async function handleMessage(s: Settings, m: ChatMessage, authorName: string, dir: DirectoryUser[], prot: Set<number>): Promise<void> {
+async function handleMessage(s: Settings, chat: WatchChat, m: ChatMessage, authorName: string, dir: DirectoryUser[], prot: Set<number>): Promise<void> {
   const lines = parseAnnouncement(m.text ?? '');
   if (!lines.length) return;
   const announcedAt = new Date(m.date);
   const author = Number(m.author_id) || null;
-  const msgUrl = messageUrl(s.chatId, m.id);
+  const msgUrl = messageUrl(chat.chatId, m.id);
+  const inChat = `в чате «${bbSafe(chat.title)}»`;
   for (const p of lines) {
     const res = resolveLine(p, dir);
     if (!res.ok) {
-      const text = `Не понял, кого уволили: „${bbSafe(p.line)}“ (${bbSafe(res.reason)}). Отметьте сотрудника через @ в чате «Увольнения» — я подхвачу.`;
+      const text = `Не понял, кого уволили: „${bbSafe(p.line)}“ (${bbSafe(res.reason)}). Отметьте сотрудника через @ ${inChat} — я подхвачу.`;
       await sendWithMirror(s.dryRun ? null : author, authorName, text, s.dryRun ? { mirrorOnly: true, tag: 'тест, автору не отправлено' } : {});
       console.log(`[dismissal-watch] #${m.id}: не распознано «${p.line}» — ${res.reason}`);
       continue;
@@ -191,7 +206,7 @@ async function handleMessage(s: Settings, m: ChatMessage, authorName: string, di
     const login = p.login ?? who?.login ?? null;
     const label = `${bbSafe(name)}${login ? ` (${bbSafe(login)})` : ''}`;
     if (prot.has(sourceId)) {
-      await sendWithMirror(null, '', `В чате «Увольнения» объявлено увольнение ${label}, но это администратор Монолитики — Увольнятор его не трогает. [URL=${msgUrl}]Сообщение[/URL]`, { mirrorOnly: true, tag: 'администратор' });
+      await sendWithMirror(null, '', `В чате «${bbSafe(chat.title)}» объявлено увольнение ${label}, но это администратор Монолитики — Увольнятор его не трогает. [URL=${msgUrl}]Сообщение[/URL]`, { mirrorOnly: true, tag: 'администратор' });
       continue;
     }
     // Открытый кейс по сотруднику: ручной — привязываем объявление; чатовый — повторное объявление, игнор.
@@ -200,7 +215,7 @@ async function handleMessage(s: Settings, m: ChatMessage, authorName: string, di
     );
     if (open.rows[0]) {
       const o = open.rows[0];
-      if (!o.message_id && !s.dryRun && await attachChat({ caseId: o.id }, s, m, p.line, author, authorName)) {
+      if (!o.message_id && !s.dryRun && await attachChat({ caseId: o.id }, chat, m, p.line, author, authorName)) {
         await sendWithMirror(null, '', `Объявление про ${label} привязал к уже заведённому черновику (${runLink(o.run_id)}) — срок и эскалация прежние.`, { mirrorOnly: true, tag: 'объявление к черновику' });
       } else console.log(`[dismissal-watch] #${m.id}: по ${name} уже есть открытый кейс`);
       continue;
@@ -227,7 +242,7 @@ async function handleMessage(s: Settings, m: ChatMessage, authorName: string, di
         `INSERT INTO dismissal_watch_cases (origin, chat_id, message_id, message_text, line, source_bitrix_id, source_name, author_bitrix_id, author_name,
                                             announced_at, run_id, level, deadline, resolved_at, resolved_run_id, resolution)
          VALUES ('chat',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$10,'started') ON CONFLICT DO NOTHING`,
-        [s.chatId, m.id, m.text ?? '', p.line, sourceId, name, author, authorName, announcedAt, d.id, level, deadline, d.started_at ?? d.updated_at],
+        [chat.chatId, m.id, m.text ?? '', p.line, sourceId, name, author, authorName, announcedAt, d.id, level, deadline, d.started_at ?? d.updated_at],
       );
       await sendWithMirror(null, '', `Объявлено увольнение ${label} — прогон Увольнятора по нему уже запущен, напоминать некому. ${runLink(d.id)}`, { mirrorOnly: true, tag: 'уже проведено' });
       continue;
@@ -238,24 +253,24 @@ async function handleMessage(s: Settings, m: ChatMessage, authorName: string, di
     if (!runId) {
       const src = await findDismissalUser(sourceId);
       if (!src) { console.warn(`[dismissal-watch] #${m.id}: пользователь #${sourceId} пропал из справочника`); continue; }
-      runId = await createRun(src, { login: 'bot:dismissal-watch', name: 'Бот «Аналитик» (чат «Увольнения»)', bitrixId: author }, m.text ?? p.line);
+      runId = await createRun(src, { login: 'bot:dismissal-watch', name: `Бот «Аналитик» (чат «${chat.title}»)`, bitrixId: author }, m.text ?? p.line);
     }
     const ins = await systemDb().query<{ id: string }>(
       `INSERT INTO dismissal_watch_cases (origin, chat_id, message_id, message_text, line, source_bitrix_id, source_name, author_bitrix_id, author_name,
                                           announced_at, run_id, level, deadline)
        VALUES ('chat',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT DO NOTHING RETURNING id::text`,
-      [s.chatId, m.id, m.text ?? '', p.line, sourceId, name, author, authorName, announcedAt, runId, level, deadline],
+      [chat.chatId, m.id, m.text ?? '', p.line, sourceId, name, author, authorName, announcedAt, runId, level, deadline],
     );
     if (!ins.rows[0]) {
       // Кейс по черновику уже завёл обход черновиков (гонка) — привязываем объявление; или повтор после сбоя.
-      await attachChat({ runId }, s, m, p.line, author, authorName).catch(() => false);
+      await attachChat({ runId }, chat, m, p.line, author, authorName).catch(() => false);
       continue;
     }
     const nextTo = level < 2 ? recipientAt(chain, firstLevel(chain, level + 1)) : null;
     const names = await userNameMap([to, ...(nextTo ? [nextTo] : [])]);
     const text = [
       `[B]Уволен(а) ${label}[/B]`,
-      `Написал(а) ${bbSafe(authorName)} в чате «Увольнения»: [URL=${msgUrl}]сообщение[/URL].`,
+      `Написал(а) ${bbSafe(authorName)} ${inChat}: [URL=${msgUrl}]сообщение[/URL].`,
       `Подготовил черновик передачи его сделок и задач: ${runLink(runId)}.`,
       `Срок — ${fmtDeadline(deadline)}.${nextTo ? ` Иначе — эскалация: ${bbSafe(names[nextTo] ?? `#${nextTo}`)}.` : ''}`,
       choiceLine(runId),
@@ -267,30 +282,39 @@ async function handleMessage(s: Settings, m: ChatMessage, authorName: string, di
 }
 
 async function pollChat(s: Settings): Promise<void> {
-  if (s.cursor === null) {
-    // Первый запуск: встаём на последнее сообщение, историю не разбираем.
-    const r = await readOne<{ messages: ChatMessage[] }>('im.dialog.messages.get', { DIALOG_ID: s.chatId, LIMIT: 1 });
+  // Чаты по очереди; ошибка одного не мешает другим, но всплывает в общий алерт.
+  const errors: string[] = [];
+  for (const chat of await loadChats()) {
+    try { await pollOne(s, chat); } catch (e) { errors.push(`«${chat.title}»: ${errMsg(e)}`); }
+  }
+  if (errors.length) throw new Error(errors.join('; '));
+}
+
+async function pollOne(s: Settings, chat: WatchChat): Promise<void> {
+  if (chat.cursor === null) {
+    // Первый запуск чата: встаём на последнее сообщение, историю не разбираем.
+    const r = await readOne<{ messages: ChatMessage[] }>('im.dialog.messages.get', { DIALOG_ID: chat.chatId, LIMIT: 1 });
     const last = Math.max(0, ...(r?.messages ?? []).map(m => Number(m.id)));
-    if (last) await saveCursor(last);
-    console.log(`[dismissal-watch] старт: курсор = ${last} (старые объявления не обрабатываем)`);
+    if (last) await saveCursor(chat.chatId, last);
+    console.log(`[dismissal-watch] старт чата «${chat.title}»: курсор = ${last} (старые объявления не обрабатываем)`);
     return;
   }
-  let cursor = s.cursor;
+  let cursor = chat.cursor;
   let dir: DirectoryUser[] | null = null;
   let prot: Set<number> | null = null;
   for (let page = 0; page < MAX_PAGES; page++) {
-    const r = await readOne<{ messages: ChatMessage[]; users?: { id: number; name?: string }[] }>('im.dialog.messages.get', { DIALOG_ID: s.chatId, FIRST_ID: cursor, LIMIT: PAGE });
+    const r = await readOne<{ messages: ChatMessage[]; users?: { id: number; name?: string }[] }>('im.dialog.messages.get', { DIALOG_ID: chat.chatId, FIRST_ID: cursor, LIMIT: PAGE });
     const msgs = (r?.messages ?? []).filter(m => Number(m.id) > cursor).sort((a, b) => Number(a.id) - Number(b.id));
     if (!msgs.length) break;
     const userName = new Map((r.users ?? []).map(u => [Number(u.id), u.name ?? `#${u.id}`]));
     for (const m of msgs) {
-      if (Number(m.author_id) > 0 && /увол/i.test(m.text ?? '')) {
+      if (Number(m.author_id) > 0 && DISMISS_RE.test(m.text ?? '')) {
         dir ??= await userDirectory();
         prot ??= await protectedBitrixIds();
-        await handleMessage(s, m, userName.get(Number(m.author_id)) ?? `#${m.author_id}`, dir, prot);
+        await handleMessage(s, chat, m, userName.get(Number(m.author_id)) ?? `#${m.author_id}`, dir, prot);
       }
       cursor = Number(m.id);
-      await saveCursor(cursor);
+      await saveCursor(chat.chatId, cursor);
     }
     if (msgs.length < PAGE) break;
   }
@@ -458,8 +482,8 @@ export async function dismissalWatchTick(): Promise<void> {
     const kind = (e: string | null) => (e ? e.replace(/\d+/g, '#').slice(0, 120) : null);
     if (kind(err) !== kind(s.lastError)) {
       const text = err
-        ? `[B]Сторож увольнений не работает[/B]\nНе могу прочитать или обработать чат «Увольнения»: ${bbSafe(err).slice(0, 600)}\nЧаще всего — аккаунт вебхука убрали из чата или вебхук отозван. Напишу, когда заработает.`
-        : `[B]Сторож увольнений снова работает[/B]\nЧат «Увольнения» читается, пропущенные сообщения разобраны.`;
+        ? `[B]Сторож увольнений не работает[/B]\nНе могу прочитать или обработать чаты увольнений: ${bbSafe(err).slice(0, 600)}\nЧаще всего — аккаунт вебхука убрали из чата или вебхук отозван. Напишу, когда заработает.`
+        : `[B]Сторож увольнений снова работает[/B]\nЧаты увольнений читаются, пропущенные сообщения разобраны.`;
       await sendWithMirror(null, '', text, { mirrorOnly: true, tag: err ? 'ошибка' : 'восстановлено' }).catch(() => {});
     }
   } catch (e) {
