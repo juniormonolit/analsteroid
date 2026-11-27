@@ -125,10 +125,12 @@ function ThemeSync() {
 }
 
 function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean; pathname: string; user: SessionUser }) {
+  // По умолчанию раскрыт только «Роп монитор», остальные группы отчётов свёрнуты —
+  // правка владельца 27.11 («отчёты по продажам по умолчанию скрыты, кроме РОП монитор»).
+  // Группа с открытым сейчас отчётом раскрывается сама (эффект ниже).
   const [openStd, setOpenStd] = useState(true);
-  const [openFav, setOpenFav] = useState(true);
-  const [openShared, setOpenShared] = useState(true);
-  // Свёрнута по умолчанию — правка владельца 17.08 (остальные группы как были).
+  const [openFav, setOpenFav] = useState(false);
+  const [openShared, setOpenShared] = useState(false);
   const [openRepeat, setOpenRepeat] = useState(false);
   const qc = useQueryClient();
 
@@ -217,6 +219,15 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
   const repeatShared = savedReports.filter(r => r.isShared && r.sharedSection === 'repeat');
   const ownReports = savedReports.filter(r => !r.isShared && r.userLogin === user.login);
   const canDeleteShared = isReportAdmin(user);
+
+  // Открыт отчёт из свёрнутой группы — раскрыть её, чтобы активная строка была видна.
+  useEffect(() => {
+    const isHere = (list: SavedReport[]) => list.some(r => pathname === `/sales/saved/${r.id}`);
+    if (isHere(smekalochnayaShared)) setOpenShared(true);
+    if (isHere(repeatShared)) setOpenRepeat(true);
+    if (isHere(ownReports)) setOpenFav(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, savedReports]);
 
   // Направляющая линия вложенности вокруг под-группы (Роп монитор / Смекалочная / Избранное).
   const subgroupCls = 'ml-5 pl-2.5 mb-2.5 border-l border-[var(--color-sidebar-guide)]';

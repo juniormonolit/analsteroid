@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 // новые дефолты того, кто хоть раз менял избранное, не трогают. Пункт без прав в меню не
 // рисуется (фильтр по moreItems в AppShell), но из сохранённого списка не стирается.
 export const DEFAULT_NAV_FAVORITES: string[] = [
+  '/tasker', // правка владельца 27.11: «в избранное всем "задачник" поставь»
   '/repeat-kanban',
   '/big-deals-kanban',
   '/logist-kanban',
