@@ -9,7 +9,7 @@
 //
 // Вызовы Битрикса идут через pace(): воркер держит паузы между ними (≥700 мс, после БП — ≥1.5 с).
 import { REASSIGN_TEMPLATE_ID, SOLD_STAGES } from '@/features/repeat-kanban/engine/createDeal';
-import { PRIMARY_BRAK_STAGE, REPEAT_BRAK_REASONS, REPEAT_BRAK_STAGE, type DismissalAction, type DismissalKind, type RepeatBrakReason } from '../types';
+import { PRIMARY_BRAK_STAGE, REPEAT_BRAK_REASONS, REPEAT_BRAK_STAGE, UPD_TASK_GROUP_ID, type DismissalAction, type DismissalKind, type RepeatBrakReason } from '../types';
 import { readOne, writeCrm, writeTask } from './bx';
 
 export interface ExecItem {
@@ -110,9 +110,9 @@ async function execBrak(it: ExecItem, sourceId: number, pace: Pace): Promise<Exe
 }
 
 // ── Задачи ──────────────────────────────────────────────────────────────────
-interface BxTask { id: string; status?: string; responsibleId?: string; createdBy?: string; accomplices?: string[]; auditors?: string[]; taskControl?: string }
+interface BxTask { id: string; status?: string; responsibleId?: string; createdBy?: string; accomplices?: string[]; auditors?: string[]; taskControl?: string; groupId?: string }
 async function getTask(pace: Pace, id: number): Promise<BxTask | null> {
-  const r = await get<{ task?: BxTask }>(pace, 'tasks.task.get', { taskId: id, select: ['ID', 'STATUS', 'RESPONSIBLE_ID', 'CREATED_BY', 'ACCOMPLICES', 'AUDITORS', 'TASK_CONTROL'] });
+  const r = await get<{ task?: BxTask }>(pace, 'tasks.task.get', { taskId: id, select: ['ID', 'STATUS', 'RESPONSIBLE_ID', 'CREATED_BY', 'ACCOMPLICES', 'AUDITORS', 'TASK_CONTROL', 'GROUP_ID'] });
   return r?.task ?? null;
 }
 const ids = (a: unknown) => (Array.isArray(a) ? a : a && typeof a === 'object' ? Object.values(a) : []).map(num).filter(Boolean);
@@ -126,6 +126,8 @@ async function updateTask(pace: Pace, taskId: number, fields: Record<string, unk
 /** Довести задачу до «завершена»: complete; при контроле постановщика она станет «ждёт контроля» (4) → approve. */
 async function closeTask(pace: Pace, t: BxTask): Promise<string> {
   const taskId = num(t.id);
+  // Последний рубеж (27.11): задачу из проекта «Клиенты УПД» не закрываем никогда — план отдаёт её РОПу.
+  if (num(t.groupId) === UPD_TASK_GROUP_ID) throw new DismissalItemError('Задачу по УПД не закрываем — она уходит РОПу');
   if (num(t.status) !== 4) { await pace('call'); await writeTask<unknown>('tasks.task.complete', { taskId }); }
   const after = await getTask(pace, taskId);
   if (after && num(after.status) === 5) return 'Задача завершена';

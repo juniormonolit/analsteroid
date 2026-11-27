@@ -46,6 +46,9 @@ export const REPEAT_BRAK_STAGE: Record<2 | 3, Record<RepeatBrakReason, string>> 
   2: { no_objects: 'C2:APOLOGY', nothing_needed: 'C2:APOLOGY', expensive: 'C2:LOSE', failed_client: 'C2:1' },
   3: { no_objects: 'C3:2', nothing_needed: 'C3:2', expensive: 'C3:LOSE', failed_client: 'C3:APOLOGY' },
 };
+/** Проект Битрикса «Клиенты УПД (СРОЧНО ПОДПИСАТЬ)». Задачи оттуда НЕ закрываются никогда — только РОПу
+ *  (владелец 27.11 после жалобы: РОП выбрал «Завершить» для задач без сделок, и закрылась неподписанная УПД). */
+export const UPD_TASK_GROUP_ID = 63;
 export const PRIMARY_FUNNELS = [0, 1, 4, 7] as const;
 export const REPEAT_FUNNELS = [2, 3] as const;
 
@@ -105,7 +108,9 @@ export const DISMISSAL_ALLOWED_ACTIONS: Record<DismissalKind, DismissalAction[]>
   deal_repeat: ['transfer', 'brak', 'skip'],
   task_deal: ['follow', 'close', 'skip'],
   activity_deal: ['follow', 'close', 'skip'],
-  task_other: ['transfer', 'close', 'skip'],
+  // Без «Закрыть» (владелец 27.11: «задачи без связанных сделок не должны иметь опцию „Закрыть“ в принципе») —
+  // закрытие так унесло неподписанную УПД. Старое «close» в сохранённых планах читается как transfer (РОПу).
+  task_other: ['transfer', 'skip'],
   activity_other: ['transfer', 'close', 'skip'],
   task_creator: ['transfer', 'skip'],
   task_participant: ['remove', 'transfer', 'skip'],
@@ -168,6 +173,8 @@ export interface DismissalItemInfo {
   /** задачи: крайний срок, роль */
   deadline?: string | null;
   role?: string;
+  /** Задача из проекта «Клиенты УПД» (UPD_TASK_GROUP_ID): всегда РОПу, действие не меняется — UI показывает замок. */
+  upd?: boolean;
 }
 
 /**

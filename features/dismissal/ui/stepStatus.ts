@@ -55,7 +55,8 @@ export function computeStatuses(a: {
   const hasOtherForRop = a.items.some(i => i.kind === 'task_other' || i.kind === 'activity_other');
   const ropNeeded = a.totals.toRop > 0 || (!!plan.notifyRop && hasOtherForRop);
   const tasksBlock: string[] = [];
-  if (ropNeeded && !a.ropId) tasksBlock.push('не выбран РОП');
+  if (a.totals.upd > 0 && !a.ropId) tasksBlock.push('есть задачи по УПД — они уходят только РОПу: выберите РОПа');
+  else if (ropNeeded && !a.ropId) tasksBlock.push('не выбран РОП');
   const tMiss = others.filter(it => {
     const r = resolved.get(it.key);
     return r?.action === 'transfer' && r.target == null && !(ROP_FALLBACK_KINDS.includes(it.kind) && r.toRop);

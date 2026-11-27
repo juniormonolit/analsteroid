@@ -15,6 +15,8 @@ export interface ResolvedItem { key: string; action: DismissalAction; target: nu
 
 const ACTIONS: DismissalAction[] = ['transfer', 'brak', 'follow', 'close', 'remove', 'skip'];
 const ROP_KINDS: DismissalKind[] = ['task_other', 'activity_other', 'task_creator'];
+/** 27.11: у task_other «Закрыть» убрано — старое значение из сохранённых планов читаем как «РОПу». */
+const upgrade = (kind: DismissalKind, a: DismissalAction): DismissalAction => (kind === 'task_other' && a === 'close' ? 'transfer' : a);
 const isKind = (k: string): k is DismissalKind => (DISMISSAL_KINDS as readonly string[]).includes(k);
 const posInt = (v: unknown): number | null => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : null; };
 
@@ -39,7 +41,7 @@ export function sanitizePlan(raw: unknown, itemKinds: Map<string, DismissalKind>
   for (const [k, v] of Object.entries(p.rules ?? {})) {
     if (!isKind(k)) return { error: `Неизвестный вид: ${k}` };
     const r = v as { action?: unknown; targets?: unknown; departmentId?: unknown } | null;
-    const action = r?.action as DismissalAction;
+    const action = upgrade(k, r?.action as DismissalAction);
     if (!ACTIONS.includes(action) || !DISMISSAL_ALLOWED_ACTIONS[k].includes(action)) return { error: `«${DISMISSAL_KIND_LABELS[k]}»: действие ${String(r?.action)} недопустимо` };
     const targets = [...new Set((Array.isArray(r?.targets) ? r!.targets as unknown[] : []).map(posInt).filter((n): n is number => n !== null))];
     const dep = r?.departmentId;
@@ -50,7 +52,7 @@ export function sanitizePlan(raw: unknown, itemKinds: Map<string, DismissalKind>
     const kind = itemKinds.get(key);
     if (!kind) continue; // строка исчезла после пересборки — исключение молча отбрасываем
     const o = v as { action?: unknown; target?: unknown } | null;
-    const action = o?.action as DismissalAction;
+    const action = upgrade(kind, o?.action as DismissalAction);
     if (!ACTIONS.includes(action) || !DISMISSAL_ALLOWED_ACTIONS[kind].includes(action)) return { error: `Строка ${key}: действие ${String(o?.action)} недопустимо` };
     plan.overrides[key] = { action, target: posInt(o?.target) };
   }
@@ -112,7 +114,7 @@ export function resolvePlan(plan: DismissalPlan, items: PlanItemRef[], sourceId:
   for (const k of DISMISSAL_KINDS) {
     const rule = plan.rules[k];
     if (rule?.targets.includes(sourceId)) problems.push(`«${DISMISSAL_KIND_LABELS[k]}»: среди получателей — сам увольняемый`);
-    if (rule && !DISMISSAL_ALLOWED_ACTIONS[k].includes(rule.action)) problems.push(`«${DISMISSAL_KIND_LABELS[k]}»: действие «${DISMISSAL_ACTION_LABELS[rule.action]}» недопустимо`);
+    if (rule && !DISMISSAL_ALLOWED_ACTIONS[k].includes(upgrade(k, rule.action))) problems.push(`«${DISMISSAL_KIND_LABELS[k]}»: действие «${DISMISSAL_ACTION_LABELS[rule.action]}» недопустимо`);
   }
   if (rop === sourceId) problems.push('РОП не может быть самим увольняемым — выберите другого');
 
@@ -120,7 +122,7 @@ export function resolvePlan(plan: DismissalPlan, items: PlanItemRef[], sourceId:
   const actionOf = new Map<string, DismissalAction>();
   for (const it of sorted) {
     const ov = plan.overrides[it.key];
-    const action = ov?.action ?? ruleAction(it.kind, plan.rules[it.kind], it.info);
+    const action = upgrade(it.kind, ov?.action ?? ruleAction(it.kind, plan.rules[it.kind], it.info));
     if (!DISMISSAL_ALLOWED_ACTIONS[it.kind].includes(action)) { problems.push(`Строка ${it.key}: действие «${DISMISSAL_ACTION_LABELS[action]}» недопустимо`); continue; }
     // Повторка (v3): «закрыть» есть в обеих повторных воронках (REPEAT_BRAK_STAGE), проверка стадии — у исполнителя.
     if (action === 'brak' && it.kind === 'deal_primary' && !it.info.brakAvailable) { problems.push(`Строка ${it.key}: в этой воронке нет стадии автобрака`); continue; }
@@ -181,6 +183,14 @@ export function resolvePlan(plan: DismissalPlan, items: PlanItemRef[], sourceId:
     if (deal.action === 'transfer') out.set(it.key, { key: it.key, action: 'transfer', target: deal.target, note: `вслед за сделкой #${dealId}` });
     else if (deal.action === 'brak') out.set(it.key, { key: it.key, action: 'close', target: null, note: dealKey.startsWith('deal_repeat:') ? `сделка #${dealId} закрыта` : `сделка #${dealId} в автобраке` });
     else out.set(it.key, { key: it.key, action: 'skip', target: null, note: `сделку #${dealId} не трогаем` });
+  }
+
+  // Задачи по УПД (проект «Клиенты УПД») — всегда РОПу, что бы ни выбрали в правиле/исключении/за сделкой
+  // (владелец 27.11: «задачи по УПД не должны закрываться, переводиться на РОПов»).
+  for (const it of sorted) {
+    if (!it.info.upd || (it.kind !== 'task_other' && it.kind !== 'task_deal')) continue;
+    if (!rop) { problems.push('Есть задачи по УПД — они уходят только РОПу: выберите РОПа'); continue; }
+    out.set(it.key, { key: it.key, action: 'transfer', target: rop, note: 'задача по УПД — только РОПу' });
   }
 
   for (const [k, n] of missing) problems.push(`«${DISMISSAL_KIND_LABELS[k]}»: «Передать» без получателя (${n} шт.)`);

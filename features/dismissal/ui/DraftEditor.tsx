@@ -31,16 +31,31 @@ import { StepFinal } from './steps/StepFinal';
 
 const SAVE_DEBOUNCE_MS = 700;
 
+/** Старые планы: close у task_other (правило и исключения) → transfer на РОПа; changed — нужно досохранить. */
+function normalizeLegacyClose(plan: DismissalPlan | undefined, items: DismissalRunDetail['items']) {
+  const rules = { ...(plan?.rules ?? {}) };
+  const overrides = { ...(plan?.overrides ?? {}) };
+  let changed = false;
+  if (rules.task_other?.action === 'close') { rules.task_other = { ...rules.task_other, action: 'transfer', targets: [], departmentId: null }; changed = true; }
+  const other = new Set(items.filter(i => i.kind === 'task_other').map(i => i.key));
+  for (const [k, ov] of Object.entries(overrides)) {
+    if (other.has(k) && ov.action === 'close') { overrides[k] = { action: 'transfer', target: null }; changed = true; } // → РОПу, как читает сервер
+  }
+  return { rules, overrides, changed };
+}
+
 export function DraftEditor({ run, existing, title }: { run: DismissalRunDetail; existing?: boolean; title: React.ReactNode }) {
   const qc = useQueryClient();
   const users = useDismissalUsers();
   const departments = useDismissalDepartments();
   const cmd = useRunCommand(run.id);
-  const initialFilled = !run.plan?.ropBitrixId && !!run.rop;
+  // 27.11: у «Задач без сделок» нет «Закрыть». Старое close в правиле/исключениях → «РОПу», и сразу сохраняем.
+  const [legacy] = useState(() => normalizeLegacyClose(run.plan, run.items));
+  const initialFilled = (!run.plan?.ropBitrixId && !!run.rop) || legacy.changed;
   const [plan, setPlan] = useState<DismissalPlan>(() => ({
     ...run.plan,
-    rules: run.plan?.rules ?? {},
-    overrides: run.plan?.overrides ?? {},
+    rules: legacy.rules,
+    overrides: legacy.overrides,
     ropBitrixId: run.plan?.ropBitrixId ?? run.rop?.bitrixId ?? null,
     notifyRop: run.plan?.notifyRop ?? true,
     passwordReset: run.plan?.passwordReset ?? true,

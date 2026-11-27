@@ -53,7 +53,12 @@ export interface ResolvedItem {
   /** Получатель — РОП по умолчанию */
   toRop: boolean;
   overridden: boolean;
+  /** Задача по УПД (info.upd): всегда РОПу, действие не меняется */
+  upd?: boolean;
 }
+
+/** Задача по УПД (проект «Клиенты УПД»): всегда РОПу — как resolvePlan на сервере (владелец 27.11). */
+export const isUpdTask = (it: DismissalItem) => !!it.info?.upd && (it.kind === 'task_other' || it.kind === 'task_deal');
 
 export interface RepeatClient {
   key: string;
@@ -115,7 +120,9 @@ export function resolveItems(plan: DismissalPlan, items: DismissalItem[], deptMa
   // 2) остальное, кроме follow
   for (const it of items) {
     if (it.kind === 'deal_repeat' || out.has(it.key)) continue;
-    const ov = plan.overrides[it.key];
+    const raw = plan.overrides[it.key];
+    // 27.11: у task_other «Закрыть» нет; старое close читаем как «РОПу» — как сервер
+    const ov = it.kind === 'task_other' && raw?.action === 'close' ? { action: 'transfer' as const, target: null } : raw;
     const rule = ruleOf(plan, it.kind);
     const base = it.kind === 'deal_primary' ? defaultAction(it) : rule.action;
     const action = ov && actionAllowed(it, ov.action) ? ov.action : base;
@@ -144,6 +151,11 @@ export function resolveItems(plan: DismissalPlan, items: DismissalItem[], deptMa
     else out.set(it.key, { item: it, action: 'transfer', viaFollow: true, target: deal.target, toRop: false, overridden: ov });
   }
 
+  // 4) задачи по УПД — всегда РОПу, что бы ни стояло в правиле/исключении/«за сделкой»
+  for (const it of items) {
+    if (isUpdTask(it)) out.set(it.key, { item: it, action: 'transfer', viaFollow: false, target: rop, toRop: true, overridden: false, upd: true });
+  }
+
   return items.map(it => out.get(it.key)!);
 }
 
@@ -151,8 +163,10 @@ export interface PlanTotals {
   repeat: { transfer: number; brak: number; skip: number; byTarget: Map<number, { deals: number; ltv: number; clients: Set<string> }> };
   primary: { transfer: number; brak: number; brakAmount: number; skip: number; byTarget: Map<number, { deals: number; amount: number }> };
   follow: { transfer: number; close: number; skip: number; byTarget: Map<number, number> };
-  /** задачи/дела без сделок + постановщик → РОПу (по умолчанию) */
+  /** задачи/дела без сделок + постановщик → РОПу (по умолчанию), включая задачи по УПД */
   toRop: number;
+  /** из них задачи по УПД */
+  upd: number;
   otherTransfer: number;
   close: number;
   remove: number;
@@ -170,7 +184,7 @@ export function planTotals(resolved: ResolvedItem[]): PlanTotals {
     repeat: { transfer: 0, brak: 0, skip: 0, byTarget: new Map() },
     primary: { transfer: 0, brak: 0, brakAmount: 0, skip: 0, byTarget: new Map() },
     follow: { transfer: 0, close: 0, skip: 0, byTarget: new Map() },
-    toRop: 0, otherTransfer: 0, close: 0, remove: 0, skip: 0, missing: {}, changes: 0, leftOnSource: 0,
+    toRop: 0, upd: 0, otherTransfer: 0, close: 0, remove: 0, skip: 0, missing: {}, changes: 0, leftOnSource: 0,
   };
   for (const r of resolved) {
     const k = r.item.kind;
@@ -202,7 +216,7 @@ export function planTotals(resolved: ResolvedItem[]): PlanTotals {
         if (r.target != null) t.follow.byTarget.set(r.target, (t.follow.byTarget.get(r.target) ?? 0) + 1);
       } else if (r.action === 'close') t.follow.close++; else t.follow.skip++;
     } else if (r.action === 'transfer') {
-      if (r.toRop) t.toRop++; else t.otherTransfer++;
+      if (r.toRop) { t.toRop++; if (r.upd) t.upd++; } else t.otherTransfer++;
     } else if (r.action === 'close') t.close++;
     else if (r.action === 'remove') t.remove++;
     else t.skip++;

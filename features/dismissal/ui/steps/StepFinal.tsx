@@ -114,7 +114,8 @@ export function StepFinal({ ctx, onStart, starting, startError }: {
           <section className={`${card} p-3 sm:p-4`}>
             <h3 className="mb-2 text-sm font-semibold text-[var(--color-text)]">РОПу и сообщения</h3>
             <ul className="flex flex-col gap-1 text-sm">
-              <li>Задач и дел без сделок → {ctx.ropName ? <b>{ctx.ropName}</b> : <span className="text-[var(--color-negative)]">РОП не выбран</span>}: <b>{fmtNum(t.toRop)}</b></li>
+              <li>Задач и дел без сделок → {ctx.ropName ? <b>{ctx.ropName}</b> : <span className="text-[var(--color-negative)]">РОП не выбран</span>}: <b>{fmtNum(t.toRop - t.upd)}</b></li>
+              {t.upd > 0 && <li>Задачи по УПД: <b>{fmtNum(t.upd)}</b> → {ctx.ropName ? <b>{ctx.ropName}</b> : <span className="text-[var(--color-negative)]">РОП не выбран</span>} <span className="text-[var(--color-text-muted)]">(не закрываются)</span></li>}
               {t.otherTransfer > 0 && <li>Другим получателям: <b>{fmtNum(t.otherTransfer)}</b></li>}
               {t.remove > 0 && <li>Убираем его из участников: <b>{fmtNum(t.remove)}</b></li>}
               <li>Сообщение РОПу: <b>{ctx.plan.notifyRop ? 'да' : 'нет'}</b></li>

@@ -1,12 +1,12 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Check, MoreHorizontal, RotateCcw } from 'lucide-react';
+import { Check, Lock, MoreHorizontal, RotateCcw } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Popover } from '@/components/ui/Popover';
 import { SearchSelect } from '@/components/ui/SearchSelect';
-import { DISMISSAL_KIND_LABELS, type DismissalAction, type DismissalItem, type DismissalKind } from '../../types';
-import { fmtNum, plural, ruleOf } from '../planMath';
+import { DISMISSAL_ALLOWED_ACTIONS, DISMISSAL_KIND_LABELS, type DismissalAction, type DismissalItem, type DismissalKind } from '../../types';
+import { fmtNum, isUpdTask, plural, ruleOf } from '../planMath';
 import { TitleText } from '../ItemRow';
 import { PanelCard, Segment } from '../RecipientPanel';
 import { StepLayout, WizardFooter } from '../StepLayout';
@@ -18,7 +18,7 @@ import type { WizardCtx } from '../wizardCtx';
 
 const PANEL = 'w-[400px] max-w-[calc(100vw-16px)]';
 const KINDS: { kind: DismissalKind; hint: string; opts: { value: string; label: string }[] }[] = [
-  { kind: 'task_other', hint: 'Задачи, не привязанные к его открытым сделкам (УПД, внутренние).', opts: [{ value: 'transfer', label: 'РОПу' }, { value: 'close', label: 'Завершить' }, { value: 'skip', label: 'Не трогать' }] },
+  { kind: 'task_other', hint: 'Задачи, не привязанные к его открытым сделкам (УПД, внутренние). Закрыть их нельзя — только передать РОПу или оставить.', opts: [{ value: 'transfer', label: 'РОПу' }, { value: 'close', label: 'Завершить' }, { value: 'skip', label: 'Не трогать' }] },
   { kind: 'activity_other', hint: 'Звонки, встречи и дела вне его открытых сделок.', opts: [{ value: 'transfer', label: 'РОПу' }, { value: 'close', label: 'Завершить' }, { value: 'skip', label: 'Не трогать' }] },
   { kind: 'task_creator', hint: 'Задачи, которые он поставил другим. Постановщиком станет РОП — чтобы результат было кому принять.', opts: [{ value: 'transfer', label: 'РОПу' }, { value: 'skip', label: 'Не трогать' }] },
   { kind: 'task_participant', hint: 'Где он соисполнитель или наблюдатель. По умолчанию просто убираем его из задачи.', opts: [{ value: 'remove', label: 'Убрать' }, { value: 'transfer', label: 'Заменить' }, { value: 'skip', label: 'Не трогать' }] },
@@ -37,6 +37,7 @@ export function StepTasks({ ctx }: { ctx: WizardCtx }) {
   const follow = useMemo(() => ctx.items.filter(i => i.kind === 'task_deal' || i.kind === 'activity_deal'), [ctx.items]);
   const [followOpen, setFollowOpen] = useState(false);
   const fT = ctx.totals.follow;
+  const followUpd = follow.filter(isUpdTask).length;
 
   // РОП уволенного допустим всегда, даже вне среза инициатора (контракт v3) — добавляем его в список, иначе вместо имени — плейсхолдер.
   const ropOptions = ctx.run.rop && !ctx.recipients.some(o => o.value === String(ctx.run.rop!.bitrixId))
@@ -71,7 +72,8 @@ export function StepTasks({ ctx }: { ctx: WizardCtx }) {
           {follow.length > 0 && (
             <div className="rounded-lg bg-[var(--color-bg-hover)] p-3 text-sm text-[var(--color-text)]">
               Задачи по сделкам — <b>{fmtNum(follow.length)}</b>. Уйдут за сделкой: <b>{fmtNum(fT.transfer)}</b> новому ответственному
-              {fT.close > 0 && <>, <b>{fmtNum(fT.close)}</b> закроются с автобраком</>}{fT.skip > 0 && <>, <b>{fmtNum(fT.skip)}</b> останутся вместе со сделкой</>}.{' '}
+              {fT.close > 0 && <>, <b>{fmtNum(fT.close)}</b> закроются с автобраком</>}{fT.skip > 0 && <>, <b>{fmtNum(fT.skip)}</b> останутся вместе со сделкой</>}
+              {followUpd > 0 && <>; <b>{fmtNum(followUpd)}</b> по УПД — только РОПу {ctx.ropName ?? '(РОП не выбран)'}</>}.{' '}
               <button type="button" onClick={() => setFollowOpen(true)} className="min-h-11 font-medium text-[var(--color-accent)] hover:underline sm:min-h-0">Показать список</button>
             </div>
           )}
@@ -87,11 +89,16 @@ export function StepTasks({ ctx }: { ctx: WizardCtx }) {
   );
 }
 
-function KindBlock({ ctx, kind, hint, opts }: { ctx: WizardCtx; kind: DismissalKind; hint: string; opts: { value: string; label: string }[] }) {
+function KindBlock({ ctx, kind, hint, opts: allOpts }: { ctx: WizardCtx; kind: DismissalKind; hint: string; opts: { value: string; label: string }[] }) {
+  // только допустимые контрактом действия (27.11: у задач без сделок «Завершить» убрано совсем)
+  const opts = allOpts.filter(o => DISMISSAL_ALLOWED_ACTIONS[kind].includes(o.value as DismissalAction));
   const items = useMemo(() => ctx.items.filter(i => i.kind === kind), [ctx.items, kind]);
   const [limit, setLimit] = useState(30);
   const rule = ruleOf(ctx.plan, kind);
   const ropKind = kind !== 'task_participant';
+  const updN = items.filter(isUpdTask).length;
+  // задачи по УПД уходят РОПу при любом действии вида — если вид не «РОПу», говорим об этом явно
+  const updNote = updN > 0 && !(rule.action === 'transfer' && !rule.targets.length);
   return (
     <section className={card}>
       <div className="flex flex-col gap-2 p-3 sm:p-4">
@@ -111,6 +118,12 @@ function KindBlock({ ctx, kind, hint, opts }: { ctx: WizardCtx; kind: DismissalK
                 searchable placeholder="На кого заменить?" searchPlaceholder="Имя, должность, отдел…" ariaLabel="На кого заменить"
                 className={`w-full sm:w-[260px] ${!rule.targets.length ? 'border-[var(--color-negative)]' : ''}`} panelClassName={PANEL} />)}
         </div>
+        {updNote && (
+          <p className="flex items-start gap-1.5 text-xs text-[var(--color-warning)]">
+            <Lock size={12} className="mt-0.5 shrink-0" />
+            <span>Задачи по УПД ({fmtNum(updN)}) {rule.action === 'close' ? 'не закрываются' : rule.action === 'skip' ? 'не остаются на уволенном' : 'не передаются другим'} — уйдут РОПу {ctx.ropName ?? '(РОП не выбран)'}.</span>
+          </p>
+        )}
       </div>
       <ul className="divide-y divide-[var(--color-border)] border-t border-[var(--color-border)]">
         {items.slice(0, limit).map(it => <TaskRow key={it.key} ctx={ctx} it={it} kind={kind} opts={opts} />)}
@@ -131,6 +144,7 @@ function TaskRow({ ctx, it, kind, opts }: { ctx: WizardCtx; it: DismissalItem; k
   const r = ctx.resolved.get(it.key);
   const dl = deadlineOf(it);
   const outcome = r?.action === 'transfer' ? `→ ${r.target != null ? ctx.nameOf(r.target) : 'не выбрано'}` : opts.find(o => o.value === r?.action)?.label ?? '';
+  if (r?.upd) return <UpdRow ctx={ctx} it={it} />;
   return (
     <li className={`flex items-start gap-3 px-3 py-2 sm:px-4 ${ov ? 'bg-[var(--color-accent-soft)]/40' : ''}`}>
       <div className="min-w-0 flex-1">
@@ -165,6 +179,27 @@ function TaskRow({ ctx, it, kind, opts }: { ctx: WizardCtx; it: DismissalItem; k
   );
 }
 
+/** Строка задачи по УПД: замок, всегда РОПу, без исключений. */
+function UpdRow({ ctx, it }: { ctx: WizardCtx; it: DismissalItem }) {
+  const r = ctx.resolved.get(it.key);
+  const dl = deadlineOf(it);
+  return (
+    <li className="flex items-start gap-3 px-3 py-2 sm:px-4">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm"><TitleText item={it} /></div>
+        <div className="flex flex-wrap gap-x-2 text-xs text-[var(--color-text-muted)]">
+          {dl && <span className={dl.overdue ? 'text-[var(--color-negative)]' : ''}>срок {dl.text}{dl.overdue && ' · просрочена'}</span>}
+          <span className={r?.target == null ? 'text-[var(--color-negative)]' : ''}>→ {r?.target != null ? ctx.nameOf(r.target) : 'РОП не выбран'}</span>
+        </div>
+      </div>
+      <span title="Задачи из проекта «Клиенты УПД» не закрываются и не передаются другим — только РОПу"
+        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--color-warning)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--color-warning)]">
+        <Lock size={11} /> УПД → только РОПу
+      </span>
+    </li>
+  );
+}
+
 function FollowList({ ctx, items }: { ctx: WizardCtx; items: DismissalItem[] }) {
   const [limit, setLimit] = useState(100);
   const titleOf = useMemo(() => new Map(ctx.items.map(i => [i.key, i])), [ctx.items]);
@@ -174,7 +209,8 @@ function FollowList({ ctx, items }: { ctx: WizardCtx; items: DismissalItem[] }) 
         {items.slice(0, limit).map(it => {
           const r = ctx.resolved.get(it.key);
           const deal = it.info?.dealKey ? titleOf.get(it.info.dealKey) : undefined;
-          const text = r?.action === 'transfer' ? `→ ${r.target != null ? ctx.nameOf(r.target) : 'получатель сделки не выбран'}` : r?.action === 'close' ? 'закроется (сделка в автобраке)' : 'останется (сделку не трогаем)';
+          const text = r?.upd ? `УПД → только РОПу${r.target != null ? ` ${ctx.nameOf(r.target)}` : ' (не выбран)'}`
+            : r?.action === 'transfer' ? `→ ${r.target != null ? ctx.nameOf(r.target) : 'получатель сделки не выбран'}` : r?.action === 'close' ? 'закроется (сделка в автобраке)' : 'останется (сделку не трогаем)';
           return (
             <li key={it.key} className="py-2">
               <div className="text-sm"><TitleText item={it} /></div>

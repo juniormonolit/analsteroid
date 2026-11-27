@@ -14,7 +14,7 @@ import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { fetchAliasMap, type AliasInfo } from '@/features/customers/engine/merge';
 import { ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
 import {
-  PRIMARY_BRAK_STAGE, PRIMARY_FUNNELS, PRIMARY_MIN_AMOUNT, REPEAT_FUNNELS,
+  PRIMARY_BRAK_STAGE, PRIMARY_FUNNELS, PRIMARY_MIN_AMOUNT, REPEAT_FUNNELS, UPD_TASK_GROUP_ID,
   type DismissalItemInfo, type DismissalKind,
 } from '../types';
 import { dealUrl, fmtDate, fmtMoney, ownerUrl, readAll, sleep, taskUrl } from './bx';
@@ -211,7 +211,7 @@ export async function scanAccount(sourceId: number, onProgress?: (stage: string)
     push({
       kind: dealId ? 'task_deal' : 'task_other', entityId: id, title: t.title?.trim() || `Задача #${id}`, url: taskUrl(id, sourceId),
       subtitle: taskSub(t, role, dealId ? `сделка #${dealId}` : null),
-      info: { deadline: t.deadline ?? null, role, ...(dealId ? { dealKey: dealKeyOf.get(dealId)! } : {}) },
+      info: { deadline: t.deadline ?? null, role, ...(dealId ? { dealKey: dealKeyOf.get(dealId)! } : {}), ...(num(t.groupId) === UPD_TASK_GROUP_ID ? { upd: true } : {}) },
       meta: { status: num(t.status), createdBy: num(t.createdBy), creatorIsSource, groupId: num(t.groupId) || null, dealId: dealId ?? null },
     });
   }

@@ -1,7 +1,7 @@
 // БД «Увольнятора» (миграции 287 + 290 v2, monolitika через systemDb): прогоны, строки, завершающие шаги, переходы статусов.
 import { systemDb } from '@/lib/db/clients';
 import {
-  DISMISSAL_KINDS, PASSWORD_RESET_BITRIX_ID, type DismissalCounts, type DismissalFinals, type DismissalItem, type DismissalItemInfo, type DismissalKind,
+  DISMISSAL_KINDS, PASSWORD_RESET_BITRIX_ID, UPD_TASK_GROUP_ID, type DismissalCounts, type DismissalFinals, type DismissalItem, type DismissalItemInfo, type DismissalKind,
   type DismissalAnnouncement, type DismissalPlan, type DismissalRunDetail, type DismissalRunStatus, type DismissalRunSummary, type DismissalUser,
 } from '../types';
 import { defaultPlan, expandDepartments, resolvePlan, sanitizePlan } from './plan';
@@ -180,14 +180,17 @@ export async function startRun(id: string, check?: PlanCheck): Promise<void> {
   // Срез — того, кто запускает (план мог сохранить другой человек).
   const bad = check ? await check(run.plan, Number(run.rop_bitrix_id) || null) : null;
   if (bad) throw new DismissalError(bad);
-  const r = await systemDb().query<{ key: string; kind: DismissalKind; ord: number; info: DismissalItemInfo | null }>('SELECT key, kind, ord, info FROM dismissal_items WHERE run_id = $1', [id]);
+  // upd — и для черновиков, собранных до 27.11: по проекту задачи из meta.groupId.
+  const r = await systemDb().query<{ key: string; kind: DismissalKind; ord: number; info: DismissalItemInfo | null; group_id: string | null }>(
+    `SELECT key, kind, ord, info, meta->>'groupId' AS group_id FROM dismissal_items WHERE run_id = $1`, [id],
+  );
   const old = r.rows.find(x => !(KINDS as readonly string[]).includes(x.kind));
   if (old) throw new DismissalError('Прогон собран старой версией Увольнятора — пересоберите (кнопка «Пересобрать»)', 409);
   if (!r.rows.length) throw new DismissalError('На аккаунте ничего не найдено — исполнять нечего');
   const sourceId = Number(run.source_bitrix_id);
   // «Раскидать по отделу» — состав отдела на момент «Готово».
   const exp = await expandDepartments(run.plan, dep => departmentTargets(dep, sourceId));
-  const res = resolvePlan(exp.plan, r.rows.map(x => ({ key: x.key, kind: x.kind, ord: x.ord, info: x.info ?? {} })), sourceId);
+  const res = resolvePlan(exp.plan, r.rows.map(x => ({ key: x.key, kind: x.kind, ord: x.ord, info: { ...(x.info ?? {}), ...(Number(x.group_id) === UPD_TASK_GROUP_ID ? { upd: true } : {}) } })), sourceId);
   // Журнал «раскидали по отделу»: в строку — название отдела (если получатель из правила, а не из исключения),
   // в план — фактический состав отдела на момент запуска (targets рядом с departmentId).
   const depName: Partial<Record<DismissalKind, string>> = {};
