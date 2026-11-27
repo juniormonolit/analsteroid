@@ -10,6 +10,7 @@ import {
   BarChart2, ClipboardList, ListChecks, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
   Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3, Megaphone, Tags, GitFork, UserX, Eye,
+  Star, ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -33,6 +34,7 @@ import { canViewBigBrother } from '@/lib/activity/access';
 import { ActivityTracker } from '@/components/activity/ActivityTracker';
 import { MARKETING_PRESETS } from '@/lib/marketing/presets';
 import { BottomTabBar } from '@/components/layout/BottomTabBar';
+import { useNavFavorites } from '@/components/layout/navFavorites';
 
 // Ширина развёрнутого сайдбара (задача 1575, полировка шапки/меню): было 260 —
 // «Менеджеры - Повторные» / «Товары - Сравнительный» и другие длинные имена
@@ -418,10 +420,8 @@ const NAV: NavItem[] = [
       href: `/marketing/${key}`,
     })),
   },
-  // «Графики» (задача владельца 28.07): конструктор графиков по метрикам отчётов +
-  // дефолтные кривые «вероятность продажи от дней в стадии». Раздел первого уровня,
-  // а не в «Ещё» — владелец строит его как рабочий инструмент анализа воронки.
-  { label: 'Графики', href: '/charts', icon: <LineChart size={18} />, perm: 'section.charts' },
+  // «Графики» (задача владельца 28.07) жили здесь разделом первого уровня; 27.11 владелец
+  // убрал их в «Ещё» (см. moreItems) — на их месте теперь избранные пункты «Ещё».
 ];
 
 /* Содержимое сайдбара (nav + нижние секции + footer) — общее для десктопного
@@ -469,6 +469,9 @@ function SidebarBody({
     // «Дашборд тест» (задача владельца 08.10) — черновик дашборда директора по
     // продажам; первым в списке, пока раздел дорабатывается.
     { href: '/dashboard-test', label: 'Дашборд', icon: <LayoutDashboard size={18} />, ok: canMore('section.dashboard_test') },
+    // «Графики» — из основного меню в «Ещё» (правка владельца 27.11). Гейт прежний: только
+    // право section.charts, без админского обхода canMore.
+    { href: '/charts', label: 'Графики', icon: <LineChart size={18} />, ok: hasPerm(user, 'section.charts') },
     // «Повторные» и «Товарная матрица» — из блока «Продажи» (правка владельца 17.08:
     // «убери эти пункты в Ещё»). «Повторные» строже остальных: супер-админ или
     // явное право (роль «Администратор» без джокера пункт не видит — как до 10.09).
@@ -546,14 +549,40 @@ function SidebarBody({
     { href: '/sales/unsell-deal', label: 'Снять с продажи', icon: <RotateCcw size={18} />, ok: canMore('action.deals.unsell') },
   ].filter(i => i.ok);
   const moreActive = moreItems.some(i => pathname.startsWith(i.href));
+
+  // Избранное «Ещё» (задача владельца 27.11): звёздочка у пункта «Ещё» → пункт дублируется в
+  // основное меню на место бывших «Графиков». Список и порядок — на аккаунте (navFavorites.ts).
+  // Без прав пункт не рисуется (берём только из moreItems), но в сохранённом списке остаётся.
+  const fav = useNavFavorites();
+  const favItems = (fav.favorites ?? [])
+    .map(h => moreItems.find(i => i.href === h))
+    .filter((i): i is (typeof moreItems)[number] => !!i);
+  const favActive = favItems.some(i => pathname.startsWith(i.href));
+  // Режим «Изменить порядок» (стрелки ↑↓) — для тача, где HTML5-drag не работает; на десктопе
+  // строки избранного ещё и перетаскиваются мышью.
+  const [favReorder, setFavReorder] = useState(false);
+  const [favDrag, setFavDrag] = useState<string | null>(null);
+  const [favDragOver, setFavDragOver] = useState<string | null>(null);
+  useEffect(() => { if (favItems.length < 2) setFavReorder(false); }, [favItems.length]);
+  const moveFav = (from: number, to: number) => {
+    if (to < 0 || to >= favItems.length || from === to) return;
+    const order = favItems.map(i => i.href);
+    const [x] = order.splice(from, 1);
+    order.splice(to, 0, x);
+    fav.reorderVisible(order);
+  };
+
   // Авто-раскрытие, когда пользователь В одном из спрятанных разделов — активный
   // пункт не должен быть невидимым (и при навигации туда извне, поэтому effect,
   // а не только начальное значение). Закрыть руками можно в любой момент.
-  const [moreOpen, setMoreOpen] = useState(moreActive);
+  // Раздел из избранного виден в основном меню — «Ещё» ради него не раскрываем
+  // (ждём загрузки избранного, иначе раскрыли бы до того, как узнали).
+  const favLoaded = fav.favorites !== undefined;
+  const [moreOpen, setMoreOpen] = useState(false);
   useEffect(() => {
-    if (moreActive) setMoreOpen(true);
+    if (favLoaded && moreActive && !favActive) setMoreOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname]);
+  }, [pathname, favLoaded]);
   // Список «Ещё» теперь прокручивается сам (07.10, #8857) — значит, активный пункт
   // из нижней части списка может оказаться за краем. Доводим его в видимую область
   // при раскрытии и при переходе: тот же принцип, что у лент вкладок (CLAUDE.md,
@@ -795,6 +824,90 @@ function SidebarBody({
                 )}
               </div>
             ))}
+            {favItems.length > 0 && (
+              <div>
+                {favItems.map((fi, idx) => {
+                  const active = pathname.startsWith(fi.href);
+                  const dragFrom = favDrag ? favItems.findIndex(x => x.href === favDrag) : -1;
+                  const isDropTarget = favDragOver === fi.href && favDrag !== null && favDrag !== fi.href && dragFrom !== -1;
+                  const dropCls = isDropTarget
+                    ? (dragFrom < idx ? ' shadow-[inset_0_-2px_0_0_var(--color-accent)]' : ' shadow-[inset_0_2px_0_0_var(--color-accent)]')
+                    : '';
+                  return (
+                    <div
+                      key={fi.href}
+                      data-fav-href={fi.href}
+                      className={`rounded-[10px]${dropCls}${favDrag === fi.href ? ' opacity-40' : ''}`}
+                      draggable={!favReorder}
+                      onDragStart={e => { setFavDrag(fi.href); e.dataTransfer.effectAllowed = 'move'; }}
+                      onDragEnd={() => { setFavDrag(null); setFavDragOver(null); }}
+                      onDragOver={e => {
+                        if (favDrag && favDrag !== fi.href && dragFrom !== -1) {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                          if (favDragOver !== fi.href) setFavDragOver(fi.href);
+                        }
+                      }}
+                      onDragLeave={() => setFavDragOver(p => (p === fi.href ? null : p))}
+                      onDrop={e => {
+                        e.preventDefault();
+                        if (favDrag && dragFrom !== -1) moveFav(dragFrom, idx);
+                        setFavDrag(null);
+                        setFavDragOver(null);
+                      }}
+                    >
+                      {favReorder && !collapsed ? (
+                        <div className={`${navItemBase(false)} !items-center !py-1 ${NAV_ITEM_INACTIVE}`}>
+                          <span className={navIconCls(false)}>{fi.icon}</span>
+                          <span className="flex-1 min-w-0 break-words line-clamp-2">{fi.label}</span>
+                          <button
+                            type="button"
+                            onClick={() => moveFav(idx, idx - 1)}
+                            disabled={idx === 0}
+                            aria-label={`Поднять «${fi.label}»`}
+                            className="tap-target shrink-0 w-7 h-7 flex items-center justify-center rounded-md text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:bg-[var(--color-sidebar-hover-bg)] disabled:opacity-30 disabled:pointer-events-none"
+                          >
+                            <ArrowUp size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moveFav(idx, idx + 1)}
+                            disabled={idx === favItems.length - 1}
+                            aria-label={`Опустить «${fi.label}»`}
+                            className="tap-target shrink-0 w-7 h-7 flex items-center justify-center rounded-md text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:bg-[var(--color-sidebar-hover-bg)] disabled:opacity-30 disabled:pointer-events-none"
+                          >
+                            <ArrowDown size={15} />
+                          </button>
+                        </div>
+                      ) : (
+                        <RailTooltip collapsed={collapsed} label={fi.label}>
+                          {/* draggable={false} — иначе браузер тащит саму ссылку вместо строки (как у отчётов). */}
+                          <Link
+                            href={fi.href}
+                            draggable={false}
+                            className={`${navItemBase(collapsed)} ${active ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
+                          >
+                            <span className={navIconCls(active)}>{fi.icon}</span>
+                            {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{fi.label}</span>}
+                          </Link>
+                        </RailTooltip>
+                      )}
+                    </div>
+                  );
+                })}
+                {favReorder && !collapsed && (
+                  <div className="flex justify-end px-1 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setFavReorder(false)}
+                      className="min-h-11 px-4 rounded-[10px] text-[13px] font-semibold text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] hover:opacity-90"
+                    >
+                      Готово
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </nav>
 
           {/* ── Нижняя зона (оптимизация 16.07, задача Иосифа «без вертикального
@@ -811,9 +924,9 @@ function SidebarBody({
                     <button
                       type="button"
                       onClick={() => setMoreOpen(v => !v)}
-                      className={`w-full ${navItemBase(collapsed)} ${moreActive && !moreOpen ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
+                      className={`w-full ${navItemBase(collapsed)} ${moreActive && !favActive && !moreOpen ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                     >
-                      <span className={navIconCls(moreActive && !moreOpen)}><LayoutGrid size={18} /></span>
+                      <span className={navIconCls(moreActive && !favActive && !moreOpen)}><LayoutGrid size={18} /></span>
                       {!collapsed && <>
                         <span className="flex-1 min-w-0 text-left">Ещё</span>
                         <ChevronRight
@@ -828,8 +941,61 @@ function SidebarBody({
                       сжимаются. Когда всё помещается, прокрутки нет и вид прежний. */}
                   {moreOpen && (
                     <div ref={moreListRef} className="min-h-0 overflow-y-auto overscroll-contain">
+                      {/* Порядок избранного на таче — стрелками ↑↓ прямо в основном меню. */}
+                      {!collapsed && favItems.length >= 2 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFavReorder(v => !v);
+                            navRef.current?.querySelector('[data-fav-href]')?.scrollIntoView({ block: 'nearest' });
+                          }}
+                          aria-pressed={favReorder}
+                          className={`ml-5 mr-1 my-0.5 min-h-11 sm:min-h-8 flex items-center gap-2 px-2.5 rounded-[10px] text-left text-[12px] transition-colors ${
+                            favReorder
+                              ? 'text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)]'
+                              : 'text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:bg-[var(--color-sidebar-hover-bg)]'
+                          }`}
+                        >
+                          <ArrowUpDown size={14} className="shrink-0" />
+                          Порядок избранного
+                        </button>
+                      )}
                       {moreItems.map(mi => {
                         const active = pathname.startsWith(mi.href);
+                        if (!collapsed) {
+                          const isFav = fav.isFavorite(mi.href);
+                          const tip = isFav ? 'Убрать из избранного' : 'Добавить в избранное';
+                          return (
+                            <div key={mi.href} className="flex items-center">
+                              {/* Звезда видна всегда (не hover-only, правило 5) и стоит вне ссылки —
+                                  клик по ней не уводит в раздел. Занимает прежний отступ ml-4. */}
+                              <Tooltip content={tip} side="top">
+                                <button
+                                  type="button"
+                                  onClick={() => fav.toggle(mi.href)}
+                                  aria-label={tip}
+                                  aria-pressed={isFav}
+                                  disabled={!favLoaded}
+                                  className={`tap-target shrink-0 ml-1 w-4 h-4 flex items-center justify-center transition-colors ${
+                                    isFav
+                                      ? 'text-[var(--color-sidebar-active)]'
+                                      : 'text-[var(--color-sidebar-text-muted)] opacity-50 hover:opacity-100 hover:text-[var(--color-sidebar-active)]'
+                                  }`}
+                                >
+                                  <Star size={13} fill={isFav ? 'currentColor' : 'none'} />
+                                </button>
+                              </Tooltip>
+                              <Link
+                                href={mi.href}
+                                data-more-active={active ? 'true' : undefined}
+                                className={`flex-1 min-w-0 ${navItemBase(false)} !ml-0 ${active ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
+                              >
+                                <span className={navIconCls(active)}>{mi.icon}</span>
+                                <span className="flex-1 min-w-0 break-words line-clamp-2">{mi.label}</span>
+                              </Link>
+                            </div>
+                          );
+                        }
                         return (
                           <RailTooltip key={mi.href} collapsed={collapsed} label={mi.label}>
                             <Link

@@ -10,6 +10,9 @@ const KEYS: Record<string, (v: unknown) => boolean> = {
   repeatKanbanDepts: v => Array.isArray(v) && v.length <= 50 && v.every(x => typeof x === 'string' && x.length > 0 && x.length < 80),
   // Чужие общие «свои колонки» «Сегодня», скрытые у себя (миграция 262): id колонок.
   hiddenTodayColumns: v => Array.isArray(v) && v.length <= 100 && v.every(x => Number.isInteger(x) && (x as number) > 0),
+  // Избранное пунктов «Ещё» в основном меню (27.11): href разделов по порядку, без дублей.
+  navFavorites: v => Array.isArray(v) && v.length <= 60 && new Set(v).size === v.length
+    && v.every(x => typeof x === 'string' && /^\/[a-z0-9/_-]{1,80}$/.test(x)),
 };
 
 export async function GET() {
