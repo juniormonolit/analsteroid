@@ -8,7 +8,7 @@ import type { TrainingEvent, TrainingEventInput, TrainingEventResponse, Training
 import { TaskerTabs } from '../../ui/shared/TaskerPage';
 import { TabStrip } from '../../ui/shared/TabStrip';
 import {
-  QUEUE_KEY, TRAININGS_KEY, cancelTraining, createTraining, enrollManager, getJson, resyncTraining, setAttendance, unenrollManager, updateTraining,
+  QUEUE_KEY, TRAININGS_KEY, approveTraining, cancelTraining, createTraining, enrollManager, getJson, repeatTraining, resyncTraining, setAttendance, unenrollManager, updateTraining,
 } from './api';
 import { addDaysKey, durationLabel, endOf, mskDateKey, mskDayLabel, mskTime } from './format';
 import { TrainingDetails } from './TrainingDetails';
@@ -244,6 +244,12 @@ export function TrainingsPage() {
             onEdit={() => openPanel({ kind: 'edit', id: current.id })}
             onCancelEvent={() => setConfirmCancel(true)}
             onResync={() => run(() => resyncTraining(current.id))}
+            onApprove={() => run(() => approveTraining(current.id))}
+            onRepeat={(startsAt, ids) => run(async () => {
+              const r = await repeatTraining(current.id, startsAt, ids);
+              setPanel({ kind: 'view', id: r.event.id });
+              if (r.failed.length) setErr(`Не записаны: ${r.failed.map(f => f.reason).join('; ')}`);
+            })}
           />
         )}
         {panel && panel.kind !== 'create' && !current && (

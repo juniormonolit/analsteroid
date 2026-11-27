@@ -1,7 +1,7 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { CalendarClock, CalendarCheck, CalendarX, MapPin, Pencil, RefreshCw, UserPlus, Users, X, Ban, ExternalLink, Target } from 'lucide-react';
+import { CalendarClock, CalendarCheck, CalendarX, MapPin, Pencil, RefreshCw, UserPlus, Users, X, Ban, ExternalLink, Target, BadgeCheck, Repeat } from 'lucide-react';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
 import type { TaskerMetric } from '../../types';
@@ -29,6 +29,8 @@ export function TrainingDetails({
   onResync,
   onAttendance,
   metrics,
+  onApprove,
+  onRepeat,
 }: {
   event: TrainingEvent;
   canManage: boolean;
@@ -42,7 +44,14 @@ export function TrainingDetails({
   onEdit: () => void;
   onCancelEvent: () => void;
   onResync: () => void;
+  /** «Утвердить состав и тему» — сообщение бота всем записанным (собрание 26.11, п.7). */
+  onApprove?: () => void;
+  /** «Повторить занятие» — тот же состав и тема в новое время. */
+  onRepeat?: (startsAt: string, managerIds: number[]) => void;
 }) {
+  const [repeatOpen, setRepeatOpen] = useState(false);
+  const [repeatAt, setRepeatAt] = useState('');
+  const [repeatWho, setRepeatWho] = useState<string[]>(() => event.attendees.map(a => String(a.manager.id)));
   const [pick, setPick] = useState('');
   const [goals, setGoals] = useState<string[]>(event.metricIds);
   const [note, setNote] = useState('');
@@ -122,12 +131,58 @@ export function TrainingDetails({
         </div>
       )}
 
+      {canManage && open && onApprove && event.enrolledCount > 0 && (
+        <div className="flex min-w-0 flex-col gap-2 rounded-lg border border-[var(--color-accent)] px-3 py-2 sm:flex-row sm:items-center">
+          <span className="min-w-0 flex-1 text-[13px] leading-snug">
+            {event.approvedAt
+              ? <>Утверждено {mskDayLabel(event.approvedAt)}, {mskTime(event.approvedAt)}{event.approvedBy ? ` (${event.approvedBy})` : ''} — записанным ушло сообщение. Поменяли тему или людей — разошлите ещё раз.</>
+              : <>Тема и состав готовы? Утвердите — каждому записанному придёт сообщение бота с темой и временем. Тему меняйте кнопкой «Изменить» (поле «Тема»).</>}
+          </span>
+          <button type="button" onClick={onApprove} disabled={busy}
+            className="inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-3 font-medium text-white disabled:opacity-50">
+            <BadgeCheck size={15} /> {event.approvedAt ? 'Разослать ещё раз' : 'Утвердить состав и тему'}
+          </button>
+        </div>
+      )}
+
       {canManage && !cancelled && (
         <div className="flex flex-wrap gap-2">
+          {onRepeat && event.attendees.length > 0 && (
+            <button type="button" onClick={() => setRepeatOpen(o => !o)} disabled={busy} aria-expanded={repeatOpen}
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 hover:bg-[var(--color-bg-hover)]"><Repeat size={14} /> Повторить занятие</button>
+          )}
           <button type="button" onClick={onEdit} disabled={busy}
             className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 hover:bg-[var(--color-bg-hover)]"><Pencil size={14} /> Изменить</button>
           <button type="button" onClick={onCancelEvent} disabled={busy}
             className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-[var(--color-negative)] hover:bg-[var(--color-bg-hover)]"><Ban size={14} /> Отменить обучение</button>
+        </div>
+      )}
+
+      {canManage && repeatOpen && onRepeat && (
+        <div className="flex min-w-0 flex-col gap-2 rounded-lg bg-[var(--color-bg-hover)] p-3">
+          <span className="text-[13px] font-semibold">Повтор: та же тема «{event.title}», тот же состав</span>
+          <label className="flex min-w-0 flex-col gap-1 text-[12.5px] text-[var(--color-text-secondary)]">
+            Когда
+            <input type="datetime-local" value={repeatAt} onChange={e => setRepeatAt(e.target.value)}
+              className="min-h-11 w-full min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-base outline-none focus:border-[var(--color-accent)] sm:max-w-[260px] sm:text-sm" />
+          </label>
+          <label className="flex min-w-0 flex-col gap-1 text-[12.5px] text-[var(--color-text-secondary)]">
+            Кого позвать
+            <SearchMultiSelect options={event.attendees.map(a => ({ value: String(a.manager.id), label: a.manager.name, hint: a.departmentName }))}
+              value={repeatWho} onChange={setRepeatWho} allLabel="Никого" unitLabel="менеджеров" ariaLabel="Кого позвать на повтор" className="min-h-11 w-full min-w-0" />
+          </label>
+          {repeatAt && repeatWho.length > 0 && (
+            <AvailabilityWarning req={{
+              bitrixIds: [...repeatWho.map(Number), ...(event.trainer ? [event.trainer.id] : [])],
+              slots: [{ start: new Date(repeatAt).toISOString(), end: endOf(new Date(repeatAt).toISOString(), event.durationMin).toISOString() }],
+            }} />
+          )}
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={() => setRepeatOpen(false)} className="min-h-11 rounded-lg border border-[var(--color-border)] px-3 hover:bg-[var(--color-bg)]">Отмена</button>
+            <button type="button" disabled={busy || !repeatAt || repeatWho.length === 0}
+              onClick={() => { onRepeat(new Date(repeatAt).toISOString(), repeatWho.map(Number)); setRepeatOpen(false); }}
+              className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 font-medium text-white disabled:opacity-50">Поставить повтор</button>
+          </div>
         </div>
       )}
 

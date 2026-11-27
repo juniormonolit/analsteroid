@@ -26,7 +26,10 @@ import { getTask, OPEN_TASK_SQL, viewerOf } from './repo';
 import { invalidateLive } from './live';
 import { creatorOptions } from './creators';
 import { defaultGoal, goalWorseThanCurrent } from '../goal';
-import { placeTheoryEvent } from '../trainings/engine/autoTheory';
+import { autoPlaceTheory, placeTheoryEvent } from '../trainings/engine/autoTheory';
+import { hardConflictMessage } from './availability';
+import { notifyManagersNow } from './managerNotify';
+import { fmtWhen, slotsOverlap } from './when';
 import { closureMessage, findClosure } from '../trainings/engine/closures';
 import { syncTaskEnrollments } from '../trainings/engine/taskLink';
 
@@ -40,6 +43,11 @@ export function sessionDuration(managers: number): number {
   return SESSION_BASE_MIN + SESSION_PER_EXTRA_MIN * Math.max(0, managers - 1);
 }
 
+/** Не больше дат за одну постановку «Практики» (вт + чт + …). */
+export const MAX_SLOTS_PER_REQUEST = 10;
+
+const hasTime = (v: string) => /T\d{2}:\d{2}/.test(v);
+
 export function validateCreate(body: unknown): TaskerCreateRequest {
   const b = (body ?? {}) as Partial<TaskerCreateRequest>;
   const ids = Array.isArray(b.managerIds) ? [...new Set(b.managerIds.map(Number).filter(n => Number.isInteger(n) && n > 0))] : [];
@@ -51,20 +59,46 @@ export function validateCreate(body: unknown): TaskerCreateRequest {
   if (!isYmd(b.controlDate)) throw new TaskerError('Некорректная контрольная дата замера');
   const durationMin = Number(b.durationMin ?? 30);
   if (!Number.isFinite(durationMin) || durationMin < 5 || durationMin > 8 * 60) throw new TaskerError('Длительность — от 5 минут до 8 часов');
-  if (b.newSession && !b.slot?.start) throw new TaskerError('Для новой сессии нужен слот (дата и время)');
+  const kind: TaskerTaskKind = b.kind === 'theory' ? 'theory' : 'practice';
+  const trainingEventId = b.trainingEventId ? Number(b.trainingEventId) : null;
+  const sessionId = b.sessionId ? Number(b.sessionId) : null;
+  const noTime = !!b.noTime;
+
+  // Слоты: «Практика» может нести несколько дат (п.4 собрания 26.11); у «Теории» — одно своё время.
+  const rawSlots = Array.isArray(b.slots) && b.slots.length ? b.slots : b.slot?.start ? [b.slot] : [];
+  const starts = [...new Set(rawSlots.map(x => (x && typeof x.start === 'string' ? x.start : '')).filter(Boolean))];
+  if (starts.length > MAX_SLOTS_PER_REQUEST) throw new TaskerError(`Не больше ${MAX_SLOTS_PER_REQUEST} дат за одну постановку`);
+  if (kind === 'theory' && starts.length > 1) throw new TaskerError('У «Теории» одно время занятия');
+  for (const st of starts) if (Number.isNaN(Date.parse(st))) throw new TaskerError(`Некорректное время: ${st}`);
+  const slotsAll = starts.map(st => ({ start: st }));
+
+  if (kind === 'practice' && !trainingEventId) {
+    // п.5: время у «Практики» обязательно — без него нет ни проверки пересечений, ни «с 15:00 до 15:30» менеджеру.
+    if (!noTime && !sessionId && !slotsAll.length) {
+      throw new TaskerError('У «Практики» обязательны дата и время встречи. Нужна задача только со сроком — отметьте «Без времени, только срок»');
+    }
+    if (!noTime && slotsAll.some(x => !hasTime(x.start))) throw new TaskerError('Укажите время встречи, не только дату');
+    if (sessionId && slotsAll.length > 1) throw new TaskerError('В существующую сессию — одна дата; несколько дат — новыми встречами');
+    // Даты одной постановки не должны наслаиваться друг на друга.
+    if (slotsOverlap(slotsAll.map(x => Date.parse(x.start)), durationMin)) throw new TaskerError('Две даты постановки накладываются друг на друга — разведите время');
+  }
+  if (b.newSession && !slotsAll.length) throw new TaskerError('Для новой сессии нужен слот (дата и время)');
   const target = b.target === null || b.target === undefined || (b.target as unknown) === '' ? null : Number(b.target);
   if (target !== null && !Number.isFinite(target)) throw new TaskerError('Цель должна быть числом');
+  const posInt = (v: unknown) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
   return {
     managerIds: ids, metricId: b.metricId, period: { from: b.period.from, to: b.period.to }, target,
     body: typeof b.body === 'string' ? b.body.slice(0, 20_000) : '', templateId: b.templateId ? Number(b.templateId) : null,
-    deadline: b.deadline, durationMin: Math.round(durationMin), slot: b.slot?.start ? { start: b.slot.start } : null,
-    sessionId: b.sessionId ? Number(b.sessionId) : null, newSession: !!b.newSession, controlDate: b.controlDate,
+    deadline: b.deadline, durationMin: Math.round(durationMin), slot: slotsAll[0] ?? null, slots: slotsAll,
+    sessionId, newSession: !!b.newSession, controlDate: b.controlDate,
     customersChecklist: Array.isArray(b.customersChecklist) ? b.customersChecklist.filter((x): x is string => typeof x === 'string').slice(0, 200) : [],
-    trainingEventId: b.trainingEventId ? Number(b.trainingEventId) : null, overrideLimits: !!b.overrideLimits,
-    creatorBitrixId: Number.isInteger(Number(b.creatorBitrixId)) && Number(b.creatorBitrixId) > 0 ? Number(b.creatorBitrixId) : null,
-    kind: b.kind === 'theory' ? 'theory' : 'practice',
+    trainingEventId, overrideLimits: !!b.overrideLimits,
+    creatorBitrixId: posInt(b.creatorBitrixId), executorBitrixId: posInt(b.executorBitrixId),
+    kind, noTime: kind === 'practice' && noTime && !slotsAll.length,
   };
 }
+
+export { fmtWhen };
 
 function periodLabel(p: { from: string; to: string }): string {
   const f = (s: string) => s.split('-').reverse().join('.');
@@ -73,7 +107,7 @@ function periodLabel(p: { from: string; to: string }): string {
 
 function describe(input: {
   metric: TaskerMetricDef; snap: Snapshot; target: number | null; req: TaskerCreateRequest; managerName: string; taskId: number; marker: string;
-  kind: TaskerTaskKind; assigneeName: string;
+  kind: TaskerTaskKind; assigneeName: string; managerId: string; plan: string | null; slot: { start: string; end: string } | null;
 }): string {
   const { metric, snap, target, req } = input;
   const f = (v: number | null) => fmtValue(v, metric.format);
@@ -81,6 +115,7 @@ function describe(input: {
   const lines = [
     `[B]Менеджер:[/B] ${input.managerName}`,
     `[B]Формат:[/B] ${input.kind === 'theory' ? `Теория — ${input.assigneeName}` : `Практика — ${input.assigneeName} работает с менеджером`}`,
+    ...(input.slot ? [`[B]Когда:[/B] ${fmtWhen(input.slot.start, input.slot.end)}`] : []),
     `[B]Цель:[/B] ${metric.label} — ${f(target)} (${dir}). Замер результата: ${req.controlDate.split('-').reverse().join('.')}.`,
     '',
     `[B]Снимок за ${periodLabel(req.period)}:[/B]`,
@@ -90,6 +125,12 @@ function describe(input: {
   ];
   if (!snap.enoughData) {
     lines.push(`[COLOR=#999999]Мало данных: в знаменателе ${snap.denominator ?? 0} (< ${MIN_DENOMINATOR}) — вердикт замера может быть «мало данных».[/COLOR]`);
+  }
+  // План разбора для РОПа (п.6 собрания 26.11): шаблон темы из «Шаблоны → тема», с подстановкой периода.
+  if (input.kind === 'practice' && input.plan?.trim()) {
+    lines.push('', '[B]План разбора:[/B]', input.plan.trim()
+      .replaceAll('{менеджер}', input.managerName).replaceAll('{период}', periodLabel(req.period)).replaceAll('{метрика}', metric.label));
+    lines.push(`[url=${appBaseUrl()}/manager/${input.managerId}?tab=stats]Статистика менеджера в Монолитике[/url]`);
   }
   if (req.body.trim()) lines.push('', '[B]Рекомендации:[/B]', req.body.trim());
   if (req.trainingEventId) lines.push('', `[B]Обучение:[/B] [url=${appBaseUrl()}/tasker/trainings?event=${req.trainingEventId}]запись на обучение[/url]`);
@@ -102,20 +143,31 @@ interface Ctx {
   session: SessionUser; scope: SessionScope; settings: TaskerSettings; metric: TaskerMetricDef; req: TaskerCreateRequest;
 }
 
-/** Дубль = открытая задача по той же метрике и того же типа: теория и практика по одной теме — две разные задачи. */
-async function openStats(managerIds: string[], metricId: string, kind: TaskerTaskKind): Promise<Map<string, { open: number; sameMetric: number }>> {
-  const r = await systemDb().query<{ manager_bitrix_id: string; open: string; same: string }>(
+/** Открытые задачи менеджеров: всего (лимит) и даты (МСК) открытых задач той же темы и того же типа — дубль.
+ *  Дата задачи — день слота, а без слота — день срока. Теория и практика по одной теме — разные задачи.
+ *  sameAny — есть ли вообще открытая той же темы и типа («Теория»: дубль без учёта даты, как раньше). */
+async function openStats(managerIds: string[], metricId: string, kind: TaskerTaskKind): Promise<Map<string, { open: number; sameDays: Set<string>; sameAny: boolean }>> {
+  const r = await systemDb().query<{ manager_bitrix_id: string; open: string; same_days: string[] | null }>(
     `SELECT t.manager_bitrix_id, count(*) AS open,
-            count(*) FILTER (WHERE t.metric_id = $2 AND COALESCE(t.kind, 'practice') = $3) AS same
+            array_agg(DISTINCT to_char(COALESCE(t.slot_start, t.deadline) AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD'))
+              FILTER (WHERE t.metric_id = $2 AND COALESCE(t.kind, 'practice') = $3) AS same_days
        FROM tasker_tasks t WHERE t.manager_bitrix_id = ANY($1::text[]) AND ${OPEN_TASK_SQL}
         AND COALESCE(t.kind, 'practice') <> 'deal' -- задачи по сделке в лимит не входят (289)
       GROUP BY t.manager_bitrix_id`, [managerIds, metricId, kind]);
-  return new Map(r.rows.map(x => [x.manager_bitrix_id, { open: Number(x.open), sameMetric: Number(x.same) }]));
+  return new Map(r.rows.map(x => [x.manager_bitrix_id, { open: Number(x.open), sameDays: new Set(x.same_days ?? []), sameAny: !!x.same_days?.length }]));
+}
+
+const mskDay = (iso: string) => new Date(Date.parse(iso) + 3 * 3600_000).toISOString().slice(0, 10);
+
+async function practicePlan(metricId: string): Promise<string | null> {
+  const r = await systemDb().query<{ practice_plan: string | null }>('SELECT practice_plan FROM tasker_metrics WHERE id = $1', [metricId])
+    .catch(e => { if ((e as { code?: string })?.code === '42703') return { rows: [] as { practice_plan: string | null }[] }; throw e; });
+  return r.rows[0]?.practice_plan ?? null;
 }
 
 /** Сессия для задачи: явная (проверяем исполнителя и тему), новая по слоту или без сессии. Ключ — исполнитель
  *  (РОП или тренер): сессия = одна встреча исполнителя с несколькими менеджерами (tasker_sessions.rop_bitrix_id). */
-async function resolveSession(ctx: Ctx, assignee: string, cache: Map<string, number>): Promise<{ id: number; slot: string } | null> {
+async function resolveSession(ctx: Ctx, assignee: string, slotStart: string | null, cache: Map<string, number>): Promise<{ id: number; slot: string } | null> {
   const { req } = ctx;
   if (req.sessionId) {
     const r = await systemDb().query<{ id: string; rop_bitrix_id: string; metric_id: string; slot_start: Date }>(
@@ -126,14 +178,14 @@ async function resolveSession(ctx: Ctx, assignee: string, cache: Map<string, num
     if (s.rop_bitrix_id !== assignee) throw new TaskerError('Сессию ведёт другой исполнитель — выберите свою сессию или новый слот');
     return { id: Number(s.id), slot: new Date(s.slot_start).toISOString() };
   }
-  if (!req.newSession || !req.slot?.start) return null;
-  const key = assignee;
-  const slot = toMskIso(req.slot.start, '10:00:00');
+  if (!req.newSession || !slotStart) return null;
+  const slot = toMskIso(slotStart, '10:00:00');
+  const key = `${assignee}|${slot}`;
   const have = cache.get(key);
   if (have) return { id: have, slot };
   const r = await systemDb().query<{ id: string }>(
     `INSERT INTO tasker_sessions (rop_bitrix_id, metric_id, slot_start, duration_min, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [key, ctx.metric.id, slot, SESSION_BASE_MIN, ctx.session.id]);
+    [assignee, ctx.metric.id, slot, SESSION_BASE_MIN, ctx.session.id]);
   const id = Number(r.rows[0].id);
   cache.set(key, id);
   return { id, slot };
@@ -165,27 +217,9 @@ export async function createTasks(
   }
   if (!allowed.length) return { created: [], warnings };
 
-  // Анти-спам.
   const kind: TaskerTaskKind = req.kind ?? 'practice';
-  const stats = await openStats(allowed, metric.id, kind);
-  const override = req.overrideLimits && canOverrideLimits(session, settings);
   const dir = await getEmployeeDirectory();
   const nameOf = (id: string | null) => (id ? dir.get(Number(id))?.name ?? null : null);
-  const eligible: string[] = [];
-  for (const id of allowed) {
-    const s = stats.get(id) ?? { open: 0, sameMetric: 0 };
-    const nm = nameOf(id) ?? `#${id}`;
-    if (s.sameMetric > 0) {
-      warnings.push({ managerId: Number(id), code: 'duplicate_metric', message: `${nm}: уже есть открытая задача «${TASKER_KIND_LABELS[kind]}» по «${metric.label}» — вторую не ставим` });
-      continue;
-    }
-    if (s.open >= MAX_OPEN_TASKS && !override) {
-      warnings.push({ managerId: Number(id), code: 'limit_open_tasks', message: `${nm}: уже ${s.open} открытых задач (лимит ${MAX_OPEN_TASKS})${canOverrideLimits(session, settings) ? ' — можно обойти галочкой «Поставить сверх лимита»' : ''}` });
-      continue;
-    }
-    eligible.push(id);
-  }
-  if (!eligible.length) return { created: [], warnings };
 
   // Постановщик: выбранный в форме (тот же список, что отдаёт /api/tasker/creators) или сам нажавший.
   // В БД creator_bitrix_id/creator_name — постановщик, creator_user_id — кто фактически нажал (по нему
@@ -193,19 +227,101 @@ export async function createTasks(
   const clickerBx = session.bitrixUserId ? String(session.bitrixUserId) : null;
   let creatorBx = clickerBx;
   let creatorName = session.displayName;
+  const needOptions = (req.creatorBitrixId && String(req.creatorBitrixId) !== clickerBx) || (kind === 'practice');
+  const options = needOptions ? await creatorOptions(session, scope, settings, allowed) : null;
   if (req.creatorBitrixId && String(req.creatorBitrixId) !== clickerBx) {
-    const { creators } = await creatorOptions(session, scope, settings, eligible);
-    const pick = creators.find(c => c.id === req.creatorBitrixId);
+    const pick = options!.creators.find(c => c.id === req.creatorBitrixId);
     if (!pick) throw new TaskerError('Этого постановщика выбрать нельзя — доступны вы, ваш директор и (для директора) РОПы', 'forbidden', 403);
     creatorBx = String(pick.id);
     creatorName = pick.name;
   }
   const onBehalf = creatorBx !== clickerBx;
 
-  // Исполнитель: «Теория» — тренер из настроек, «Практика» — постановщик (выбранный РОП или сам нажавший).
-  const assignee = kind === 'theory' ? settings.trainerId : creatorBx;
-  if (!assignee) throw new TaskerError('Ваш аккаунт не связан с Битриксом — выберите постановщика или «Теория»');
-  const assigneeName = nameOf(assignee) ?? (assignee === creatorBx ? creatorName : `#${assignee}`);
+  // Исполнитель (собрание 26.11, п.1): «Теория» — тренер; «Практика» — выбранный в поле «Исполнитель», а по
+  // умолчанию РОП КАЖДОГО менеджера (не нашёлся — постановщик). Постановщик остаётся постановщиком.
+  let fixedExecutor: string | null = null;
+  if (kind === 'theory') fixedExecutor = settings.trainerId;
+  else if (req.executorBitrixId) {
+    const pick = (options?.executors ?? options?.creators ?? []).find(c => c.id === req.executorBitrixId);
+    if (!pick) throw new TaskerError('Этого исполнителя выбрать нельзя — доступны РОП менеджера, вы, директор и (для директора) РОПы', 'forbidden', 403);
+    fixedExecutor = String(pick.id);
+  }
+  const assigneeOf = (managerId: string): string | null => {
+    if (fixedExecutor) return fixedExecutor;
+    const rop = options?.ropByManager?.[managerId];
+    return rop ? String(rop) : creatorBx;
+  };
+  for (const id of allowed) {
+    if (!assigneeOf(id)) throw new TaskerError('Ваш аккаунт не связан с Битриксом — выберите постановщика или исполнителя');
+  }
+  const assigneeNameOf = (a: string) => nameOf(a) ?? (a === creatorBx ? creatorName : `#${a}`);
+
+  // Даты «Практики» (п.4): по задаче на каждую дату; без времени — одна задача «до срока».
+  const deadlineIso = toMskIso(req.deadline);
+  const practiceSlots: (string | null)[] = kind === 'practice' && !req.trainingEventId && !req.sessionId && req.slots?.length
+    ? req.slots.map(x => toMskIso(x.start, '10:00:00')) : [null];
+  const dayOf = (slotIso: string | null) => mskDay(slotIso ?? deadlineIso);
+
+  // Анти-спам: дубль — открытая задача той же темы и типа на ТУ ЖЕ дату («Практика» на вт и чт — можно);
+  // у «Теории» по-прежнему любая открытая той же темы. Лимит открытых — по штукам, включая создаваемые сейчас.
+  const stats = await openStats(allowed, metric.id, kind);
+  const override = req.overrideLimits && canOverrideLimits(session, settings);
+  type Plan = { managerId: string; slotIso: string | null; assignee: string };
+  const plans: Plan[] = [];
+  for (const id of allowed) {
+    const s = stats.get(id) ?? { open: 0, sameDays: new Set<string>(), sameAny: false };
+    const nm = nameOf(id) ?? `#${id}`;
+    let open = s.open;
+    for (const slotIso of practiceSlots) {
+      const day = dayOf(slotIso);
+      if (kind === 'theory' ? s.sameAny : s.sameDays.has(day)) {
+        warnings.push({ managerId: Number(id), code: 'duplicate_metric', message: kind === 'theory'
+          ? `${nm}: уже есть открытая задача «${TASKER_KIND_LABELS[kind]}» по «${metric.label}» — вторую не ставим`
+          : `${nm}: на ${day.split('-').reverse().join('.')} уже есть «${TASKER_KIND_LABELS[kind]}» по «${metric.label}» — на эту дату вторую не ставим` });
+        continue;
+      }
+      if (open >= MAX_OPEN_TASKS && !override) {
+        warnings.push({ managerId: Number(id), code: 'limit_open_tasks', message: `${nm}: уже ${open} открытых задач (лимит ${MAX_OPEN_TASKS})${slotIso && practiceSlots.length > 1 ? ` — дата ${day.split('-').reverse().join('.')} не поставлена` : ''}${canOverrideLimits(session, settings) ? ' — можно обойти галочкой «Поставить сверх лимита»' : ''}` });
+        continue;
+      }
+      open++;
+      s.sameDays.add(day);
+      plans.push({ managerId: id, slotIso, assignee: assigneeOf(id)! });
+    }
+  }
+  if (!plans.length) return { created: [], warnings };
+  const eligible = [...new Set(plans.map(p => p.managerId))];
+
+  // Пересечения (п.3): у исполнителя и у менеджера не может быть двух работ Задачника в одно время (задача,
+  // сессия, занятие тренера) — отказ ДО создания чего-либо. Календарь Битрикса — только предупреждение в форме.
+  if (kind === 'practice') {
+    let sessSlot: { start: string; durationMin: number } | null = null;
+    if (req.sessionId) {
+      const r = await systemDb().query<{ slot_start: Date; duration_min: number }>('SELECT slot_start, duration_min FROM tasker_sessions WHERE id = $1', [req.sessionId]);
+      if (r.rows[0]) sessSlot = { start: r.rows[0].slot_start.toISOString(), durationMin: r.rows[0].duration_min };
+    }
+    let evSlot: { start: string; durationMin: number } | null = null;
+    if (req.trainingEventId) {
+      const r = await systemDb().query<{ start_at: Date; duration_min: number }>('SELECT start_at, duration_min FROM tasker_training_events WHERE id = $1', [req.trainingEventId]);
+      if (r.rows[0]) evSlot = { start: r.rows[0].start_at.toISOString(), durationMin: r.rows[0].duration_min };
+    }
+    const problems: string[] = [];
+    for (const slotIso of new Set(plans.map(p => p.slotIso))) {
+      const base = slotIso ? { start: slotIso, durationMin: req.durationMin } : sessSlot ?? evSlot;
+      if (!base) continue;
+      const start = Date.parse(base.start);
+      const group = plans.filter(p => p.slotIso === slotIso);
+      const people = [
+        // запись на занятие тренера: исполнитель «Практики» в нём не участвует — проверяем только менеджеров
+        ...(evSlot && !slotIso ? [] : [...new Set(group.map(p => p.assignee))].map(id => ({ id, role: 'Исполнитель' }))),
+        ...[...new Set(group.map(p => p.managerId))].map(id => ({ id, role: 'Менеджер' })),
+      ];
+      const msg = await hardConflictMessage(people, [{ start, end: start + base.durationMin * 60_000 }],
+        { sessionId: req.sessionId ?? null, trainingEventId: req.trainingEventId ?? null });
+      if (msg) problems.push(slotIso && practiceSlots.length > 1 ? `${fmtWhen(slotIso, new Date(start + base.durationMin * 60_000).toISOString())}: ${msg}` : msg);
+    }
+    if (problems.length) throw new TaskerError(`Время занято — задача не поставлена. ${problems.join(' · ')}. Выберите свободное окно в ленте занятости.`, 'bad_request', 409);
+  }
 
   // Снимок — один прогон отчёта на всех.
   // Тот же кэш, что у формы: снимок в задаче = цифры, которые РОП только что видел.
@@ -220,56 +336,89 @@ export async function createTasks(
     }
   }
 
-  const deadlineIso = toMskIso(req.deadline);
   // Записан на занятие тренера → время задачи = время занятия, своей сессии/события нет (менеджер — участник
   // события занятия через запись). Раньше форма слала и своё время, и занятие: у Пуртикова 25.11 задача на 15:00,
   // а в расписании тренера — групповое 16:15.
-  let trainingSlot: { start: string; end: string } | null = null;
-  let trainingEventId = req.trainingEventId;
-  if (trainingEventId) {
+  // Занятие у каждого менеджера своё: «Теория» без времени раскладывается по слотам ОТДЕЛА менеджера (п.7).
+  const eventOf = new Map<string, { id: number; start: string; end: string }>();
+  if (req.trainingEventId) {
     const ev = await systemDb().query<{ start_at: Date; duration_min: number; trainer_bitrix_user_id: string | null }>(
-      'SELECT start_at, duration_min, trainer_bitrix_user_id FROM tasker_training_events WHERE id = $1 AND cancelled_at IS NULL', [trainingEventId]);
+      'SELECT start_at, duration_min, trainer_bitrix_user_id FROM tasker_training_events WHERE id = $1 AND cancelled_at IS NULL', [req.trainingEventId]);
     if (!ev.rows[0]) throw new TaskerError('Это занятие отменено или удалено — выберите другое или своё время');
     const st = ev.rows[0].start_at;
-    trainingSlot = { start: st.toISOString(), end: new Date(st.getTime() + ev.rows[0].duration_min * 60_000).toISOString() };
+    const slot = { id: req.trainingEventId, start: st.toISOString(), end: new Date(st.getTime() + ev.rows[0].duration_min * 60_000).toISOString() };
     // Тренер закрыл запись на это время (299) — в задачу не берём (запись всё равно бы не прошла).
     const tr = ev.rows[0].trainer_bitrix_user_id;
-    const closed = tr ? await findClosure(tr, st.getTime(), Date.parse(trainingSlot.end)) : null;
+    const closed = tr ? await findClosure(tr, st.getTime(), Date.parse(slot.end)) : null;
     if (closed) throw new TaskerError(closureMessage(closed), 'bad_request', 409);
+    if (kind === 'theory') {
+      const msg = await hardConflictMessage(eligible.map(id => ({ id, role: 'Менеджер' })), [{ start: st.getTime(), end: Date.parse(slot.end) }], { trainingEventId: req.trainingEventId });
+      if (msg) throw new TaskerError(`Время занято — задача не поставлена. ${msg}`, 'bad_request', 409);
+    }
+    for (const id of eligible) eventOf.set(id, slot);
   } else if (kind === 'theory' && req.slot?.start) {
     // «Теория» со своим временем РОПа → Монолитика сама ставит занятие у тренера (или добавляет в группу на это
     // время и тему) и записывает менеджеров. В очередь тренера такие задачи не попадают (жалоба Будковского 26.11).
+    const startIso = toMskIso(req.slot.start, '10:00:00');
+    const start = Date.parse(startIso);
+    const msg = await hardConflictMessage(eligible.map(id => ({ id, role: 'Менеджер' })), [{ start, end: start + req.durationMin * 60_000 }], {});
+    if (msg) throw new TaskerError(`Время занято — задача не поставлена. ${msg}`, 'bad_request', 409);
     const placed = await placeTheoryEvent({
-      trainerId: assignee, startIso: toMskIso(req.slot.start, '10:00:00'), durationMin: req.durationMin,
+      trainerId: settings.trainerId, startIso, durationMin: req.durationMin,
       metricId: metric.id, metricLabel: metric.label, managers: eligible.length, createdByUserId: session.id, creatorName,
     });
-    trainingEventId = placed.eventId;
-    trainingSlot = { start: placed.startIso, end: placed.endIso };
+    for (const id of eligible) eventOf.set(id, { id: placed.eventId, start: placed.startIso, end: placed.endIso });
     if (placed.joined) warnings.push({ managerId: null, code: 'training_joined', message: 'На это время у тренера уже стоит занятие по этой теме — менеджеры добавлены в группу' });
+  } else if (kind === 'theory') {
+    // п.7: «Теория» без времени — сразу в ближайший подходящий слот отдела менеджера (не раньше завтра, тренер
+    // свободен, в группе есть место). Не нашёлся — в очередь тренера, как раньше.
+    for (const id of eligible) {
+      const placed = await autoPlaceTheory({
+        trainerId: settings.trainerId, managerId: id, metricId: metric.id, metricLabel: metric.label,
+        createdByUserId: session.id, creatorName,
+      }).catch(e => { console.warn('[tasker] авторасписание «Теории»:', e instanceof Error ? e.message : e); return null; });
+      const nm = nameOf(id) ?? `#${id}`;
+      if (placed) {
+        eventOf.set(id, { id: placed.eventId, start: placed.startIso, end: placed.endIso });
+        warnings.push({ managerId: Number(id), code: 'training_auto', message: `${nm}: записан на занятие ${fmtWhen(placed.startIso, placed.endIso)}${placed.joined ? ' (в группу)' : ''}` });
+      } else {
+        warnings.push({ managerId: Number(id), code: 'training_queue', message: `${nm}: свободного слота отдела у тренера не нашлось — задача в очереди тренера` });
+      }
+    }
   }
-  const reqT: TaskerCreateRequest = { ...req, trainingEventId };
+
+  const plan = kind === 'practice' ? await practicePlan(metric.id) : null;
   const sessionCache = new Map<string, number>();
   const touchedSessions = new Map<number, number>(); // sessionId → последняя задача запроса
   const createdIds: number[] = [];
+  const withEvent: number[] = [];
+  const ropCache = new Map<string, string | null>();
 
-  for (const managerId of eligible) {
+  for (const { managerId, slotIso, assignee } of plans) {
     const snapMeta = snaps[managerId];
     const snap = stripMeta(snapMeta);
-    if (snap.value === null && snap.deptAvg === null) {
-      warnings.push({ managerId: Number(managerId), code: 'no_snapshot', message: `${nameOf(managerId) ?? `#${managerId}`}: нет данных отчёта за период — задача поставлена без цифр` });
-    } else if (!snap.enoughData) {
-      warnings.push({ managerId: Number(managerId), code: 'not_enough_data', message: `${nameOf(managerId) ?? `#${managerId}`}: мало данных (знаменатель ${snap.denominator ?? 0} < ${MIN_DENOMINATOR}) — вердикт может быть «мало данных»` });
+    const firstForManager = plans.find(p => p.managerId === managerId)?.slotIso === slotIso;
+    if (firstForManager) {
+      if (snap.value === null && snap.deptAvg === null) {
+        warnings.push({ managerId: Number(managerId), code: 'no_snapshot', message: `${nameOf(managerId) ?? `#${managerId}`}: нет данных отчёта за период — задача поставлена без цифр` });
+      } else if (!snap.enoughData) {
+        warnings.push({ managerId: Number(managerId), code: 'not_enough_data', message: `${nameOf(managerId) ?? `#${managerId}`}: мало данных (знаменатель ${snap.denominator ?? 0} < ${MIN_DENOMINATOR}) — вердикт может быть «мало данных»` });
+      }
     }
     // Не передана — по правилу defaultGoal (лучшее из средних; кто уже лучше — +10 % к текущему), у каждого своя.
     const target = req.target ?? defaultGoal(metric, snap).target;
-    const rop = await ropOfManager(managerId).catch(() => null);
+    if (!ropCache.has(managerId)) ropCache.set(managerId, options?.ropByManager?.[managerId] != null ? String(options.ropByManager[managerId]) : await ropOfManager(managerId).catch(() => null));
+    const rop = ropCache.get(managerId) ?? null;
     const entry = dir.get(Number(managerId));
     const director = directorFor(settings, entry?.branch);
     const managerName = entry?.name ?? `#${managerId}`;
+    const assigneeName = assigneeNameOf(assignee);
+    const ev = eventOf.get(managerId) ?? null;
+    const trainingEventId = ev?.id ?? null;
 
-    const sess = trainingSlot ? null : await resolveSession(ctx, assignee, sessionCache);
-    const slotStartIso = trainingSlot ? trainingSlot.start : req.slot?.start ? toMskIso(req.slot.start, '10:00:00') : sess?.slot ?? null;
-    const slotEndIso = trainingSlot ? trainingSlot.end
+    const sess = ev ? null : await resolveSession(ctx, assignee, slotIso, sessionCache);
+    const slotStartIso = ev ? ev.start : slotIso ?? sess?.slot ?? null;
+    const slotEndIso = ev ? ev.end
       : slotStartIso ? new Date(new Date(slotStartIso).getTime() + req.durationMin * 60_000).toISOString() : null;
 
     // Чек-лист: только заказчики ЭТОГО менеджера из «горящих» с одной отгрузкой.
@@ -290,8 +439,11 @@ export async function createTasks(
     for (const a of [director, rop, onBehalf ? clickerBx : null]) if (a && !skip.has(a)) auditorSet.add(a);
     const auditors = [...auditorSet];
 
+    // Срок не раньше конца встречи (дата «чт» при сроке «ср» — задача не должна родиться просроченной).
+    const taskDeadline = slotEndIso && Date.parse(slotEndIso) > Date.parse(deadlineIso) ? slotEndIso : deadlineIso;
     const marker = `TSK-${randomUUID().slice(0, 8)}`;
     const title = `${metric.label}: подтянуть до ${fmtValue(target, metric.format)} — ${managerName}`;
+    const reqT: TaskerCreateRequest = { ...req, trainingEventId };
     const ins = await systemDb().query<{ id: string }>(
       `INSERT INTO tasker_tasks (marker, manager_bitrix_id, manager_name, rop_bitrix_id, rop_name, director_bitrix_id, director_name,
           creator_bitrix_id, creator_user_id, creator_name, dept_name, metric_id, period_from, period_to, snapshot, target, template_id,
@@ -303,16 +455,18 @@ export async function createTasks(
       [marker, managerId, managerName, rop, nameOf(rop), director, nameOf(director),
         creatorBx, session.id, creatorName, snap.deptName ?? entry?.departmentName ?? null,
         metric.id, req.period.from, req.period.to, JSON.stringify(snap), target, req.templateId,
-        title, req.body, deadlineIso, req.durationMin, slotStartIso, slotEndIso, req.controlDate, sess?.id ?? null,
+        title, req.body, taskDeadline, req.durationMin, slotStartIso, slotEndIso, req.controlDate, sess?.id ?? null,
         trainingEventId, JSON.stringify(checklist), kind, assignee, assigneeName, auditors]);
     const taskId = Number(ins.rows[0].id);
     createdIds.push(taskId);
+    if (trainingEventId) withEvent.push(taskId);
     if (sess) touchedSessions.set(sess.id, taskId);
 
     const crm = checklist.map(c => crmBindingOf(c.clientKey)).filter((x): x is string => !!x);
     const fields: Record<string, unknown> = {
       TITLE: title,
-      DESCRIPTION: describe({ metric, snap, target, req: reqT, managerName, taskId, marker, kind, assigneeName }),
+      DESCRIPTION: describe({ metric, snap, target, req: reqT, managerName, taskId, marker, kind, assigneeName, managerId, plan,
+        slot: slotStartIso && slotEndIso ? { start: slotStartIso, end: slotEndIso } : null }),
       RESPONSIBLE_ID: Number(assignee),
       ...(creatorBx ? { CREATED_BY: Number(creatorBx) } : {}),
       ...(auditors.length ? { AUDITORS: auditors.map(Number) } : {}),
@@ -320,7 +474,7 @@ export async function createTasks(
       ALLOW_TIME_TRACKING: 'Y',
       TIME_ESTIMATE: req.durationMin * 60,
       ...(slotStartIso && slotEndIso ? { START_DATE_PLAN: bxDate(slotStartIso), END_DATE_PLAN: bxDate(slotEndIso) } : {}),
-      DEADLINE: bxDate(deadlineIso),
+      DEADLINE: bxDate(taskDeadline),
       TASK_CONTROL: 'N',
       ...(crm.length ? { UF_CRM_TASK: crm } : {}),
     };
@@ -329,7 +483,7 @@ export async function createTasks(
       ops.push({ op: 'checklist', items: checklist.map(c => `${c.title}${c.crmUrl ? ` — ${c.crmUrl}` : ''}`) });
     }
     // Слот без сессии — своё событие в календаре исполнителя, менеджер — участник (п.10 правок 23.11).
-    if (!sess && !trainingSlot && slotStartIso) ops.push({ op: 'task_calendar' });
+    if (!sess && !ev && slotStartIso) ops.push({ op: 'task_calendar' });
     await enqueue(taskId, ops);
     const res = await drainTask(taskId, { force: true }).catch(e => ({ done: 0, error: e instanceof Error ? e.message : String(e) }));
     if (res.error) {
@@ -339,8 +493,8 @@ export async function createTasks(
 
   // Задачи на занятие тренера — сразу записываем менеджеров (иначе запись ждала бы фонового тика); календарь тренера
   // обновит syncTrainingCalendar внутри (менеджеры — участники одного события).
-  if (trainingEventId && createdIds.length) {
-    await syncTaskEnrollments(createdIds.length, createdIds).catch(e =>
+  if (withEvent.length) {
+    await syncTaskEnrollments(withEvent.length, withEvent).catch(e =>
       console.warn('[tasker] запись на занятие из задачи:', e instanceof Error ? e.message : e));
   }
 
@@ -353,6 +507,8 @@ export async function createTasks(
     if (res.error) warnings.push({ managerId: null, code: 'bitrix_failed', message: `Событие сессии в календаре исполнителя пока не поставлено (${res.error}) — повторим автоматически` });
   }
   invalidateLive(settings.groupId);
+  // п.2: сообщение менеджерам — сразу, не дожидаясь минутного тика (ошибка бота задачу не валит).
+  await notifyManagersNow(eligible).catch(e => console.warn('[tasker] уведомление менеджерам:', e instanceof Error ? e.message : e));
   const viewer = viewerOf(session);
   const created = (await Promise.all(createdIds.map(id => getTask(id, viewer)))).filter((t): t is TaskerTask => !!t);
   return { created, warnings };

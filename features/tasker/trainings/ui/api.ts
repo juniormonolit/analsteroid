@@ -35,6 +35,14 @@ export const setAttendance = (id: number, managerId: number, attended: boolean |
 export const unenrollManager = (id: number, managerId: number) =>
   call<TrainingEventResponse>(`/api/tasker/trainings/${id}/enroll`, { method: 'DELETE', body: JSON.stringify({ managerId }) });
 
+export const approveTraining = (id: number) =>
+  call<TrainingEventResponse & { sent: number }>(`/api/tasker/trainings/${id}/approve`, { method: 'POST' });
+
+export const repeatTraining = (id: number, startsAt: string, managerIds: number[]) =>
+  call<TrainingEventResponse & { failed: { managerId: number; reason: string }[] }>(`/api/tasker/trainings/${id}/repeat`, {
+    method: 'POST', body: JSON.stringify({ startsAt, managerIds }),
+  });
+
 export const resyncTraining = (id: number) =>
   call<TrainingEventResponse>(`/api/tasker/trainings/${id}/sync`, { method: 'POST' });
 

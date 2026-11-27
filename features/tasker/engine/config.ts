@@ -81,6 +81,7 @@ interface MetricRow {
   id: string; label: string; grp: TaskerMetricGroup; higher_is_better: boolean;
   format: TaskerMetric['format']; tag: string; denominator_ids: string[]; additive: boolean; sort_order: number;
   active: boolean; kind?: TaskerTopicKind; product_group_id?: string | null; pg_measure?: TaskerPgMeasure | null;
+  practice_plan?: string | null;
 }
 
 /**
@@ -91,9 +92,13 @@ interface MetricRow {
 export async function loadMetricDefs(): Promise<TaskerMetricDef[]> {
   const base = `id, label, grp, higher_is_better, format, tag, denominator_ids, additive, sort_order, active`;
   const order = `ORDER BY active DESC, sort_order, label, id`;
+  // practice_plan — с миграции 302, kind/product_group_id/pg_measure — с 282: без колонок читаем по-старому.
   const r = await systemDb().query<MetricRow>(
-    `SELECT ${base}, kind, product_group_id, pg_measure FROM tasker_metrics ${order}`,
+    `SELECT ${base}, kind, product_group_id, pg_measure, practice_plan FROM tasker_metrics ${order}`,
   ).catch(e => {
+    if ((e as { code?: string })?.code !== '42703') throw e;
+    return systemDb().query<MetricRow>(`SELECT ${base}, kind, product_group_id, pg_measure FROM tasker_metrics ${order}`);
+  }).catch(e => {
     if ((e as { code?: string })?.code !== '42703') throw e;
     return systemDb().query<MetricRow>(`SELECT ${base} FROM tasker_metrics ${order}`);
   });
@@ -101,6 +106,7 @@ export async function loadMetricDefs(): Promise<TaskerMetricDef[]> {
     id: m.id, label: m.label, group: m.grp, higherIsBetter: m.higher_is_better, format: m.format,
     tag: m.tag, sortOrder: m.sort_order, denominatorIds: m.denominator_ids ?? [], additive: m.additive,
     kind: m.kind ?? 'metric', productGroupId: m.product_group_id ?? null, pgMeasure: m.pg_measure ?? null, active: m.active,
+    practicePlan: m.practice_plan ?? null,
   }));
 }
 
@@ -114,7 +120,7 @@ export async function metricDef(id: string): Promise<TaskerMetricDef> {
 export function publicMetric(m: TaskerMetricDef): TaskerMetric {
   return {
     id: m.id, label: m.label, group: m.group, higherIsBetter: m.higherIsBetter, format: m.format, tag: m.tag, sortOrder: m.sortOrder,
-    kind: m.kind, productGroupId: m.productGroupId, pgMeasure: m.pgMeasure, active: m.active,
+    kind: m.kind, productGroupId: m.productGroupId, pgMeasure: m.pgMeasure, active: m.active, practicePlan: m.practicePlan ?? null,
   };
 }
 

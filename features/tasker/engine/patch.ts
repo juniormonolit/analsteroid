@@ -10,6 +10,7 @@ import { bxDate, loadSettings, TaskerError, toMskIso } from './config';
 import { drainTask, enqueue, type BxOp } from './bitrix';
 import { canChangeStatusOf, getTask, getTaskRow, viewerOf, type TaskRow } from './repo';
 import { invalidateLive } from './live';
+import { hardConflictMessage } from './availability';
 
 const PATCHABLE: TaskerPatchableStatus[] = ['new', 'in_progress', 'done'];
 export const MIN_DONE_NOTE = 10;
@@ -67,6 +68,12 @@ export async function patchTask(session: SessionUser, scope: SessionScope, id: n
       } else {
         const start = toMskIso(b.slot.start, '10:00:00');
         const end = new Date(new Date(start).getTime() + row.duration_min * 60_000).toISOString();
+        // Собрание 26.11, п.3: у исполнителя и менеджера не бывает двух работ Задачника в одно время.
+        const exec = row.executor_bitrix_id && row.executor_bitrix_id !== row.manager_bitrix_id ? row.executor_bitrix_id : row.rop_bitrix_id;
+        const msg = await hardConflictMessage(
+          [...(exec && !row.training_event_id ? [{ id: exec, role: 'Исполнитель' }] : []), { id: row.manager_bitrix_id, role: 'Менеджер' }],
+          [{ start: Date.parse(start), end: Date.parse(end) }], { taskId: id, sessionId: row.session_id ? Number(row.session_id) : null });
+        if (msg) throw new TaskerError(`Время занято — перенос не сохранён. ${msg}`, 'bad_request', 409);
         params.push(start); sets.push(`slot_start = $${params.length}`);
         params.push(end); sets.push(`slot_end = $${params.length}`);
         fields.START_DATE_PLAN = bxDate(start); fields.END_DATE_PLAN = bxDate(end);

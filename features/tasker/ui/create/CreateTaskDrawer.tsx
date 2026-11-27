@@ -14,6 +14,7 @@ import {
 } from './api';
 // Проверка наложения времени у слота сессии (сессия A).
 import { AvailabilityWarning } from '../shared/AvailabilityWarning';
+import { PracticeTimeBlock } from './PracticeTimeBlock';
 import { renderTemplateBody, templateToBitrix } from '../templates/templateBody';
 import { TASKER_METRIC_GROUP_LABELS, type TaskerAvailabilityRequest } from '@/features/tasker/types';
 import { aboveDept, aboveDeptLabel, defaultGoal, goalWorseThanCurrent } from '@/features/tasker/goal';
@@ -145,6 +146,11 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
   const [controlTouched, setControlTouched] = useState(false);
   const [trainingId, setTrainingId] = useState('');
   const [creatorId, setCreatorId] = useState(''); // '' = сам пользователь
+  // Собрание 26.11: исполнитель «Практики» — отдельное поле ('' = РОП каждого менеджера, п.1); несколько дат (п.4);
+  // время обязательно, «без времени» — явной галочкой (п.5).
+  const [executorId, setExecutorId] = useState('');
+  const [pSlots, setPSlots] = useState<string[]>(['']);
+  const [noTime, setNoTime] = useState(false);
   // Теория / Практика (сессия A, правка 23.11): исполнитель — тренер из настроек или постановщик (РОП).
   const [kind, setKind] = useState<TaskerTaskKind>(initialKind ?? 'practice');
 
@@ -212,6 +218,31 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
   useEffect(() => {
     if (creatorId && creatorsQ.data && !creatorOptions.some(o => o.value === creatorId)) setCreatorId('');
   }, [creatorId, creatorsQ.data, creatorOptions]);
+
+  // ── исполнитель «Практики» (п.1) ──
+  const ropByManager = useMemo(() => creatorsQ.data?.ropByManager ?? {}, [creatorsQ.data]);
+  const managerRops = useMemo(() => [...new Set(managerIds.map(id => ropByManager[id]).filter((x): x is number => !!x))], [managerIds, ropByManager]);
+  const executorOptions = useMemo<SearchSelectOption[]>(() => {
+    const executorName = (id: number) => (creatorsQ.data?.executors ?? creatorsQ.data?.creators ?? []).find(c => c.id === id)?.name ?? `#${id}`;
+    const defHint = managerRops.length === 0 ? (managerIds.length ? 'РОП не найден — исполнителем будет постановщик' : 'Выберите менеджера')
+      : managerRops.length === 1 ? executorName(managerRops[0]) : `у каждого менеджера свой: ${managerRops.map(executorName).join(', ')}`;
+    return [
+      { value: '', label: 'РОП менеджера', hint: defHint },
+      ...(creatorsQ.data?.executors ?? []).map(c => ({ value: String(c.id), label: c.role === 'self' ? `${c.name} (вы)` : c.name, hint: c.role === 'self' ? null : c.hint })),
+    ];
+  }, [creatorsQ.data, managerRops, managerIds.length]);
+  useEffect(() => {
+    if (executorId && creatorsQ.data?.executors && !creatorsQ.data.executors.some(o => String(o.id) === executorId)) setExecutorId('');
+  }, [executorId, creatorsQ.data]);
+  /** Кто реально исполнит «Практику»: выбранный, иначе РОП(ы) менеджеров, иначе постановщик. */
+  const practiceExecutors = useMemo<number[]>(() => {
+    if (executorId) return [Number(executorId)];
+    const fallback = creatorId ? Number(creatorId) : creatorsQ.data?.selfId ?? null;
+    const out = new Set<number>();
+    for (const id of managerIds) { const r = ropByManager[id] ?? fallback; if (r) out.add(r); }
+    if (!out.size && fallback) out.add(fallback);
+    return [...out];
+  }, [executorId, creatorId, creatorsQ.data, managerIds, ropByManager]);
 
   // ── снимок ──
   const periodOk = !!periodFrom && !!periodTo && periodFrom <= periodTo;
@@ -291,15 +322,18 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
   });
   // Исполнитель задачи: «Теория» — тренер, «Практика» — постановщик (выбранный или сам пользователь).
   const trainer = metricsQ.data?.trainer ?? null;
-  const executorId = kind === 'theory' ? trainer?.id ?? null : creatorId ? Number(creatorId) : creatorsQ.data?.selfId ?? null;
+  const sessionExecutor = kind === 'theory' ? trainer?.id ?? null : practiceExecutors.length === 1 ? practiceExecutors[0] : null;
   // Сессии — только этого исполнителя: сессия = его встреча с несколькими менеджерами.
   const sessions: TaskerSession[] = useMemo(
     () => (sessionsQ.data?.sessions ?? [])
-      .filter(s => new Date(s.slotStart).getTime() > Date.now() && (executorId == null || s.rop.id === executorId))
+      .filter(s => new Date(s.slotStart).getTime() > Date.now() && sessionExecutor != null && s.rop.id === sessionExecutor)
       .slice(0, 3),
-    [sessionsQ.data, executorId],
+    [sessionsQ.data, sessionExecutor],
   );
-  useEffect(() => { setSessionId(null); }, [metricId, executorId]);
+  useEffect(() => { setSessionId(null); }, [metricId, sessionExecutor]);
+  const filledSlots = pSlots.map(v => { const t = v ? new Date(v).getTime() : NaN; return Number.isFinite(t) ? new Date(t).toISOString() : null; })
+    .filter((x): x is string => !!x);
+  const practiceOwnTime = kind === 'practice' && !trainingId && !sessionId;
 
   // Контрольная дата следует за сроком (+7: «показатели смотрим неделя через неделю»), пока её не правили руками.
   useEffect(() => { if (!controlTouched && deadline) setControlDate(addDays(deadline, 7)); }, [deadline, controlTouched]);
@@ -346,10 +380,14 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
       durationMin,
       // Записан на занятие — время задачи = время занятия (сервер берёт его сам); своё время/сессия не шлются.
       // Иначе у задачи два времени: Пуртиков 25.11 — «Теория» на 15:00 и запись на групповое в 16:15.
-      slot: trainingId || (sessionId && kind !== 'theory') ? null : slot ? { start: new Date(slot).toISOString() } : null,
+      slot: kind === 'theory' && !trainingId && slot ? { start: new Date(slot).toISOString() } : null,
+      // «Практика»: несколько дат (п.4) — по задаче на каждую; «без времени» — явной галочкой (п.5).
+      slots: practiceOwnTime && !noTime ? filledSlots.map(start => ({ start })) : null,
+      noTime: practiceOwnTime && noTime,
       // «Теория» — без сессий исполнителя: своё время превращается в занятие тренера (сервер).
       sessionId: trainingId || kind === 'theory' ? null : sessionId,
-      newSession: kind !== 'theory' && !trainingId && !sessionId && !!slot && newSession,
+      newSession: practiceOwnTime && !noTime && filledSlots.length > 0 && newSession,
+      executorBitrixId: kind === 'practice' && executorId ? Number(executorId) : null,
       controlDate,
       customersChecklist: checkedCustomers.length ? checkedCustomers : undefined,
       trainingEventId: trainingId ? Number(trainingId) : null,
@@ -382,6 +420,7 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
   if (!body.trim()) problems.push('заполните рекомендации');
   if (!deadline) problems.push('укажите срок');
   if (!controlDate) problems.push('укажите контрольную дату');
+  if (practiceOwnTime && !noTime && filledSlots.length === 0) problems.push('укажите время встречи');
   if (closedHit) problems.push('время закрыто тренером');
   if (sameEventFull) problems.push('группа на это время набрана');
   const canSubmit = problems.length === 0 && !mutation.isPending;
@@ -422,9 +461,16 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
         </div>
 
         {creatorOptions.length > 1 && (
-          <Field label="Постановщик" hint={`${creatorId ? 'Задача — от его имени, вы останетесь в ней наблюдателем' : 'По умолчанию — вы'}${kind === 'practice' ? '. Он же исполнитель' : ''}`}>
+          <Field label="Постановщик" hint={creatorId ? 'Задача — от его имени, вы останетесь в ней наблюдателем' : 'По умолчанию — вы'}>
             <SearchSelect options={creatorOptions} value={creatorId} onChange={setCreatorId}
               placeholder="Вы" ariaLabel="Постановщик" className="w-full sm:max-w-[calc(50%-8px)]" />
+          </Field>
+        )}
+
+        {kind === 'practice' && (
+          <Field label="Исполнитель" hint="Кто проводит разбор с менеджером. По умолчанию — РОП менеджера; постановщик остаётся постановщиком">
+            <SearchSelect options={executorOptions} value={executorId} onChange={setExecutorId}
+              placeholder="РОП менеджера" ariaLabel="Исполнитель" className="w-full sm:max-w-[calc(50%-8px)]" />
           </Field>
         )}
 
@@ -566,10 +612,16 @@ function CreateTaskForm({ onClose, managerIds: initialManagers, metricId: initia
         {!trainingId && kind !== 'theory' && (
         <SessionBlock
           sessions={sessions} sessionId={sessionId} onSession={setSessionId}
-          slot={slot} onSlot={setSlot} newSession={newSession} onNewSession={setNewSession}
+          hasSlots={filledSlots.length > 0 && !noTime} newSession={newSession} onNewSession={setNewSession}
           metricLabel={metric?.label}
-          availability={slotAvailability(sessions, sessionId, slot, durationMin, managerIdNums, creatorId ? Number(creatorId) : null)}
-        />
+          availability={slotAvailability(sessions, sessionId, noTime ? [] : filledSlots, durationMin, managerIdNums, practiceExecutors)}
+          multiSlot={filledSlots.length > 1}
+        >
+          {!sessionId && (
+            <PracticeTimeBlock slots={pSlots} onSlots={setPSlots} noTime={noTime} onNoTime={setNoTime} durationMin={durationMin}
+              peopleIds={[...practiceExecutors, ...managerIdNums]} executorIds={practiceExecutors} />
+          )}
+        </SessionBlock>
         )}
 
         {submitError && <Banner tone="error">{submitError}</Banner>}
@@ -718,7 +770,7 @@ function CustomersBlock({ enabled, onToggle, groups, managerName, multi, uncheck
 function KindSwitch({ kind, onKind, trainerName }: { kind: TaskerTaskKind; onKind: (k: TaskerTaskKind) => void; trainerName: string | null }) {
   const opts: { k: TaskerTaskKind; title: string; sub: string }[] = [
     { k: 'theory', title: `Теория — ${trainerName && !trainerName.startsWith('#') ? trainerName.split(' ')[0] : 'тренер'}`, sub: 'Исполнитель — тренер, он соберёт менеджеров на занятие' },
-    { k: 'practice', title: 'Практика — работаю сам', sub: 'Исполнитель — постановщик (РОП), разбор с менеджером' },
+    { k: 'practice', title: 'Практика — разбор с РОПом', sub: 'Исполнитель — РОП менеджера (можно выбрать), разбор с менеджером' },
   ];
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Кто исполняет задачу">
@@ -738,15 +790,16 @@ function KindSwitch({ kind, onKind, trainerName }: { kind: TaskerTaskKind; onKin
   );
 }
 
-function slotAvailability(sessions: TaskerSession[], sessionId: number | null, slot: string, durationMin: number, managerIds: number[], creatorId: number | null): TaskerAvailabilityRequest | null {
+/** Проверка наложения для дат «Практики»: менеджеры + исполнитель(и); выбранная сессия — её время,
+ *  сама сессия не конфликтует сама с собой. Работа Задачника в это время — отказ сервера (п.3 собрания 26.11). */
+function slotAvailability(sessions: TaskerSession[], sessionId: number | null, starts: string[], durationMin: number, managerIds: number[], executors: number[]): TaskerAvailabilityRequest | null {
   const s = sessionId ? sessions.find(x => x.id === sessionId) : null;
-  const start = s ? s.slotStart : slot ? new Date(slot).toISOString() : null;
-  if (!start || Number.isNaN(Date.parse(start)) || !managerIds.length) return null;
+  const list = s ? [s.slotStart] : starts;
+  if (!list.length || !managerIds.length) return null;
   const dur = (s ? s.durationMin : durationMin) * 60_000;
   return {
-    // Постановщик — выбранный в поле «Постановщик» или сам пользователь.
-    bitrixIds: creatorId ? [...managerIds, creatorId] : managerIds, includeSelf: !creatorId,
-    slots: [{ start, end: new Date(Date.parse(start) + dur).toISOString() }],
+    bitrixIds: [...new Set([...managerIds, ...executors])], includeSelf: executors.length === 0,
+    slots: list.slice(0, 12).map(start => ({ start, end: new Date(Date.parse(start) + dur).toISOString() })),
     exclude: s ? { sessionId: s.id } : undefined,
   };
 }
@@ -762,7 +815,7 @@ function TheoryTimeBlock({ slot, onSlot, sameEvent, sameEventFull, closed, avail
       <Field label="Время занятия"
         hint={slot
           ? 'Монолитика сама поставит занятие у тренера в календарь и запишет менеджера — собирать вручную не нужно'
-          : 'Не указываете — задача уйдёт в очередь тренера, он соберёт группу по теме сам'}>
+          : 'Не указываете — менеджер сам встанет в ближайший слот своего отдела у тренера (с завтрашнего дня, где есть место). Не нашлось — задача в очереди тренера'}>
         <input type="datetime-local" value={slot} onChange={e => onSlot(e.target.value)} className={`${INPUT} sm:max-w-[260px]`} />
       </Field>
       {closed ? (
@@ -774,7 +827,7 @@ function TheoryTimeBlock({ slot, onSlot, sameEvent, sameEventFull, closed, avail
       ) : null}
       {!closed && slot && (
         <>
-          <AvailabilityWarning req={availability} />
+          <AvailabilityWarning req={availability} hardBlock />
           {!sameEvent && <p className="text-[11px] leading-snug text-[var(--color-text-muted)]">Если тренер в это время занят, задача не поставится — сервер подскажет причину.</p>}
         </>
       )}
@@ -782,10 +835,10 @@ function TheoryTimeBlock({ slot, onSlot, sameEvent, sameEventFull, closed, avail
   );
 }
 
-function SessionBlock({ sessions, sessionId, onSession, slot, onSlot, newSession, onNewSession, metricLabel, availability }: {
+function SessionBlock({ sessions, sessionId, onSession, hasSlots, newSession, onNewSession, metricLabel, availability, multiSlot, children }: {
   sessions: TaskerSession[]; sessionId: number | null; onSession: (id: number | null) => void;
-  slot: string; onSlot: (v: string) => void; newSession: boolean; onNewSession: (v: boolean) => void;
-  metricLabel?: string; availability: TaskerAvailabilityRequest | null;
+  hasSlots: boolean; newSession: boolean; onNewSession: (v: boolean) => void;
+  metricLabel?: string; availability: TaskerAvailabilityRequest | null; multiSlot: boolean; children?: React.ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -806,18 +859,14 @@ function SessionBlock({ sessions, sessionId, onSession, slot, onSlot, newSession
           </div>
         );
       })}
-      {!sessionId && (
-        <Field label="Слот сессии" hint="Дата и время встречи с менеджером — плановые даты задачи в Битриксе. Можно не указывать">
-          <input type="datetime-local" value={slot} onChange={e => onSlot(e.target.value)} className={`${INPUT} sm:max-w-[260px]`} />
-          {slot && (
-            <label className="flex min-h-11 cursor-pointer items-center gap-2.5 text-sm text-[var(--color-text)]">
-              <input type="checkbox" checked={newSession} onChange={e => onNewSession(e.target.checked)} className="h-5 w-5 shrink-0 accent-[var(--color-accent)]" />
-              Новая сессия по теме — сюда потом можно добавлять однотипные задачи
-            </label>
-          )}
-        </Field>
+      {children}
+      {!sessionId && hasSlots && (
+        <label className="flex min-h-11 cursor-pointer items-center gap-2.5 text-sm text-[var(--color-text)]">
+          <input type="checkbox" checked={newSession} onChange={e => onNewSession(e.target.checked)} className="h-5 w-5 shrink-0 accent-[var(--color-accent)]" />
+          Новая сессия по теме — сюда потом можно добавлять однотипные задачи
+        </label>
       )}
-      <AvailabilityWarning req={availability} />
+      <AvailabilityWarning req={availability} multiSlot={multiSlot} hardBlock />
     </div>
   );
 }
@@ -857,7 +906,7 @@ function ResultView({ result, pending, error, managerName, onClose, onOverride }
       {result.warnings.length > 0 && (
         <div className="flex flex-col gap-2">
           {result.warnings.map((w, i) => (
-            <Banner key={i} tone={w.code === 'not_enough_data' ? 'info' : 'warn'}>
+            <Banner key={i} tone={w.code === 'not_enough_data' || w.code === 'training_auto' ? 'info' : 'warn'}>
               {w.managerId !== null && <b>{managerName(w.managerId)}: </b>}{w.message}
             </Banner>
           ))}
